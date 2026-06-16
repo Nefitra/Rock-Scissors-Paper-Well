@@ -1,0 +1,6 @@
+{
+  "name": "Rock Scissors Paper Well",
+  "description": "A classic mini-game for Telegram with persistent lobbies, referral programs, and TON Connect wallet integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

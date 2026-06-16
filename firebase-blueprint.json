@@ -1,0 +1,50 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Represents a player in the Rock, Scissors, Paper, Well game.",
+      "type": "object",
+      "properties": {
+        "telegramId": { "type": "string" },
+        "username": { "type": "string" },
+        "walletAddress": { "type": "string" },
+        "referredBy": { "type": "string" },
+        "gamesPlayed": { "type": "integer" },
+        "wins": { "type": "integer" },
+        "losses": { "type": "integer" },
+        "referralsCountL1": { "type": "integer" },
+        "referralsCountL2": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["telegramId", "username", "gamesPlayed", "wins", "losses"]
+    },
+    "Game": {
+      "title": "PvP Game",
+      "description": "Represents an online PvP match or a match against the system bot.",
+      "type": "object",
+      "properties": {
+        "player1Id": { "type": "string" },
+        "player1Username": { "type": "string" },
+        "player2Id": { "type": "string" },
+        "player2Username": { "type": "string" },
+        "player1Move": { "type": "string" },
+        "player2Move": { "type": "string" },
+        "winnerId": { "type": "string" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["player1Id", "player1Username", "player2Id", "player2Username", "player1Move", "player2Move", "winnerId", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User records for TMA."
+    },
+    "/games/{gameId}": {
+      "schema": "Game",
+      "description": "All active and completed matches."
+    }
+  }
+}
