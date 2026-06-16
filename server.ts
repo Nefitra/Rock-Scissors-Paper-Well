@@ -364,6 +364,38 @@ app.get('/api/user/:userId', async (req, res) => {
   }
 });
 
+// 3a. Global Leaderboard top 10
+app.get('/api/leaderboard', async (req, res) => {
+  try {
+    const usersSnap = await db.collection('users').get();
+    const usersList: any[] = [];
+    usersSnap.forEach((d) => {
+      const data = d.data() || {};
+      if (data.telegramId) {
+        usersList.push({
+          telegramId: data.telegramId,
+          username: data.username || `User_${data.telegramId}`,
+          wins: data.wins || 0,
+          losses: data.losses || 0,
+          gamesPlayed: data.gamesPlayed || 0
+        });
+      }
+    });
+
+    // Sort by wins dec, then gamesPlayed desc
+    usersList.sort((a, b) => {
+      if (b.wins !== a.wins) return b.wins - a.wins;
+      return b.gamesPlayed - a.gamesPlayed;
+    });
+
+    const top10 = usersList.slice(0, 10);
+    res.json({ leaderboard: top10 });
+  } catch (error: any) {
+    console.error("Leaderboard query error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 3b. Reward authenticated user with wins (Multi-Window Game Achievement)
 app.post('/api/user/reward-wins', async (req, res) => {
   try {

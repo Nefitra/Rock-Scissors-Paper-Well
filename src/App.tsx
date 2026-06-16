@@ -34,7 +34,8 @@ import {
   X,
   Volume2,
   VolumeX,
-  Layers
+  Layers,
+  QrCode
 } from 'lucide-react';
 import WindowGame from './components/WindowGame';
 
@@ -177,8 +178,10 @@ function GameAppInner() {
   const walletAddress = useTonAddress();
   const wallet = useTonWallet();
   
-  // Tabs: 'home' | 'play' | 'windows' | 'referrals' | 'profile' | 'admin'
-  const [activeTab, setActiveTab ] = useState<'home' | 'play' | 'windows' | 'referrals' | 'profile' | 'admin'>('home');
+  // Tabs: 'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows'
+  const [activeTab, setActiveTab ] = useState<'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows'>('home');
+  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState<boolean>(false);
   
   // Simulation / Sandbox Controls (for developer testing outside Telegram)
   const isInsideTMA = typeof window !== 'undefined' && !!(window as any).Telegram?.WebApp?.initData;
@@ -209,11 +212,14 @@ function GameAppInner() {
         if (args.method === 'eth_getBalance') {
           return "0x012903bc4911c7c0000"; // 1.337 ETH in Hex format
         }
+        if (args.method === 'eth_chainId') {
+          return "0xaa36a7"; // Sepolia (11155111) Hex format
+        }
         return null;
       },
       on: (event: string, cb: any) => {
-        if (event === 'accountsChanged') {
-          // No accounts changed dynamically in dummy environment
+        if (event === 'accountsChanged' || event === 'chainChanged') {
+          // No dynamic changes in dummy environment
         }
       },
       removeListener: () => {},
@@ -224,7 +230,27 @@ function GameAppInner() {
   // MetaMask integration states and methods
   const [metaMaskAddress, setMetaMaskAddress] = useState<string | null>(null);
   const [metaMaskBalance, setMetaMaskBalance] = useState<string>('0.00');
+  const [metaMaskNetwork, setMetaMaskNetwork] = useState<string>('Unknown Network');
   const [metaMaskConnecting, setMetaMaskConnecting] = useState<boolean>(false);
+
+  const getNetworkName = (chainId: string | null): string => {
+    if (!chainId) return 'Unknown Network';
+    try {
+      const code = chainId.startsWith('0x') ? parseInt(chainId, 16) : parseInt(chainId, 10);
+      switch (code) {
+        case 1: return 'Ethereum Mainnet';
+        case 11155111: return 'Sepolia Testnet';
+        case 56: return 'BNB Smart Chain';
+        case 137: return 'Polygon';
+        case 42161: return 'Arbitrum One';
+        case 10: return 'Optimism';
+        case 8453: return 'Base';
+        default: return `Chain ID: ${code}`;
+      }
+    } catch {
+      return 'Unknown Network';
+    }
+  };
 
   useEffect(() => {
     const checkMetaMaskConnection = async () => {
@@ -245,6 +271,13 @@ function GameAppInner() {
               } catch (balErr) {
                 console.error("Failed to fetch balance on check:", balErr);
                 setMetaMaskBalance('0.0000');
+              }
+              try {
+                const chainId = await provider.request({ method: 'eth_chainId' });
+                setMetaMaskNetwork(getNetworkName(chainId));
+              } catch (chainErr) {
+                console.error("Failed to fetch chainId:", chainErr);
+                setMetaMaskNetwork('Ethereum Network');
               }
             }
           } catch (e) {
@@ -272,27 +305,53 @@ function GameAppInner() {
               console.error("Failed to fetch balance on change:", e);
               setMetaMaskBalance('0.0000');
             }
+            try {
+              const chainId = await provider.request({ method: 'eth_chainId' });
+              setMetaMaskNetwork(getNetworkName(chainId));
+            } catch (e) {
+              setMetaMaskNetwork('Ethereum Network');
+            }
           }
         } else {
           setMetaMaskAddress(null);
           setMetaMaskBalance('0.00');
+          setMetaMaskNetwork('Unknown Network');
+        }
+      };
+
+      const handleChainChanged = async (chainId: string) => {
+        setMetaMaskNetwork(getNetworkName(chainId));
+        if (metaMaskAddress && typeof provider.request === 'function') {
+          try {
+            const balanceHex = await provider.request({
+              method: 'eth_getBalance',
+              params: [metaMaskAddress, 'latest']
+            });
+            const balanceEth = parseInt(balanceHex, 16) / 1e18;
+            setMetaMaskBalance(balanceEth.toFixed(4));
+          } catch (e) {
+            console.error("Failed to fetch balance on chain change:", e);
+          }
         }
       };
       
       if (typeof provider.on === 'function') {
         provider.on('accountsChanged', handleAccountsChanged);
+        provider.on('chainChanged', handleChainChanged);
       }
       return () => {
         if (provider) {
           if (typeof provider.removeListener === 'function') {
             provider.removeListener('accountsChanged', handleAccountsChanged);
+            provider.removeListener('chainChanged', handleChainChanged);
           } else if (typeof provider.off === 'function') {
             provider.off('accountsChanged', handleAccountsChanged);
+            provider.off('chainChanged', handleChainChanged);
           }
         }
       };
     }
-  }, []);
+  }, [metaMaskAddress]);
 
   const connectMetaMask = async () => {
     if (typeof window === 'undefined') return;
@@ -304,6 +363,7 @@ function GameAppInner() {
         // Fallback gracefully to high-quality simulated MetaMask session
         setMetaMaskAddress("0x711cDa653428Fc3efC34E57dB3798950d035e289");
         setMetaMaskBalance("1.3370");
+        setMetaMaskNetwork("Sepolia Testnet (Sandbox)");
         playWinChime();
         return;
       }
@@ -322,11 +382,18 @@ function GameAppInner() {
           console.error("Failed to fetch balance during connect:", balanceErr);
           setMetaMaskBalance('0.0000');
         }
+        try {
+          const chainId = await ethereum.request({ method: 'eth_chainId' });
+          setMetaMaskNetwork(getNetworkName(chainId));
+        } catch {
+          setMetaMaskNetwork('Ethereum Network');
+        }
         playWinChime();
       } else {
         // Simulated fallback instead of failing
         setMetaMaskAddress("0x711cDa653428Fc3efC34E57dB3798950d035e289");
         setMetaMaskBalance("1.3370");
+        setMetaMaskNetwork("Sepolia Testnet (Sandbox)");
         playWinChime();
       }
     } catch (err: any) {
@@ -334,6 +401,7 @@ function GameAppInner() {
       // Ensure the user is still connected smoothly
       setMetaMaskAddress("0x711cDa653428Fc3efC34E57dB3798950d035e289");
       setMetaMaskBalance("1.3370");
+      setMetaMaskNetwork("Sepolia Testnet (Sandbox)");
       playWinChime();
     } finally {
       setMetaMaskConnecting(false);
@@ -343,6 +411,7 @@ function GameAppInner() {
   const disconnectMetaMask = () => {
     setMetaMaskAddress(null);
     setMetaMaskBalance('0.00');
+    setMetaMaskNetwork('Unknown Network');
     playClickSound();
   };
   
@@ -354,6 +423,8 @@ function GameAppInner() {
   const [gameResultTimeout, setGameResultTimeout] = useState<any>(null);
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
   const [showRankTiersModal, setShowRankTiersModal] = useState<boolean>(false);
+  const [showReferralQrModal, setShowReferralQrModal] = useState<boolean>(false);
+  const [promotedRank, setPromotedRank] = useState<RankConfig | null>(null);
   const [soundsMuted, setSoundsMuted] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('rspw_muted') === 'true';
@@ -378,6 +449,65 @@ function GameAppInner() {
   const userWins = profile?.wins || 0;
   const currentRank = getPlayerRank(userWins);
   const nextRankInfo = getNextRank(userWins);
+
+  // Rank Tier promotion tracking and confetti celebration
+  useEffect(() => {
+    if (profile) {
+      const userWinsVal = profile.wins || 0;
+      const calculatedRank = getPlayerRank(userWinsVal);
+      const calculatedRankIndex = RANKS.findIndex(r => r.name === calculatedRank.name);
+      const celebratedKey = `rspw_celebrated_rank_${currentTgId || 'anonymous'}`;
+      const storedVal = localStorage.getItem(celebratedKey);
+
+      if (storedVal === null) {
+        // Initial setup on first profile fetch - mark existing level as celebrated
+        localStorage.setItem(celebratedKey, String(calculatedRankIndex));
+      } else {
+        const previouslyCelebrated = parseInt(storedVal, 10);
+        if (calculatedRankIndex > previouslyCelebrated) {
+          // Promote! Save & show full screen visual dialog and animate confetti
+          localStorage.setItem(celebratedKey, String(calculatedRankIndex));
+          setPromotedRank(calculatedRank);
+          
+          // Trigger spectacular canvas-confetti sequence
+          playWinChime();
+          confetti({
+            particleCount: 180,
+            spread: 100,
+            origin: { y: 0.55 },
+            colors: ['#ffb703', '#fb8500', '#219ebc', '#8ecae6', '#ff006e', '#8338ec']
+          });
+
+          // Continuously fire side confetti bursts for 3 seconds
+          const duration = 3000;
+          const animationEnd = Date.now() + duration;
+          const randomInRange = (min: number, max: number) => Math.random() * (max - min) + min;
+
+          const celebrationInterval = setInterval(() => {
+            const timeLeft = animationEnd - Date.now();
+            if (timeLeft <= 0) {
+              return clearInterval(celebrationInterval);
+            }
+
+            const particleCount = 50 * (timeLeft / duration);
+            // since particles fall down, start a bit higher than random
+            confetti({
+              particleCount,
+              angle: randomInRange(55, 125),
+              spread: randomInRange(50, 70),
+              origin: { x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 }
+            });
+            confetti({
+              particleCount,
+              angle: randomInRange(55, 125),
+              spread: randomInRange(50, 70),
+              origin: { x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 }
+            });
+          }, 250);
+        }
+      }
+    }
+  }, [profile, currentTgId]);
 
   // Trigger confetti and victory/defeat sound alerts on game completion
   useEffect(() => {
@@ -449,11 +579,7 @@ function GameAppInner() {
       setRefParam(code);
     }
 
-    // Auto-detect tab override for popups
-    const tabParam = params.get('tab');
-    if (tabParam === 'windows' || params.get('popup') === 'true') {
-      setActiveTab('windows');
-    }
+
   }, []);
 
   // Sync / Register user with DB
@@ -598,9 +724,28 @@ function GameAppInner() {
     }
   };
 
+  // Fetch Global Leaderboard
+  const fetchLeaderboard = async () => {
+    setLeaderboardLoading(true);
+    try {
+      const res = await fetch('/api/leaderboard');
+      const data = await res.json();
+      if (data.leaderboard) {
+        setLeaderboard(data.leaderboard);
+      }
+    } catch (e) {
+      console.error("Failed to fetch leaderboard:", e);
+    } finally {
+      setLeaderboardLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'admin') {
       fetchAdminMetrics();
+    }
+    if (activeTab === 'leaderboard') {
+      fetchLeaderboard();
     }
   }, [activeTab, currentTgId]);
 
@@ -938,11 +1083,11 @@ function GameAppInner() {
                   )}
                 </div>
 
-                {/* MetaMask Balance Card */}
+                {/* Ethereum Balance Card */}
                 <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-5 flex flex-col justify-between">
                   <div>
                     <div className="flex justify-between items-start">
-                      <p className="text-[#708499] text-[10px] font-bold uppercase tracking-widest leading-none">MetaMask Balance</p>
+                      <p className="text-[#708499] text-[10px] font-bold uppercase tracking-widest leading-none">Ethereum Balance</p>
                       {metaMaskAddress ? (
                         <button 
                           onClick={disconnectMetaMask}
@@ -972,17 +1117,29 @@ function GameAppInner() {
                       <span className="text-amber-500 text-xs font-bold leading-none mb-0.5">ETH</span>
                     </div>
                   </div>
-                  <div className="mt-3.5 pt-3 border-t border-[#242f3d] flex justify-between items-center bg-[#242f3d]/30 px-3 py-2 rounded-2xl">
-                    <p className="text-[10px] font-mono text-[#708499]">
-                      {metaMaskAddress ? `${metaMaskAddress.slice(0, 8)}...` : 'No MetaMask Account'}
-                    </p>
+                  <div className="mt-3.5 pt-3 border-t border-[#242f3d]">
+                    <div className="flex justify-between items-center text-[10px] font-mono text-[#708499] bg-[#242f3d]/30 px-3 py-2 rounded-2xl">
+                      <p className="truncate max-w-[110px]">
+                        {metaMaskAddress ? `${metaMaskAddress.slice(0, 8)}...` : 'No Ethereum Account'}
+                      </p>
+                      <p className="text-amber-500 font-bold text-right truncate max-w-[110px]">
+                        {metaMaskAddress ? metaMaskNetwork : ''}
+                      </p>
+                    </div>
+                    {metaMaskAddress && (
+                      <p className="text-[10px] text-[#708499] mt-2.5 leading-tight">
+                        ℹ️ This balance is queried from your active wallet extension/provider. Check the connected account and selected network (Ethereum/Sepolia) inside your wallet app (MetaMask, OKX, etc.) to verify its correctness.
+                      </p>
+                    )}
                     {!metaMaskAddress && (
-                      <button 
-                        onClick={connectMetaMask} 
-                        className="text-[10px] text-amber-500 hover:underline font-bold"
-                      >
-                        Click to Pair
-                      </button>
+                      <div className="flex justify-end mt-2">
+                        <button 
+                          onClick={connectMetaMask} 
+                          className="text-[10px] text-amber-500 hover:underline font-bold"
+                        >
+                          Click to Pair
+                        </button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1270,6 +1427,156 @@ function GameAppInner() {
             </motion.div>
           )}
 
+          {/* TAB: GLOBAL LEADERBOARD */}
+          {activeTab === 'leaderboard' && (
+            <motion.div
+              key="leaderboard"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.15 }}
+              className="space-y-6 select-none"
+            >
+              <div className="text-center py-4 relative flex flex-col items-center">
+                <div className="w-16 h-16 bg-gradient-to-tr from-amber-400 to-yellow-600 rounded-3xl flex items-center justify-center shadow-lg shadow-amber-500/15 mb-3.5 border border-amber-500/20 animate-pulse">
+                  <Trophy className="w-8 h-8 text-black" />
+                </div>
+                <h3 className="text-xl font-black text-white uppercase tracking-tight">Global Leaderboard</h3>
+                <p className="text-xs text-[#708499] mt-1 max-w-[280px]">
+                  The legendary top 10 warriors in the Rock Paper Scissors Well Arena. Updated in real time!
+                </p>
+                
+                <button
+                  id="btn_refresh_leaderboard"
+                  onClick={() => { playClickSound(); fetchLeaderboard(); }}
+                  disabled={leaderboardLoading}
+                  className="absolute right-2 top-4 p-2.5 rounded-2xl bg-[#17212b] border border-[#242f3d] text-[#3390ec] hover:text-white transition cursor-pointer disabled:opacity-50"
+                  title="Refresh Leaderboard"
+                >
+                  <RefreshCw className={`w-4 h-4 ${leaderboardLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+
+              {leaderboardLoading ? (
+                <div className="flex flex-col items-center justify-center py-16 space-y-3">
+                  <div className="w-8 h-8 border-3 border-[#3390ec] border-t-transparent rounded-full animate-spin" />
+                  <p className="text-xs text-[#708499] font-mono">Fetching champions...</p>
+                </div>
+              ) : leaderboard.length === 0 ? (
+                <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-8 text-center space-y-3">
+                  <p className="text-[#708499] text-xs">No entries found yet.</p>
+                  <p className="text-[10px] text-[#708499]/85">Be the first to secure a victory and claim the crown!</p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {leaderboard.map((player, index) => {
+                    const isTop3 = index < 3;
+                    const rankNum = index + 1;
+                    const isCurrentUser = player.telegramId === currentTgId;
+                    
+                    // Assign trophies/badges
+                    let rankBadge = '';
+                    let itemBg = 'bg-[#17212b]/60 border-[#242f3d]/50';
+                    let rankColorClass = 'text-[#708499]';
+                    
+                    if (rankNum === 1) {
+                      rankBadge = '🥇';
+                      itemBg = 'bg-gradient-to-r from-amber-500/10 to-transparent border-amber-500/30';
+                      rankColorClass = 'text-amber-400 font-extrabold';
+                    } else if (rankNum === 2) {
+                      rankBadge = '🥈';
+                      itemBg = 'bg-gradient-to-r from-slate-400/10 to-transparent border-slate-400/30';
+                      rankColorClass = 'text-slate-300 font-bold';
+                    } else if (rankNum === 3) {
+                      rankBadge = '🥉';
+                      itemBg = 'bg-gradient-to-r from-amber-700/10 to-transparent border-amber-700/30';
+                      rankColorClass = 'text-amber-600 font-bold';
+                    }
+                    
+                    if (isCurrentUser) {
+                      itemBg += ' ring-1 ring-[#3390ec]/60 border-[#3390ec]/50';
+                    }
+
+                    const playerRank = getPlayerRank(player.wins);
+                    const winrate = player.gamesPlayed > 0 
+                      ? Math.round((player.wins / player.gamesPlayed) * 100) 
+                      : 0;
+
+                    return (
+                      <div
+                        key={player.telegramId || index}
+                        className={`border rounded-2.5xl p-4 flex items-center justify-between transition-all hover:scale-[1.01] ${itemBg}`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {/* Rank Display */}
+                          <div className={`w-8 h-8 rounded-full bg-[#1e2c3a]/50 flex items-center justify-center text-xs font-bold leading-none ${rankColorClass}`}>
+                            {isTop3 ? (
+                              <span className="text-base">{rankBadge}</span>
+                            ) : (
+                              `#${rankNum}`
+                            )}
+                          </div>
+                          
+                          {/* Username & Title */}
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <p className={`text-xs font-bold truncate leading-tight ${isCurrentUser ? 'text-[#3390ec]' : 'text-white'}`}>
+                                {player.username}
+                              </p>
+                              {isCurrentUser && (
+                                <span className="bg-[#3390ec]/15 text-[#3390ec] text-[8px] font-black tracking-widest uppercase px-1.5 py-0.5 rounded-sm shrink-0">
+                                  You
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 text-[9.5px] text-[#708499] mt-0.5">
+                              <span>{playerRank.badgeEmoji}</span>
+                              <span className="truncate max-w-[120px]">{playerRank.name}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Wins Count Statistics */}
+                        <div className="text-right shrink-0">
+                          <p className="text-xs font-black text-white font-mono leading-none">
+                            {player.wins} <span className="text-[10px] font-bold text-[#708499] uppercase">W</span>
+                          </p>
+                          <p className="text-[9px] text-[#708499] font-mono leading-none mt-1">
+                            {player.gamesPlayed} matches • {winrate}% WR
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              
+              {/* Highlight current user status if not in top 10 */}
+              {profile && !leaderboard.some(p => p.telegramId === currentTgId) && (
+                <div className="bg-[#17212b]/40 border border-[#242f3d]/60 rounded-3xl p-4.5 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-[#1e2c3a]/80 flex items-center justify-center text-xs font-extrabold text-[#708499]">
+                      Unranked
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-white">Your Current Position</p>
+                      <p className="text-[9.5px] text-[#708499] mt-0.5">Keep winning battles to place in the Top 10!</p>
+                    </div>
+                  </div>
+                  
+                  <div className="text-right">
+                    <p className="text-xs font-black text-[#3390ec] font-mono leading-none">
+                      {profile.wins || 0} <span className="text-[10px] font-bold text-[#708499] uppercase">W</span>
+                    </p>
+                    <p className="text-[9px] text-[#708499] font-mono leading-none mt-1">
+                      {profile.gamesPlayed || 0} matches
+                    </p>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          )}
+
           {/* TAB 3: REFERRALS */}
           {activeTab === 'referrals' && (
             <motion.div
@@ -1316,8 +1623,17 @@ function GameAppInner() {
                     {window.location.origin}?startapp={currentTgId}
                   </div>
                   <button
+                    id="btn_view_referral_qr"
+                    onClick={() => { playClickSound(); setShowReferralQrModal(true); }}
+                    className="bg-[#242f3d] border border-[#2b3745] hover:bg-[#2c394a] text-[#3390ec] p-2.5 rounded-xl transition transform active:scale-95 flex items-center justify-center cursor-pointer"
+                    title="View QR Code"
+                  >
+                    <QrCode className="w-4 h-4" />
+                  </button>
+                  <button
+                    id="btn_copy_referral_link"
                     onClick={handleCopyReferral}
-                    className="bg-white text-black p-2.5 rounded-xl hover:bg-slate-200 transition transform active:scale-95 flex items-center justify-center"
+                    className="bg-white text-black p-2.5 rounded-xl hover:bg-slate-200 transition transform active:scale-95 flex items-center justify-center cursor-pointer"
                     title="Copy Link"
                   >
                     {copiedLink ? <Check className="w-4 h-4 text-emerald-600 font-bold" /> : <Copy className="w-4 h-4" />}
@@ -1735,14 +2051,16 @@ function GameAppInner() {
           <span className="text-[9px] font-bold">PLAY</span>
         </button>
 
-        {/* NAV 3: WINDOWS */}
+        {/* NAV 3: LEADERBOARD */}
         <button
-          onClick={() => { playClickSound(); setActiveTab('windows'); }}
-          className={`flex flex-col items-center justify-center w-11 h-14 rounded-2xl transition-all ${activeTab === 'windows' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          id="btn_nav_leaderboard"
+          onClick={() => { playClickSound(); setActiveTab('leaderboard'); }}
+          className={`flex flex-col items-center justify-center w-11 h-14 rounded-2xl transition-all ${activeTab === 'leaderboard' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
-          <Layers className="w-5 h-5 mb-1" />
-          <span className="text-[9px] font-bold">WINDOWS</span>
+          <Trophy className="w-5 h-5 mb-1" />
+          <span className="text-[9px] font-bold">BOARD</span>
         </button>
+
 
         {/* NAV 4: REFERRALS */}
         <button
@@ -1951,6 +2269,133 @@ function GameAppInner() {
                 className="w-full py-2.5 bg-[#242f3d] hover:bg-[#2c394a] text-white font-bold rounded-xl transition text-xs border border-[#2b3745] cursor-pointer"
               >
                 CLOSE VIEW
+              </button>
+            </motion.div>
+          </div>
+        )}
+
+        {promotedRank && (
+          <div id="modal_rank_promotion_celebration" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop with transition */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => { playClickSound(); setPromotedRank(null); }}
+              className="absolute inset-0 bg-slate-950/85 backdrop-blur-md"
+            />
+            
+            {/* Celebration Modal Box */}
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0, y: 50 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.8, opacity: 0, y: 50 }}
+              transition={{ type: "spring", damping: 20, stiffness: 300 }}
+              className="bg-gradient-to-b from-[#182533] to-[#111921] border border-amber-500/40 rounded-3xl p-8 w-full max-w-sm relative z-10 shadow-2xl space-y-6 text-center select-none"
+            >
+              <div className="absolute -top-12 left-1/2 -translate-x-1/2 w-24 h-24 rounded-full bg-gradient-to-b from-amber-400 to-amber-600 flex items-center justify-center text-5xl shadow-xl animate-bounce">
+                {promotedRank.badgeEmoji}
+              </div>
+
+              <div className="pt-8 space-y-2">
+                <span className="text-[10px] text-amber-500 font-cyber font-black tracking-widest uppercase block">TIER PROMOTION</span>
+                <h3 className={`text-2xl font-black tracking-tight leading-tight uppercase ${promotedRank.color.replace('animate-pulse', '')}`}>
+                  {promotedRank.name}
+                </h3>
+                <p className="text-white/80 text-xs px-2">
+                  {promotedRank.description}
+                </p>
+              </div>
+
+              <div className="bg-black/35 rounded-2xl p-4 border border-white/5 space-y-1">
+                <p className="text-[10px] text-[#708499]">PERMANENT REWARD UNLOCKED</p>
+                <div className="flex items-center justify-center gap-2 text-xs font-bold text-emerald-400">
+                  <span>✨ Multiplier active in Matchmaking</span>
+                </div>
+              </div>
+
+              <button
+                id="btn_claim_promotion_celebration"
+                onClick={() => { playClickSound(); setPromotedRank(null); }}
+                className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white font-extrabold rounded-xl transition text-xs tracking-wider uppercase cursor-pointer shadow-lg shadow-amber-500/10 active:scale-[0.98]"
+              >
+                CLAIM NEW TITLE
+              </button>
+            </motion.div>
+          </div>
+        )}
+
+        {showReferralQrModal && (
+          <div id="modal_referral_qr_code" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop with transition */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => { playClickSound(); setShowReferralQrModal(false); }}
+              className="absolute inset-0 bg-black/80 backdrop-blur-xs"
+            />
+            
+            {/* Modal Box */}
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              transition={{ type: "spring", damping: 25, stiffness: 350 }}
+              className="bg-[#17212b] border border-[#2b3745] rounded-3xl p-6 w-full max-w-xs relative z-10 shadow-2xl space-y-4 text-center"
+            >
+              {/* Header */}
+              <div className="flex justify-between items-center pb-2 border-b border-[#242f3d]">
+                <div className="flex items-center gap-2">
+                  <QrCode className="w-5 h-5 text-[#3390ec]" />
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">Referral QR Code</h3>
+                </div>
+                <button
+                  id="btn_close_referral_qr_modal_x"
+                  onClick={() => { playClickSound(); setShowReferralQrModal(false); }}
+                  className="p-1 rounded-sm hover:bg-[#242f3d] text-[#708499] hover:text-white transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* QR Image Wrapper */}
+              <div className="bg-white p-4 rounded-2xl flex items-center justify-center shadow-inner mx-auto w-[200px] h-[200px]">
+                <img
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${window.location.origin}?startapp=${currentTgId}`)}`}
+                  alt="Referral QR Code"
+                  className="w-full h-full object-contain select-none shadow-sm rounded-lg"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+
+              {/* Instructions */}
+              <div className="space-y-1">
+                <p className="text-xs font-bold text-white">Share App with Friends</p>
+                <p className="text-[10px] text-[#708499] leading-relaxed">
+                  Your friend can scan this using Telegram, their phone camera, or another QR scanner to start playing under your network!
+                </p>
+              </div>
+
+              {/* Referral Link Quick Copy Box */}
+              <button
+                id="btn_modal_copy_referral_link"
+                onClick={handleCopyReferral}
+                className="w-full py-2 px-3 bg-[#242f3d] hover:bg-[#2c394a] rounded-xl flex items-center justify-between text-[11px] text-[#3390ec] font-mono border border-[#2b3745]/35 transition active:scale-[0.98] cursor-pointer"
+              >
+                <span className="truncate max-w-[150px]">{window.location.origin}?startapp={currentTgId}</span>
+                <span className="font-sans font-bold text-[9px] uppercase text-white tracking-wider flex items-center gap-1 shrink-0 bg-[#3390ec] px-1.5 py-0.5 rounded-sm">
+                  {copiedLink ? "COPIED" : "COPY"}
+                </span>
+              </button>
+
+              {/* Close Button */}
+              <button
+                id="btn_close_referral_qr_modal"
+                onClick={() => { playClickSound(); setShowReferralQrModal(false); }}
+                className="w-full py-2.5 bg-[#242f3d]/60 hover:bg-[#242f3d] text-white font-bold rounded-xl transition text-xs border border-[#2b3745] cursor-pointer"
+              >
+                CLOSE WINDOW
               </button>
             </motion.div>
           </div>
