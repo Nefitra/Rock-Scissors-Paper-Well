@@ -364,6 +364,49 @@ app.get('/api/user/:userId', async (req, res) => {
   }
 });
 
+// 3b. Reward authenticated user with wins (Multi-Window Game Achievement)
+app.post('/api/user/reward-wins', async (req, res) => {
+  try {
+    const verifiedUser = getRequestUser(req);
+    const { amount, challengeId } = req.body;
+
+    let targetTgId = verifiedUser.userId;
+    if (!targetTgId) {
+      targetTgId = req.body.telegramId;
+    }
+
+    if (!targetTgId) {
+      return res.status(400).json({ error: "Authentication or telegramId required" });
+    }
+
+    const userRef = db.collection('users').doc(targetTgId);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    const currentData = userSnap.data() || {};
+    const claimedRewards = currentData.claimedRewards || [];
+    if (claimedRewards.includes(challengeId)) {
+      return res.status(400).json({ error: "Reward already claimed" });
+    }
+
+    const updatedWins = (currentData.wins || 0) + (amount || 5);
+    const newClaimed = [...claimedRewards, challengeId];
+
+    await userRef.update({
+      wins: updatedWins,
+      claimedRewards: newClaimed
+    });
+
+    const finalProfile = { ...currentData, wins: updatedWins, claimedRewards: newClaimed };
+    res.json({ success: true, profile: finalProfile });
+  } catch (error: any) {
+    console.error("Reward wins error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 4. Join matchmaking / Find Game
 app.post('/api/matchmaking/join', async (req, res) => {
   try {
