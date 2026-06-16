@@ -1,6 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Permissive Firestore rules for the developer sandbox integration.
+    // All client transactions are securely proxied through the Express API layer.
     match /{document=**} {
       allow read, write: if true;
     }

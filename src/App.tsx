@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import confetti from 'canvas-confetti';
+import { playClickSound, playWinChime, playMatchmakingPing, playDefeatSound } from './sound';
 import { 
   TonConnectUIProvider, 
   TonConnectButton, 
@@ -27,7 +29,11 @@ import {
   Cpu,
   Trophy,
   Flame,
-  ArrowRight
+  ArrowRight,
+  Info,
+  X,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 
 interface UserProfile {
@@ -68,6 +74,103 @@ interface AdminMetrics {
   games: GameSession[];
 }
 
+interface RankConfig {
+  name: string;
+  minWins: number;
+  color: string;
+  bgColor: string;
+  borderColor: string;
+  glowColor: string;
+  badgeEmoji: string;
+  description: string;
+}
+
+const RANKS: RankConfig[] = [
+  {
+    name: "Bronze Novice",
+    minWins: 0,
+    color: "text-amber-500",
+    bgColor: "bg-amber-500/10",
+    borderColor: "border-amber-500/30",
+    glowColor: "shadow-amber-500/5",
+    badgeEmoji: "🥉",
+    description: "Beginner taking their first arena steps"
+  },
+  {
+    name: "Silver Gladiator",
+    minWins: 5,
+    color: "text-slate-300",
+    bgColor: "bg-slate-300/10",
+    borderColor: "border-slate-300/20",
+    glowColor: "shadow-slate-300/5",
+    badgeEmoji: "🥈",
+    description: "Experienced combatant with proven skill"
+  },
+  {
+    name: "Gold Elite",
+    minWins: 15,
+    color: "text-yellow-400",
+    bgColor: "bg-yellow-400/10",
+    borderColor: "border-yellow-400/30",
+    glowColor: "shadow-yellow-400/20",
+    badgeEmoji: "🥇",
+    description: "Master tactician of rock-paper-scissors"
+  },
+  {
+    name: "Platinum Legend",
+    minWins: 30,
+    color: "text-cyan-400",
+    bgColor: "bg-cyan-500/10",
+    borderColor: "border-cyan-500/30",
+    glowColor: "shadow-cyan-500/20",
+    badgeEmoji: "💎",
+    description: "Renowned grandmaster dominating the scene"
+  },
+  {
+    name: "RSPW Grand Master",
+    minWins: 50,
+    color: "text-fuchsia-400 font-extrabold tracking-wider animate-pulse",
+    bgColor: "bg-fuchsia-500/15",
+    borderColor: "border-fuchsia-500/40",
+    glowColor: "shadow-fuchsia-500/30",
+    badgeEmoji: "👑",
+    description: "A godlike champion tier of supreme reflexes"
+  }
+];
+
+const getPlayerRank = (wins: number): RankConfig => {
+  let matchedRank = RANKS[0];
+  for (const rank of RANKS) {
+    if (wins >= rank.minWins) {
+      matchedRank = rank;
+    }
+  }
+  return matchedRank;
+};
+
+const getNextRank = (wins: number): { rank: RankConfig | null; winsNeeded: number; percent: number } => {
+  const currentRank = getPlayerRank(wins);
+  const currentIndex = RANKS.findIndex(r => r.name === currentRank.name);
+  if (currentIndex < RANKS.length - 1) {
+    const nextRank = RANKS[currentIndex + 1];
+    const prevRequiredWins = currentRank.minWins;
+    const nextRequiredWins = nextRank.minWins;
+    const winsRequiredInTier = nextRequiredWins - prevRequiredWins;
+    const winsAcquiredInTier = wins - prevRequiredWins;
+    const progressPercent = Math.min(100, Math.max(0, Math.round((winsAcquiredInTier / winsRequiredInTier) * 100)));
+    return {
+      rank: nextRank,
+      winsNeeded: nextRequiredWins - wins,
+      percent: progressPercent
+    };
+  }
+  return {
+    rank: null,
+    winsNeeded: 0,
+    percent: 100
+  };
+};
+
 function GameAppInner() {
   const walletAddress = useTonAddress();
   const wallet = useTonWallet();
@@ -99,6 +202,76 @@ function GameAppInner() {
   const [preSelectedMove, setPreSelectedMove] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [gameResultTimeout, setGameResultTimeout] = useState<any>(null);
+  const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
+  const [showRankTiersModal, setShowRankTiersModal] = useState<boolean>(false);
+  const [soundsMuted, setSoundsMuted] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('rspw_muted') === 'true';
+    }
+    return false;
+  });
+
+  const toggleSoundMute = () => {
+    const nextMuted = !soundsMuted;
+    setSoundsMuted(nextMuted);
+    localStorage.setItem('rspw_muted', String(nextMuted));
+    if (!nextMuted) {
+      setTimeout(() => {
+        playClickSound();
+      }, 50);
+    }
+  };
+  const lastConfettiGameIdRef = useRef<string | null>(null);
+  const lastSoundGameIdRef = useRef<string | null>(null);
+
+  // Dynamic Player Ranks based on total wins
+  const userWins = profile?.wins || 0;
+  const currentRank = getPlayerRank(userWins);
+  const nextRankInfo = getNextRank(userWins);
+
+  // Trigger confetti and victory/defeat sound alerts on game completion
+  useEffect(() => {
+    if (activeGame && activeGame.status === 'completed') {
+      if (lastSoundGameIdRef.current !== activeGame.id) {
+        lastSoundGameIdRef.current = activeGame.id;
+
+        if (activeGame.winnerId === currentTgId) {
+          // Play beautiful win chime
+          playWinChime();
+
+          if (lastConfettiGameIdRef.current !== activeGame.id) {
+            lastConfettiGameIdRef.current = activeGame.id;
+            
+            // Trigger beautiful rich confetti
+            confetti({
+              particleCount: 150,
+              spread: 80,
+              origin: { y: 0.6 }
+            });
+            
+            // A couple of extra side bursts for extra celebratory feel!
+            const timer = setTimeout(() => {
+              confetti({
+                particleCount: 80,
+                angle: 60,
+                spread: 55,
+                origin: { x: 0, y: 0.65 }
+              });
+              confetti({
+                particleCount: 80,
+                angle: 120,
+                spread: 55,
+                origin: { x: 1, y: 0.65 }
+              });
+            }, 300);
+          }
+        } else {
+          // Play soft custom synthesized warning/defeat sound
+          playDefeatSound();
+        }
+      }
+    }
+  }, [activeGame, currentTgId]);
 
   // Auto-submit preselected move when matched
   useEffect(() => {
@@ -113,10 +286,15 @@ function GameAppInner() {
   const [adminData, setAdminData] = useState<AdminMetrics | null>(null);
   const [adminModeEnabled, setAdminModeEnabled] = useState<boolean>(true); // Let reviewer test Admin tab effortlessly
 
-  // Fetch Referral Code from URL or WebApp start_param on boot
+  // Fetch Referral Code from URL or WebApp start_param on boot (survives page reloads)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const code = params.get('startapp') || params.get('ref') || (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
+    let code = params.get('startapp') || params.get('ref') || (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
+    if (code) {
+      localStorage.setItem('rpsw_referred_by', code);
+    } else {
+      code = localStorage.getItem('rpsw_referred_by') || '';
+    }
     if (code) {
       setRefParam(code);
     }
@@ -127,9 +305,15 @@ function GameAppInner() {
     if (!currentTgId) return;
     setSyncing(true);
     try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
       const response = await fetch('/api/user/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify({
           telegramId: currentTgId,
           username: currentUsername,
@@ -166,6 +350,24 @@ function GameAppInner() {
     const getBalance = async () => {
       setBalanceLoading(true);
       try {
+        // Try TonAPI first (fast, reliable, free public tiers)
+        const tonApiUrl = `https://tonapi.io/v2/accounts/${encodeURIComponent(walletAddress)}`;
+        const tRes = await fetch(tonApiUrl);
+        if (tRes.ok) {
+          const tData = await tRes.json();
+          if (tData && tData.balance !== undefined) {
+            const tonVal = parseFloat(tData.balance) / 1e9;
+            setWalletBalance(tonVal.toFixed(2));
+            setBalanceLoading(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn("TonAPI balance lookup failed, trying TON Center", err);
+      }
+
+      try {
+        // Fallback to TonCenter API
         const url = `https://toncenter.com/api/v2/getAddressBalance?address=${encodeURIComponent(walletAddress)}`;
         const res = await fetch(url);
         const data = await res.json();
@@ -176,8 +378,8 @@ function GameAppInner() {
           setWalletBalance('0.00');
         }
       } catch (err) {
-        console.warn("TON Center API failed, trying dTON lookup fallback", err);
-        setWalletBalance('5.25'); // Safe testnet/mainnet indicator fallback if RPC rate-limited
+        console.error("All TON RPC balance lookups failed:", err);
+        setWalletBalance('0.00');
       } finally {
         setBalanceLoading(false);
       }
@@ -188,10 +390,51 @@ function GameAppInner() {
     return () => clearInterval(interval);
   }, [walletAddress]);
 
+  // Poll active game status when we have submitted our move but the game is not yet completed
+  useEffect(() => {
+    if (!activeGame || activeGame.status !== 'matched') return;
+    
+    // Check if we have submitted our move
+    const myId = currentTgId;
+    const amPlayer1 = activeGame.player1Id === myId;
+    const ourMoveSubmitted = amPlayer1 ? !!activeGame.player1Move : !!activeGame.player2Move;
+    
+    if (!ourMoveSubmitted) return;
+
+    // We have submitted, poll to see when the game is completed (or opponent submitted)
+    const interval = setInterval(async () => {
+      try {
+        const headers: any = {};
+        const initData = (window as any).Telegram?.WebApp?.initData;
+        if (initData) {
+          headers['x-telegram-init-data'] = initData;
+        }
+        const res = await fetch(`/api/game/${activeGame.id}?requestorId=${currentTgId}`, { headers });
+        const data = await res.json();
+        if (data && data.game) {
+          setActiveGame(data.game);
+          if (data.game.status === 'completed') {
+            syncProfile(); // refresh player profile immediately to see updated stats
+            clearInterval(interval);
+          }
+        }
+      } catch (err) {
+        console.error("Error polling game status:", err);
+      }
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [activeGame?.id, activeGame?.status, selectedMove, currentTgId]);
+
   // Fetch Admin Metrics if in admin tab
   const fetchAdminMetrics = async () => {
     try {
-      const res = await fetch(`/api/admin/metrics?requestorId=${currentTgId}`);
+      const headers: any = {};
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+      const res = await fetch(`/api/admin/metrics?requestorId=${currentTgId}`, { headers });
       const data = await res.json();
       setAdminData(data);
     } catch (e) {
@@ -215,6 +458,7 @@ function GameAppInner() {
 
   // Click on a weapon directly on the landing home page
   const handleHomeWeaponClick = (weapon: string) => {
+    playClickSound();
     setPreSelectedMove(weapon);
     setActiveTab('play');
     // If not currently in any session, instantly trigger an active game queue with Bot for robust immediate play!
@@ -225,13 +469,20 @@ function GameAppInner() {
 
   // Game Lobby: Start Matching Process
   const handleStartLobby = async (playWithBot: boolean = false) => {
+    playMatchmakingPing();
     setIsSearching(true);
     setSelectedMove('');
     setErrorMessage(null);
     try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
       const res = await fetch('/api/matchmaking/join', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify({
           userId: currentTgId,
           username: currentUsername,
@@ -249,16 +500,19 @@ function GameAppInner() {
         if (data.game.status === 'matched') {
           setIsSearching(false);
         } else {
-          // Poll matchmaking status for another real player
+          // Poll matchmaking status for another real player using secure single session query
           let attempts = 0;
           const pollInterval = setInterval(async () => {
             attempts++;
             try {
-              const checkRes = await fetch(`/api/user/${currentTgId}`);
-              // Check active games state
-              const gCheckRes = await fetch(`/api/admin/metrics`);
+              const headers: any = {};
+              const initData = (window as any).Telegram?.WebApp?.initData;
+              if (initData) {
+                headers['x-telegram-init-data'] = initData;
+              }
+              const gCheckRes = await fetch(`/api/game/${data.game.id}?requestorId=${currentTgId}`, { headers });
               const gCheckData = await gCheckRes.json();
-              const myGame = gCheckData.games?.find((g: any) => g.id === data.game.id);
+              const myGame = gCheckData.game;
               
               if (myGame && myGame.status === 'matched') {
                 setActiveGame(myGame);
@@ -287,11 +541,18 @@ function GameAppInner() {
   // Submit Selected Move
   const handleMakeMove = async (move: string) => {
     if (!activeGame) return;
+    playClickSound();
     setSelectedMove(move);
     try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
       const res = await fetch('/api/game/move', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: headers,
         body: JSON.stringify({
           gameId: activeGame.id,
           userId: currentTgId,
@@ -540,6 +801,22 @@ function GameAppInner() {
               transition={{ duration: 0.15 }}
               className="space-y-6"
             >
+              {/* Rules Header & Info Button */}
+              <div className="flex justify-between items-center bg-[#17212b] border border-[#242f3d] px-4 py-3 rounded-2xl shadow-md">
+                <div className="flex items-center gap-2">
+                  <Gamepad2 className="w-5 h-5 text-[#3390ec]" />
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">Battle Arena</span>
+                </div>
+                <button
+                  id="btn_interaction_chart_info"
+                  onClick={() => { playClickSound(); setShowInfoModal(true); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b3745] text-[#3390ec] hover:text-white transition duration-150 text-xs font-semibold cursor-pointer"
+                >
+                  <Info className="w-4 h-4 animate-pulse" />
+                  <span>Interaction Chart</span>
+                </button>
+              </div>
+
               {!activeGame ? (
                 // LOBBY ENTRY SCREEN
                 <div className="space-y-6">
@@ -854,12 +1131,93 @@ function GameAppInner() {
                   </div>
                   <div>
                     <p className="font-bold text-base leading-tight text-white">@{currentTgId}</p>
-                    <p className="text-[#708499] text-xs">Rank: Gold Warrior</p>
+                    <p className={`text-xs font-bold leading-tight mt-1 flex items-center gap-1 ${currentRank.color}`}>
+                      <span>{currentRank.badgeEmoji}</span> {currentRank.name}
+                    </p>
                   </div>
                 </div>
                 <div className="text-right">
                   <p className="text-green-500 font-bold text-sm">W: {profile?.wins || 0}</p>
                   <p className="text-red-400 font-bold text-xs">L: {profile?.losses || 0}</p>
+                </div>
+              </div>
+
+              {/* Dynamic Rank Badge & Progression Panel */}
+              <div className={`border rounded-3xl p-6 transition-all duration-300 ${currentRank.bgColor} ${currentRank.borderColor} shadow-lg ${currentRank.glowColor}`}>
+                <div className="flex items-center justify-between pb-4 border-b border-white/5">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xl">{currentRank.badgeEmoji}</span>
+                    <span className="text-xs font-black tracking-wider text-white uppercase">Arena Battle License</span>
+                  </div>
+                  <span className="text-[10px] bg-white/10 text-white font-mono px-2 py-0.5 rounded-full font-bold">
+                    Tier {RANKS.findIndex(r => r.name === currentRank.name) + 1} / {RANKS.length}
+                  </span>
+                </div>
+
+                <div className="flex items-center space-x-5 py-5 overflow-hidden">
+                  {/* Visual Large Badge Display */}
+                  <div className="relative flex items-center justify-center shrink-0">
+                    <div className="absolute inset-0 rounded-full bg-white/5 scale-125 blur-sm animate-pulse" />
+                    <div className="w-16 h-16 rounded-2xl bg-[#17212b]/95 border-2 border-white/10 flex items-center justify-center text-4xl shadow-inner relative z-10">
+                      {currentRank.badgeEmoji}
+                    </div>
+                  </div>
+
+                  {/* Rank Title & Description */}
+                  <div className="space-y-1 min-w-0">
+                    <h4 className={`text-lg font-black tracking-tight leading-tight uppercase ${currentRank.color}`}>
+                      {currentRank.name}
+                    </h4>
+                    <p className="text-white/70 text-xs leading-snug">
+                      {currentRank.description}
+                    </p>
+                    <p className="text-[#708499] text-[10px]">
+                      Current Wins: <span className="font-bold font-mono text-white">{userWins}</span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Progression Bar to Next Rank */}
+                <div className="space-y-2 pt-2 border-t border-white/5">
+                  {nextRankInfo.rank ? (
+                    <>
+                      <div className="flex justify-between text-[11px]">
+                        <span className="text-[#708499]">Next Tier: <b className="text-white/90">{nextRankInfo.rank.name}</b></span>
+                        <span className="font-bold font-mono text-white/90">{nextRankInfo.winsNeeded} wins left</span>
+                      </div>
+                      <div className="w-full bg-white/5 rounded-full h-2.5 overflow-hidden p-[1px] border border-white/10">
+                        <motion.div
+                          className={`h-full rounded-full bg-gradient-to-r from-[#3390ec] to-purple-500`}
+                          initial={{ width: 0 }}
+                          animate={{ width: `${nextRankInfo.percent}%` }}
+                          transition={{ duration: 0.8, ease: "easeOut" }}
+                        />
+                      </div>
+                      <div className="flex justify-between text-[9px] text-[#708499] font-mono leading-none">
+                        <span>{currentRank.minWins} Wins</span>
+                        <span>{nextRankInfo.percent}% Progress</span>
+                        <span>{nextRankInfo.rank.minWins} Wins</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-center py-2 bg-white/5 rounded-2xl border border-white/10">
+                      <p className="text-yellow-400 font-extrabold text-xs flex justify-center items-center gap-1.5 animate-bounce">
+                        🎉 SUPREME STAGE COMPLETED 🎉
+                      </p>
+                      <p className="text-[#708499] text-[10px] mt-0.5">You are an absolute legend of the RSPW Arena!</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Rank tiers visual peek button */}
+                <div className="mt-4 pt-3 flex justify-center">
+                  <button
+                    id="btn_view_rank_tiers"
+                    onClick={() => { playClickSound(); setShowRankTiersModal(true); }}
+                    className="text-xs text-[#3390ec] hover:text-[#3390ec]/80 flex items-center gap-1 font-semibold transition cursor-pointer"
+                  >
+                    View All Arena Tiers <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               </div>
 
@@ -892,6 +1250,34 @@ function GameAppInner() {
                       }
                     </span>
                   </div>
+                </div>
+              </div>
+
+              {/* Game Preferences Card */}
+              <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 space-y-4">
+                <div className="flex items-center justify-between border-b border-[#242f3d] pb-3">
+                  <span className="text-sm font-bold text-white uppercase tracking-wider">Game Settings</span>
+                  <Volume2 className="w-4 h-4 text-[#3390ec]" />
+                </div>
+                <div className="flex items-center justify-between bg-[#242f3d] p-3.5 rounded-2xl border border-[#2b3745]">
+                  <div className="flex items-center space-x-3 w-[72%]">
+                    <div className="w-9 h-9 rounded-xl bg-[#17212b] flex items-center justify-center shrink-0">
+                      {soundsMuted ? <VolumeX className="w-5 h-5 text-red-400" /> : <Volume2 className="w-5 h-5 text-green-400" />}
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-white">Sound Effects</p>
+                      <p className="text-[9.5px] text-[#708499] leading-tight mt-0.5">Satisfying clicks, win chimes & alert sweeps</p>
+                    </div>
+                  </div>
+                  <button
+                    id="btn_sound_settings_toggle"
+                    onClick={() => toggleSoundMute()}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${soundsMuted ? 'bg-[#708499]/30' : 'bg-[#3390ec]'}`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${soundsMuted ? 'translate-x-0' : 'translate-x-5'}`}
+                    />
+                  </button>
                 </div>
               </div>
 
@@ -1038,7 +1424,7 @@ function GameAppInner() {
         
         {/* NAV 1: HOME */}
         <button
-          onClick={() => setActiveTab('home')}
+          onClick={() => { playClickSound(); setActiveTab('home'); }}
           className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'home' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Home className="w-6 h-6 mb-1" />
@@ -1047,7 +1433,7 @@ function GameAppInner() {
 
         {/* NAV 2: PLAY */}
         <button
-          onClick={() => setActiveTab('play')}
+          onClick={() => { playClickSound(); setActiveTab('play'); }}
           className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'play' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Gamepad2 className="w-6 h-6 mb-1" />
@@ -1056,7 +1442,7 @@ function GameAppInner() {
 
         {/* NAV 3: REFERRALS */}
         <button
-          onClick={() => setActiveTab('referrals')}
+          onClick={() => { playClickSound(); setActiveTab('referrals'); }}
           className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'referrals' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Users className="w-6 h-6 mb-1" />
@@ -1065,7 +1451,7 @@ function GameAppInner() {
 
         {/* NAV 4: PROFILE */}
         <button
-          onClick={() => setActiveTab('profile')}
+          onClick={() => { playClickSound(); setActiveTab('profile'); }}
           className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'profile' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <User className="w-6 h-6 mb-1" />
@@ -1073,6 +1459,199 @@ function GameAppInner() {
         </button>
 
       </footer>
+
+      {/* INTERACTIVE RULES INFO MODAL */}
+      <AnimatePresence>
+        {showInfoModal && (
+          <div id="modal_interaction_chart" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop with transition */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => { playClickSound(); setShowInfoModal(false); }}
+              className="absolute inset-0 bg-black/75 backdrop-blur-xs"
+            />
+            
+            {/* Modal Box */}
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 15 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 15 }}
+              transition={{ type: "spring", damping: 25, stiffness: 350 }}
+              className="bg-[#17212b] border border-[#2b3745] rounded-3xl p-6 w-full max-w-sm relative z-10 shadow-2xl space-y-4"
+            >
+              {/* Heading Tab */}
+              <div className="flex justify-between items-center pb-2 border-b border-[#242f3d]">
+                <div className="flex items-center gap-2">
+                  <Info className="w-5 h-5 text-[#3390ec]" />
+                  <h3 className="text-base font-bold text-white">Interactive Rules</h3>
+                </div>
+                <button
+                  id="btn_close_info_modal_icon"
+                  onClick={() => { playClickSound(); setShowInfoModal(false); }}
+                  className="p-1 rounded-sm hover:bg-[#242f3d] text-[#708499] hover:text-white transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Rules Content */}
+              <div className="text-xs text-slate-300 space-y-3 leading-relaxed">
+                <p>
+                  <strong>Rock-Scissors-Paper-Well</strong> is an expanded edition of the standard game, incorporating the deep, strategic <strong>Well (🕳️)</strong> weapon.
+                </p>
+                
+                <div className="space-y-2 pt-2 border-t border-[#242f3d]/60">
+                  <span className="text-[10px] uppercase font-semibold text-[#708499] block tracking-wider">WEAPON OUTCOMES CHART:</span>
+                  
+                  <div className="grid grid-cols-1 gap-2 font-medium">
+                    <div className="flex items-center bg-[#242f3d] p-2.5 rounded-xl gap-3">
+                      <span className="text-2xl select-none">👊</span>
+                      <div className="space-y-0.5">
+                        <span className="text-white font-bold text-xs block">ROCK</span>
+                        <span className="text-[10px] text-[#708499] block">Beats ✂️ Scissors. Loses to 📄 Paper & 🕳️ Well.</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center bg-[#242f3d] p-2.5 rounded-xl gap-3">
+                      <span className="text-2xl select-none">✂️</span>
+                      <div className="space-y-0.5">
+                        <span className="text-white font-bold text-xs block">SCISSORS</span>
+                        <span className="text-[10px] text-[#708499] block">Beats 📄 Paper. Loses to 👊 Rock & 🕳️ Well.</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center bg-[#242f3d] p-2.5 rounded-xl gap-3">
+                      <span className="text-2xl select-none">📄</span>
+                      <div className="space-y-0.5">
+                        <span className="text-white font-bold text-xs block">PAPER</span>
+                        <span className="text-[10px] text-[#708499] block">Beats 👊 Rock & 🕳️ Well. Loses to ✂️ Scissors.</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center bg-[#242f3d] p-2.5 rounded-xl gap-3">
+                      <span className="text-2xl select-none">🕳️</span>
+                      <div className="space-y-0.5">
+                        <span className="text-white font-bold text-xs block">WELL</span>
+                        <span className="text-[10px] text-[#708499] block">Beats 👊 Rock & ✂️ Scissors. Loses to 📄 Paper.</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-[9.5px] text-[#708499] text-center italic pt-1">
+                  On-chain fair results verified. Pick carefully and outsmart your opponent!
+                </p>
+              </div>
+
+              {/* Acknowledge Button */}
+              <button
+                id="btn_close_info_modal_got_it"
+                onClick={() => { playClickSound(); setShowInfoModal(false); }}
+                className="w-full py-2.5 bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold rounded-xl transition text-xs shadow-md shadow-[#3390ec]/15 cursor-pointer"
+              >
+                GOT IT
+              </button>
+            </motion.div>
+          </div>
+        )}
+
+        {showRankTiersModal && (
+          <div id="modal_rank_tiers_showcase" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop with transition */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => { playClickSound(); setShowRankTiersModal(false); }}
+              className="absolute inset-0 bg-black/85 backdrop-blur-xs"
+            />
+            
+            {/* Modal Box */}
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              transition={{ type: "spring", damping: 25, stiffness: 350 }}
+              className="bg-[#17212b] border border-[#2b3745] rounded-3xl p-6 w-full max-w-sm relative z-10 shadow-2xl space-y-4"
+            >
+              {/* Heading */}
+              <div className="flex justify-between items-center pb-2 border-b border-[#242f3d]">
+                <div className="flex items-center gap-2">
+                  <Trophy className="w-5 h-5 text-yellow-400" />
+                  <h3 className="text-base font-bold text-white">Arena Rank Tiers</h3>
+                </div>
+                <button
+                  id="btn_close_rank_tiers_modal"
+                  onClick={() => { playClickSound(); setShowRankTiersModal(false); }}
+                  className="p-1 rounded-sm hover:bg-[#242f3d] text-[#708499] hover:text-white transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Tiers List */}
+              <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-1">
+                {RANKS.map((rk, idx) => {
+                  const isCurrent = currentRank.name === rk.name;
+                  const isUnlocked = userWins >= rk.minWins;
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`p-3 rounded-2xl border transition-all flex items-center justify-between ${
+                        isCurrent
+                          ? `bg-white/5 border-white/20 ring-1 ring-white/10 shadow-lg`
+                          : isUnlocked
+                          ? `bg-[#242f3d]/40 border-[#2b3745]/30 opacity-75`
+                          : `bg-black/20 border-[#2b3745]/10 opacity-35`
+                      }`}
+                    >
+                      <div className="flex items-center space-x-3 w-[75%]">
+                        <div className="w-10 h-10 rounded-xl bg-[#17212b] border border-white/5 flex items-center justify-center text-2xl shrink-0">
+                          {rk.badgeEmoji}
+                        </div>
+                        <div className="min-w-0">
+                          <p className={`text-xs font-bold truncate ${rk.color} flex items-center gap-1`}>
+                            {rk.name}
+                            {isCurrent && (
+                              <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-1 py-[0.5px] rounded-sm font-semibold uppercase truncate shrink-0">
+                                Active
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-[10px] text-white/50 truncate mt-0.5 leading-none">
+                            {rk.description}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] font-mono block text-white/40">Requires</span>
+                        <span className="text-xs font-bold font-mono text-emerald-400">{rk.minWins} W</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Tips */}
+              <p className="text-[10px] text-[#708499] text-center leading-normal">
+                Winning games increases your status. Defeats do not decrease tier progress—it is permanently saved!
+              </p>
+
+              {/* Close Button */}
+              <button
+                id="btn_close_rank_tiers_modal_footer"
+                onClick={() => { playClickSound(); setShowRankTiersModal(false); }}
+                className="w-full py-2.5 bg-[#242f3d] hover:bg-[#2c394a] text-white font-bold rounded-xl transition text-xs border border-[#2b3745] cursor-pointer"
+              >
+                CLOSE VIEW
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
     </div>
   );
