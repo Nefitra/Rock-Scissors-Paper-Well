@@ -50,6 +50,9 @@ interface UserProfile {
   referralsCountL1: number;
   referralsCountL2: number;
   createdAt: string;
+  streak?: number;
+  xp?: number;
+  lastLoginDate?: string;
 }
 
 interface GameSession {
@@ -200,6 +203,10 @@ function GameAppInner() {
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<boolean>(false);
+  
+  // Daily Streak and XP state hooks
+  const [claimingStreak, setClaimingStreak] = useState<boolean>(false);
+  const [streakClaimSuccess, setStreakClaimSuccess] = useState<string | null>(null);
 
   // Inject a standard Web3 provider to allow seamless onboarding when MetaMask is not physically installed or available (e.g. in development, sandbox, or headless automated environments)
   if (typeof window !== 'undefined' && !(window as any).ethereum) {
@@ -617,6 +624,87 @@ function GameAppInner() {
     }
   };
 
+  // Helper to determine the active cosmetic badge based on current streak
+  const getCosmeticBadge = (streakCount?: number) => {
+    if (!streakCount || streakCount === 0) return null;
+    if (streakCount >= 7) {
+      return {
+        emoji: "🔮",
+        name: "Grand Phoenix",
+        color: "text-[#f35588] bg-[#f35588]/10 border-[#f35588]/30",
+        description: "Ultimate loyalty tier of master champions of RSPW (7+ Days)"
+      };
+    }
+    if (streakCount >= 5) {
+      return {
+        emoji: "⚡",
+        name: "Streak Overlord",
+        color: "text-[#3390ec] bg-[#3390ec]/10 border-[#3390ec]/30",
+        description: "Honored elite streak badge (5+ Days)"
+      };
+    }
+    if (streakCount >= 3) {
+      return {
+        emoji: "👑",
+        name: "Flame Adept",
+        color: "text-amber-500 bg-amber-500/10 border-amber-500/30",
+        description: "Combat veteran displaying consistent daily presence (3-4 Days)"
+      };
+    }
+    return {
+      emoji: "🔥",
+      name: "Minor Sparkler",
+      color: "text-emerald-400 bg-emerald-400/10 border-emerald-400/30",
+      description: "Getting warmed up inside the daily arena (1-2 Days)"
+    };
+  };
+
+  // Perform daily streak claiming with backend
+  const claimDailyStreak = async () => {
+    if (!currentTgId) return;
+    setClaimingStreak(true);
+    setStreakClaimSuccess(null);
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
+      const todayStr = new Date().toLocaleDateString('sv-SE'); // "YYYY-MM-DD" e.g. 2026-06-16
+
+      const response = await fetch('/api/user/claim-daily', {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify({
+          telegramId: currentTgId,
+          clientDateString: todayStr
+        })
+      });
+      const data = await response.json();
+      if (data.error) {
+        setErrorMessage(data.error);
+      } else {
+        // Trigger glorious confetti & win sound!
+        playWinChime();
+        confetti({
+          particleCount: 140,
+          spread: 80,
+          origin: { y: 0.6 }
+        });
+
+        setStreakClaimSuccess(data.message);
+        // Refresh the profile to get updated level / xp / streak counts!
+        syncProfile();
+      }
+    } catch (err: any) {
+      console.error("Daily claim client error:", err);
+      setErrorMessage("Could not claim daily reward due to network error.");
+    } finally {
+      setClaimingStreak(false);
+    }
+  };
+
   // Re-sync on TG login change or Wallet connection change
   useEffect(() => {
     syncProfile();
@@ -881,16 +969,16 @@ function GameAppInner() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0e1621] text-white flex flex-col font-sans selection:bg-[#3390ec] selection:text-white">
+    <div className="min-h-screen bg-[#0e1621] text-white flex flex-col font-sans selection:bg-[#3390ec] selection:text-white max-w-full overflow-x-hidden">
       
       {/* Dynamic Sandbox Controller for Testing (Only shown in Normal Web Browser / Outside Telegram) */}
       {!isInsideTMA && (
-        <div className="bg-[#17212b] border-b border-[#242f3d] px-4 py-2.5 text-xs text-[#708499] md:flex md:items-center md:justify-between space-y-2 md:space-y-0 relative z-50">
-          <div className="flex items-center gap-2">
+        <div className="bg-[#17212b] border-b border-[#242f3d] px-4 py-2.5 text-xs text-[#708499] md:flex md:items-center md:justify-between space-y-2 md:space-y-0 relative z-50 overflow-x-auto">
+          <div className="flex items-center gap-2 shrink-0">
             <span className="px-2 py-0.5 bg-[#3390ec]/10 text-[#3390ec] font-semibold rounded border border-[#2b3745]">
               TMA Play-Tester Panel
             </span>
-            <span className="text-[10px] text-[#708499]">
+            <span className="text-[10px] text-[#708499] whitespace-nowrap">
               Simulate Telegram environment inside AI Studio:
             </span>
           </div>
@@ -946,41 +1034,43 @@ function GameAppInner() {
       )}
 
       {/* Header Bar */}
-      <header className="px-6 py-4 bg-[#0e1621] border-b border-[#242f3d] flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 bg-[#3390ec] rounded-xl flex items-center justify-center font-bold text-xl text-white">
-            R
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold leading-none text-white">Rock Paper Well</h1>
-            <p className="text-emerald-400 text-xs uppercase tracking-widest mt-1 font-semibold">Real PvP Mode</p>
-          </div>
-        </div>
-        
-        {/* Real TON / MetaMask Interactive Buttons */}
-        <div id="ton-button-parent" className="scale-90 origin-right flex items-center space-x-2 shrink-0">
-          <div className="bg-[#242f3d] rounded-full px-2 py-1 flex items-center border border-[#2b3745]">
-            <TonConnectButton />
+      <header className="bg-[#0e1621] border-b border-[#242f3d] shrink-0 sticky top-0 z-40">
+        <div className="max-w-md mx-auto w-full px-5 py-3 flex items-center justify-between">
+          <div className="flex items-center space-x-2.5 min-w-0">
+            <div className="w-8 h-8 bg-[#3390ec] rounded-xl flex items-center justify-center font-black text-lg text-white shrink-0">
+              R
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-sm font-bold leading-none text-white truncate">Rock Paper Well</h1>
+              <p className="text-emerald-400 text-[9px] uppercase tracking-widest mt-0.5 font-bold">Real PvP Mode</p>
+            </div>
           </div>
           
-          {metaMaskAddress ? (
-            <button 
-              id="metamask-disconnect-header"
-              onClick={disconnectMetaMask} 
-              className="bg-[#242f3d] hover:bg-[#2b3745] rounded-full px-3 py-1.5 flex items-center border border-[#2b3745] text-xs font-bold text-amber-500 cursor-pointer transition h-[34px]"
-              title="Disconnect MetaMask"
-            >
-              🦊 {metaMaskAddress.slice(0, 4)}...{metaMaskAddress.slice(-3)}
-            </button>
-          ) : (
-            <button 
-              id="metamask-connect-header"
-              onClick={connectMetaMask}
-              className="bg-[#242f3d] hover:bg-[#2b3745] rounded-full px-3 py-1.5 flex items-center border border-[#2b3745] text-xs font-bold text-amber-500 cursor-pointer transition h-[34px] uppercase tracking-wider"
-            >
-              🦊 {metaMaskConnecting ? '...' : 'Connect'}
-            </button>
-          )}
+          {/* Real TON / MetaMask Interactive Buttons */}
+          <div id="ton-button-parent" className="scale-[0.82] origin-right flex items-center space-x-1.5 shrink-0">
+            <div className="bg-[#242f3d] rounded-full px-1.5 py-0.5 flex items-center border border-[#2b3745]">
+              <TonConnectButton />
+            </div>
+            
+            {metaMaskAddress ? (
+              <button 
+                id="metamask-disconnect-header"
+                onClick={disconnectMetaMask} 
+                className="bg-[#242f3d] hover:bg-[#2b3745] rounded-full px-2.5 py-1 flex items-center border border-[#2b3745] text-[10px] font-bold text-amber-500 cursor-pointer transition h-7 shrink-0"
+                title="Disconnect MetaMask"
+              >
+                🦊 {metaMaskAddress.slice(0, 3)}...{metaMaskAddress.slice(-3)}
+              </button>
+            ) : (
+              <button 
+                id="metamask-connect-header"
+                onClick={connectMetaMask}
+                className="bg-[#242f3d] hover:bg-[#2b3745] rounded-full px-2.5 py-1 flex items-center border border-[#2b3745] text-[10px] font-bold text-amber-500 cursor-pointer transition h-7 uppercase tracking-wider shrink-0"
+              >
+                🦊 {metaMaskConnecting ? '...' : 'Connect'}
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -1141,6 +1231,155 @@ function GameAppInner() {
                         </button>
                       </div>
                     )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Daily Login Streak & XP Progression Card */}
+              <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-5 space-y-4">
+                <div className="flex justify-between items-center">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xl">🔥</span>
+                    <div>
+                      <h4 className="text-sm font-bold text-white uppercase tracking-wider">Daily Login Streak</h4>
+                      <p className="text-[#708499] text-[10px]">Claim your daily experience bonus</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[11px] font-mono font-bold bg-[#3390ec]/10 text-[#3390ec] px-2.5 py-0.5 rounded-full border border-[#3390ec]/20 animate-pulse">
+                      {profile?.streak ? `${profile.streak} Day Streak` : '0 Day Streak'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 7-day reward ledger */}
+                <div className="grid grid-cols-7 gap-1.5 pt-1.5 pb-1">
+                  {Array.from({ length: 7 }).map((_, idx) => {
+                    const dayNum = idx + 1;
+                    const currentStreak = profile?.streak || 0;
+                    const isClaimedToday = profile?.lastLoginDate === new Date().toLocaleDateString('sv-SE');
+                    
+                    // Modulo logic for wrapping streaks larger than 7 cleanly
+                    const currentWeekDay = currentStreak > 0 ? ((currentStreak - 1) % 7) + 1 : 0;
+                    
+                    const isCompleted = dayNum < currentWeekDay || (dayNum === currentWeekDay && isClaimedToday);
+                    const isActiveTarget = !isClaimedToday && (
+                      (dayNum === currentWeekDay + 1) || 
+                      (currentWeekDay === 0 && dayNum === 1) ||
+                      (currentWeekDay === 7 && dayNum === 1)
+                    ) || (dayNum === currentWeekDay && !isClaimedToday);
+
+                    const dayXpBonus = 100 + dayNum * 10;
+
+                    return (
+                      <div key={dayNum} className="flex flex-col items-center space-y-1.5">
+                        <span className="text-[9px] text-[#708499] font-bold">D{dayNum}</span>
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold transition-all border ${
+                          isCompleted
+                            ? 'bg-gradient-to-tr from-amber-500 to-yellow-400 border-amber-500 text-[#0e1621] shadow-sm shadow-amber-500/20'
+                            : isActiveTarget
+                              ? 'bg-[#3390ec]/20 border-[#3390ec] text-[#3390ec] animate-pulse scale-105'
+                              : 'bg-[#242f3d]/60 border-[#2b3745] text-[#708499]'
+                        }`}>
+                          {isCompleted ? "🔥" : `+${dayXpBonus}`}
+                        </div>
+                        <span className={`text-[8px] font-mono scale-90 ${isCompleted ? 'text-amber-500 font-bold' : 'text-[#708499]'}`}>
+                          {isCompleted ? "Done" : `${dayXpBonus} XP`}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Claim Button & Info feedback */}
+                <div>
+                  {profile?.lastLoginDate === new Date().toLocaleDateString('sv-SE') ? (
+                    <div className="bg-[#242f3d]/50 border border-[#2b3745] rounded-2xl p-3 text-center space-y-1">
+                      <p className="text-xs font-semibold text-emerald-400 flex items-center justify-center gap-1.5">
+                        <span>✅</span> Daily Bonus Claimed Today
+                      </p>
+                      <p className="text-[#708499] text-[10px]">
+                        Return inside the next 24 hours to keep your streak burning!
+                      </p>
+                    </div>
+                  ) : (
+                    <button
+                      disabled={claimingStreak}
+                      onClick={claimDailyStreak}
+                      className="w-full h-11 bg-gradient-to-r from-[#3390ec] to-indigo-600 hover:from-[#2b7ad0] hover:to-indigo-700 text-white font-bold rounded-2xl transition-all duration-150 active:scale-95 shadow-md shadow-[#3390ec]/10 flex items-center justify-center gap-2 cursor-pointer relative group overflow-hidden"
+                    >
+                      {claimingStreak ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <>
+                          <span>⚡</span>
+                          <span>CLAIM TODAY'S REWARD</span>
+                          <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-mono">
+                            +{100 + (Math.min(7, (profile?.streak || 0) + 1) * 10)} XP
+                          </span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {/* Cosmetic Streak Badge Showcase (displays when streak >= 1) */}
+                {profile?.streak && profile.streak > 0 ? (
+                  (() => {
+                    const badgeInfo = getCosmeticBadge(profile.streak);
+                    if (!badgeInfo) return null;
+                    return (
+                      <div className="bg-[#242f3d]/30 border border-[#2b3745]/40 rounded-2xl p-3 flex items-center justify-between">
+                        <div className="flex items-center space-x-2.5 min-w-0">
+                          <span className="text-2xl animate-bounce shrink-0">{badgeInfo.emoji}</span>
+                          <div className="min-w-0">
+                            <span className="text-[10px] text-[#708499] uppercase tracking-wider font-bold block">Active Streak Badge</span>
+                            <span className="text-xs text-white font-bold block truncate">{badgeInfo.name}</span>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border shadow-sm ${badgeInfo.color}`}>
+                            {badgeInfo.name === 'Grand Phoenix' ? 'MAX BADGE' : 'COSMETIC'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <div className="text-center text-[10px] text-[#708499]">
+                    ℹ️ Maintain consecutive daily logins to unlock premium cosmetic badges.
+                  </div>
+                )}
+
+                {/* Success Banner */}
+                <AnimatePresence>
+                  {streakClaimSuccess && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 10 }}
+                      className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-2xl p-3 text-center text-xs font-semibold"
+                    >
+                      {streakClaimSuccess}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Dynamic Arena XP Progression Level bar */}
+                <div className="border-t border-[#242f3d] pt-3.5 space-y-2">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-slate-300 font-bold flex items-center gap-1">
+                      <span>🔰</span> Level {Math.floor((profile?.xp || 0) / 1000) + 1} Arena Combatant
+                    </span>
+                    <span className="text-[#3390ec] font-mono font-bold">
+                      {(profile?.xp || 0) % 1000} / 1000 XP
+                    </span>
+                  </div>
+                  <div className="w-full bg-[#182533] rounded-full h-3 overflow-hidden p-[1px] border border-[#242f3d]">
+                    <div 
+                      className="h-full rounded-full bg-gradient-to-r from-[#3390ec] via-indigo-500 to-purple-600 transition-all duration-300"
+                      style={{ width: `${Math.min(100, Math.max(0, (((profile?.xp || 0) % 1000) / 1000) * 100))}%` }}
+                    />
                   </div>
                 </div>
               </div>
@@ -1684,7 +1923,17 @@ function GameAppInner() {
                     👤
                   </div>
                   <div>
-                    <p className="font-bold text-base leading-tight text-white">@{currentTgId}</p>
+                    <p className="font-bold text-base leading-tight text-white flex items-center gap-1.5 break-all">
+                      <span>@{currentTgId}</span>
+                      {profile?.streak && profile.streak > 0 && (
+                        <span 
+                          className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#3390ec]/15 text-[#3390ec] border border-[#3390ec]/20 inline-flex items-center gap-1 animate-pulse"
+                          title={`Consecutive Streak: ${profile.streak} Days`}
+                        >
+                          🔥 {profile.streak}
+                        </span>
+                      )}
+                    </p>
                     <p className={`text-xs font-bold leading-tight mt-1 flex items-center gap-1 ${currentRank.color}`}>
                       <span>{currentRank.badgeEmoji}</span> {currentRank.name}
                     </p>

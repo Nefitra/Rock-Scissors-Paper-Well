@@ -339,6 +339,9 @@ app.post('/api/user/sync', async (req, res) => {
       losses: 0,
       referralsCountL1: 0,
       referralsCountL2: 0,
+      streak: 0,
+      xp: 0,
+      lastLoginDate: "",
       createdAt: new Date().toISOString()
     };
 
@@ -360,6 +363,81 @@ app.get('/api/user/:userId', async (req, res) => {
     }
     res.json({ profile: userSnap.data() });
   } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 3.1 Claim Daily Login Streak reward
+app.post('/api/user/claim-daily', async (req, res) => {
+  try {
+    const verifiedUser = getRequestUser(req);
+    const { telegramId, clientDateString } = req.body;
+
+    let targetTgId = telegramId;
+    if (verifiedUser.userId) {
+      targetTgId = verifiedUser.userId;
+    }
+
+    if (!targetTgId) {
+      return res.status(400).json({ error: "telegramId is required" });
+    }
+
+    const userRef = db.collection('users').doc(targetTgId);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userData = userSnap.data() || {};
+    const todayStr = clientDateString || new Date().toISOString().split('T')[0];
+    const lastClaimDate = userData.lastLoginDate || "";
+
+    if (lastClaimDate === todayStr) {
+      return res.status(400).json({ error: "Daily login already claimed today!" });
+    }
+
+    let currentStreak = userData.streak || 0;
+
+    // Calculate yesterday's date string
+    const clientDate = new Date(todayStr);
+    const tempDate = new Date(clientDate);
+    tempDate.setDate(tempDate.getDate() - 1);
+    const yesterdayStr = tempDate.toISOString().split('T')[0];
+
+    if (lastClaimDate === yesterdayStr) {
+      currentStreak += 1;
+    } else {
+      // Streak broken, or first claim
+      currentStreak = 1;
+    }
+
+    // Reward!
+    // We award +100 XP as the experience boost.
+    // Plus a dynamic streak multiplier bonus! (e.g. +10 XP per day of streak up to +50 XP)
+    const streakBonus = Math.min(5, currentStreak) * 10;
+    const baseReward = 100;
+    const totalAwardedXp = baseReward + streakBonus;
+    
+    const newXp = (userData.xp || 0) + totalAwardedXp;
+
+    const updates = {
+      streak: currentStreak,
+      lastLoginDate: todayStr,
+      xp: newXp
+    };
+
+    await userRef.update(updates);
+
+    res.json({
+      success: true,
+      streak: currentStreak,
+      xp: newXp,
+      lastLoginDate: todayStr,
+      awardedXp: totalAwardedXp,
+      message: `Successfully claimed! Daily streak: ${currentStreak} days. +${totalAwardedXp} Arena XP granted!`
+    });
+  } catch (error: any) {
+    console.error("Daily claim error:", error);
     res.status(500).json({ error: error.message });
   }
 });
