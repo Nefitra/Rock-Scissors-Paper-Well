@@ -5,7 +5,20 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
-import { playClickSound, playWinChime, playMatchmakingPing, playDefeatSound } from './sound';
+import { 
+  playClickSound, 
+  playWinChime, 
+  playMatchmakingPing, 
+  playDefeatSound,
+  playMatchFoundSound,
+  playCountdownSound,
+  playRoundStartSound,
+  playDrawSound,
+  playReferralSound,
+  playWalletConnectSound,
+  playRewardXPSound,
+  playNotificationSound
+} from './sound';
 import { 
   TonConnectUIProvider, 
   TonConnectButton, 
@@ -208,225 +221,12 @@ function GameAppInner() {
   const [claimingStreak, setClaimingStreak] = useState<boolean>(false);
   const [streakClaimSuccess, setStreakClaimSuccess] = useState<string | null>(null);
 
-  // Inject a standard Web3 provider to allow seamless onboarding when MetaMask is not physically installed or available (e.g. in development, sandbox, or headless automated environments)
-  if (typeof window !== 'undefined' && !(window as any).ethereum) {
-    (window as any).ethereum = {
-      isMetaMask: true,
-      request: async (args: any) => {
-        if (args.method === 'eth_requestAccounts' || args.method === 'eth_accounts') {
-          return ["0x711cDa653428Fc3efC34E57dB3798950d035e289"];
-        }
-        if (args.method === 'eth_getBalance') {
-          return "0x012903bc4911c7c0000"; // 1.337 ETH in Hex format
-        }
-        if (args.method === 'eth_chainId') {
-          return "0xaa36a7"; // Sepolia (11155111) Hex format
-        }
-        return null;
-      },
-      on: (event: string, cb: any) => {
-        if (event === 'accountsChanged' || event === 'chainChanged') {
-          // No dynamic changes in dummy environment
-        }
-      },
-      removeListener: () => {},
-      off: () => {}
-    };
-  }
-
-  // MetaMask integration states and methods
-  const [metaMaskAddress, setMetaMaskAddress] = useState<string | null>(null);
-  const [metaMaskBalance, setMetaMaskBalance] = useState<string>('0.00');
-  const [metaMaskNetwork, setMetaMaskNetwork] = useState<string>('Unknown Network');
-  const [metaMaskConnecting, setMetaMaskConnecting] = useState<boolean>(false);
-
-  const getNetworkName = (chainId: string | null): string => {
-    if (!chainId) return 'Unknown Network';
-    try {
-      const code = chainId.startsWith('0x') ? parseInt(chainId, 16) : parseInt(chainId, 10);
-      switch (code) {
-        case 1: return 'Ethereum Mainnet';
-        case 11155111: return 'Sepolia Testnet';
-        case 56: return 'BNB Smart Chain';
-        case 137: return 'Polygon';
-        case 42161: return 'Arbitrum One';
-        case 10: return 'Optimism';
-        case 8453: return 'Base';
-        default: return `Chain ID: ${code}`;
-      }
-    } catch {
-      return 'Unknown Network';
-    }
-  };
-
-  useEffect(() => {
-    const checkMetaMaskConnection = async () => {
-      if (typeof window !== 'undefined' && (window as any).ethereum) {
-        const provider = (window as any).ethereum;
-        if (provider && typeof provider.request === 'function') {
-          try {
-            const accounts = await provider.request({ method: 'eth_accounts' });
-            if (accounts && accounts.length > 0) {
-              setMetaMaskAddress(accounts[0]);
-              try {
-                const balanceHex = await provider.request({
-                  method: 'eth_getBalance',
-                  params: [accounts[0], 'latest']
-                });
-                const balanceEth = parseInt(balanceHex, 16) / 1e18;
-                setMetaMaskBalance(balanceEth.toFixed(4));
-              } catch (balErr) {
-                console.error("Failed to fetch balance on check:", balErr);
-                setMetaMaskBalance('0.0000');
-              }
-              try {
-                const chainId = await provider.request({ method: 'eth_chainId' });
-                setMetaMaskNetwork(getNetworkName(chainId));
-              } catch (chainErr) {
-                console.error("Failed to fetch chainId:", chainErr);
-                setMetaMaskNetwork('Ethereum Network');
-              }
-            }
-          } catch (e) {
-            console.error("Failed to recover MetaMask connection:", e);
-          }
-        }
-      }
-    };
-    checkMetaMaskConnection();
-
-    if (typeof window !== 'undefined' && (window as any).ethereum) {
-      const provider = (window as any).ethereum;
-      const handleAccountsChanged = async (accounts: string[]) => {
-        if (accounts && accounts.length > 0) {
-          setMetaMaskAddress(accounts[0]);
-          if (typeof provider.request === 'function') {
-            try {
-              const balanceHex = await provider.request({
-                method: 'eth_getBalance',
-                params: [accounts[0], 'latest']
-              });
-              const balanceEth = parseInt(balanceHex, 16) / 1e18;
-              setMetaMaskBalance(balanceEth.toFixed(4));
-            } catch (e) {
-              console.error("Failed to fetch balance on change:", e);
-              setMetaMaskBalance('0.0000');
-            }
-            try {
-              const chainId = await provider.request({ method: 'eth_chainId' });
-              setMetaMaskNetwork(getNetworkName(chainId));
-            } catch (e) {
-              setMetaMaskNetwork('Ethereum Network');
-            }
-          }
-        } else {
-          setMetaMaskAddress(null);
-          setMetaMaskBalance('0.00');
-          setMetaMaskNetwork('Unknown Network');
-        }
-      };
-
-      const handleChainChanged = async (chainId: string) => {
-        setMetaMaskNetwork(getNetworkName(chainId));
-        if (metaMaskAddress && typeof provider.request === 'function') {
-          try {
-            const balanceHex = await provider.request({
-              method: 'eth_getBalance',
-              params: [metaMaskAddress, 'latest']
-            });
-            const balanceEth = parseInt(balanceHex, 16) / 1e18;
-            setMetaMaskBalance(balanceEth.toFixed(4));
-          } catch (e) {
-            console.error("Failed to fetch balance on chain change:", e);
-          }
-        }
-      };
-      
-      if (typeof provider.on === 'function') {
-        provider.on('accountsChanged', handleAccountsChanged);
-        provider.on('chainChanged', handleChainChanged);
-      }
-      return () => {
-        if (provider) {
-          if (typeof provider.removeListener === 'function') {
-            provider.removeListener('accountsChanged', handleAccountsChanged);
-            provider.removeListener('chainChanged', handleChainChanged);
-          } else if (typeof provider.off === 'function') {
-            provider.off('accountsChanged', handleAccountsChanged);
-            provider.off('chainChanged', handleChainChanged);
-          }
-        }
-      };
-    }
-  }, [metaMaskAddress]);
-
-  const connectMetaMask = async () => {
-    if (typeof window === 'undefined') return;
-    setMetaMaskConnecting(true);
-    setErrorMessage(null);
-    try {
-      const ethereum = (window as any).ethereum;
-      if (!ethereum || typeof ethereum.request !== 'function') {
-        // Fallback gracefully to high-quality simulated MetaMask session
-        setMetaMaskAddress("0x711cDa653428Fc3efC34E57dB3798950d035e289");
-        setMetaMaskBalance("1.3370");
-        setMetaMaskNetwork("Sepolia Testnet (Sandbox)");
-        playWinChime();
-        return;
-      }
-      
-      const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
-      if (accounts && accounts.length > 0) {
-        setMetaMaskAddress(accounts[0]);
-        try {
-          const balanceHex = await ethereum.request({
-            method: 'eth_getBalance',
-            params: [accounts[0], 'latest']
-          });
-          const balanceEth = parseInt(balanceHex, 16) / 1e18;
-          setMetaMaskBalance(balanceEth.toFixed(4));
-        } catch (balanceErr) {
-          console.error("Failed to fetch balance during connect:", balanceErr);
-          setMetaMaskBalance('0.0000');
-        }
-        try {
-          const chainId = await ethereum.request({ method: 'eth_chainId' });
-          setMetaMaskNetwork(getNetworkName(chainId));
-        } catch {
-          setMetaMaskNetwork('Ethereum Network');
-        }
-        playWinChime();
-      } else {
-        // Simulated fallback instead of failing
-        setMetaMaskAddress("0x711cDa653428Fc3efC34E57dB3798950d035e289");
-        setMetaMaskBalance("1.3370");
-        setMetaMaskNetwork("Sepolia Testnet (Sandbox)");
-        playWinChime();
-      }
-    } catch (err: any) {
-      console.warn("MetaMask connection failed, falling back to simulated session:", err);
-      // Ensure the user is still connected smoothly
-      setMetaMaskAddress("0x711cDa653428Fc3efC34E57dB3798950d035e289");
-      setMetaMaskBalance("1.3370");
-      setMetaMaskNetwork("Sepolia Testnet (Sandbox)");
-      playWinChime();
-    } finally {
-      setMetaMaskConnecting(false);
-    }
-  };
-
-  const disconnectMetaMask = () => {
-    setMetaMaskAddress(null);
-    setMetaMaskBalance('0.00');
-    setMetaMaskNetwork('Unknown Network');
-    playClickSound();
-  };
-  
   // Live Game States
   const [activeGame, setActiveGame] = useState<GameSession | null>(null);
   const [selectedMove, setSelectedMove] = useState<string>('');
   const [preSelectedMove, setPreSelectedMove] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState<boolean>(false);
+  const [countdownTick, setCountdownTick] = useState<number>(3);
   const [gameResultTimeout, setGameResultTimeout] = useState<any>(null);
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
   const [showRankTiersModal, setShowRankTiersModal] = useState<boolean>(false);
@@ -451,6 +251,8 @@ function GameAppInner() {
   };
   const lastConfettiGameIdRef = useRef<string | null>(null);
   const lastSoundGameIdRef = useRef<string | null>(null);
+  const lastMatchedGameIdRef = useRef<string | null>(null);
+  const lastWalletAddressRef = useRef<string | null>(null);
 
   // Dynamic Player Ranks based on total wins
   const userWins = profile?.wins || 0;
@@ -552,6 +354,9 @@ function GameAppInner() {
               });
             }, 300);
           }
+        } else if (activeGame.winnerId === 'draw') {
+          // Play neutral harmonized draw sound
+          playDrawSound();
         } else {
           // Play soft custom synthesized warning/defeat sound
           playDefeatSound();
@@ -559,6 +364,42 @@ function GameAppInner() {
       }
     }
   }, [activeGame, currentTgId]);
+
+  // Trigger audio alert and immersive countdown sounds when matched with an opponent
+  useEffect(() => {
+    if (activeGame && activeGame.status === 'matched') {
+      if (lastMatchedGameIdRef.current !== activeGame.id) {
+        lastMatchedGameIdRef.current = activeGame.id;
+        
+        // 1. Play exciting Match Found arpeggio instantly
+        playMatchFoundSound();
+        
+        // 2. Schedule crisp, snappy countdown alerts
+        const p1 = setTimeout(() => {
+          playCountdownSound(false); // Prepare piP
+        }, 500);
+
+        const p2 = setTimeout(() => {
+          playCountdownSound(false); // Prepare piP
+        }, 900);
+
+        const p3 = setTimeout(() => {
+          playCountdownSound(true); // "GO" High Tone!
+        }, 1300);
+
+        const p4 = setTimeout(() => {
+          playRoundStartSound(); // Final impact clash of battle!
+        }, 1350);
+
+        return () => {
+          clearTimeout(p1);
+          clearTimeout(p2);
+          clearTimeout(p3);
+          clearTimeout(p4);
+        };
+      }
+    }
+  }, [activeGame]);
 
   // Auto-submit preselected move when matched
   useEffect(() => {
@@ -606,7 +447,7 @@ function GameAppInner() {
         body: JSON.stringify({
           telegramId: currentTgId,
           username: currentUsername,
-          walletAddress: walletAddress || metaMaskAddress || null,
+          walletAddress: walletAddress || null,
           referredBy: refParam || null
         })
       });
@@ -685,8 +526,8 @@ function GameAppInner() {
       if (data.error) {
         setErrorMessage(data.error);
       } else {
-        // Trigger glorious confetti & win sound!
-        playWinChime();
+        // Trigger glorious confetti & sparkling XP/reward sound!
+        playRewardXPSound();
         confetti({
           particleCount: 140,
           spread: 80,
@@ -708,7 +549,7 @@ function GameAppInner() {
   // Re-sync on TG login change or Wallet connection change
   useEffect(() => {
     syncProfile();
-  }, [currentTgId, currentUsername, walletAddress, metaMaskAddress]);
+  }, [currentTgId, currentUsername, walletAddress]);
 
   // Fetch Wallet Balance dynamically using official TON RPC/Center APIs
   useEffect(() => {
@@ -760,18 +601,19 @@ function GameAppInner() {
     return () => clearInterval(interval);
   }, [walletAddress]);
 
-  // Poll active game status when we have submitted our move but the game is not yet completed
+  // Trigger futuristic sound feedback when wallet connects
   useEffect(() => {
-    if (!activeGame || activeGame.status !== 'matched') return;
-    
-    // Check if we have submitted our move
-    const myId = currentTgId;
-    const amPlayer1 = activeGame.player1Id === myId;
-    const ourMoveSubmitted = amPlayer1 ? !!activeGame.player1Move : !!activeGame.player2Move;
-    
-    if (!ourMoveSubmitted) return;
+    if (walletAddress && lastWalletAddressRef.current !== walletAddress) {
+      playWalletConnectSound();
+    }
+    lastWalletAddressRef.current = walletAddress || null;
+  }, [walletAddress]);
 
-    // We have submitted, poll to see when the game is completed (or opponent submitted)
+  // Unified Game Session Poller (handles searching queue, countdown progression, move selections, active resolving, and completing matches)
+  useEffect(() => {
+    if (!activeGame) return;
+    if (activeGame.status === 'completed' || activeGame.status === 'canceled' || activeGame.status === 'cancelled') return;
+
     const interval = setInterval(async () => {
       try {
         const headers: any = {};
@@ -794,7 +636,20 @@ function GameAppInner() {
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [activeGame?.id, activeGame?.status, selectedMove, currentTgId]);
+  }, [activeGame?.id, activeGame?.status, currentTgId]);
+
+  // Track countdown tick locally for fluid 1-second UI counting
+  useEffect(() => {
+    const arenaState = getArenaState();
+    if (arenaState !== 'countdown') return;
+
+    const interval = setInterval(() => {
+      // Force local re-render to update Date.now() difference
+      setCountdownTick(prev => (prev === 1 ? 1 : prev - 1));
+    }, 250);
+
+    return () => clearInterval(interval);
+  }, [activeGame?.matchedAt, activeGame?.status]);
 
   // Fetch Admin Metrics if in admin tab
   const fetchAdminMetrics = async () => {
@@ -842,6 +697,7 @@ function GameAppInner() {
     const referralLink = `${window.location.origin}?startapp=${currentTgId}`;
     navigator.clipboard.writeText(referralLink);
     setCopiedLink(true);
+    playReferralSound();
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
@@ -884,47 +740,133 @@ function GameAppInner() {
         setIsSearching(false);
       } else {
         setActiveGame(data.game);
-        
-        // If matched or playing with Bot, stop search spinner
-        if (data.game.status === 'matched') {
-          setIsSearching(false);
-        } else {
-          // Poll matchmaking status for another real player using secure single session query
-          let attempts = 0;
-          const pollInterval = setInterval(async () => {
-            attempts++;
-            try {
-              const headers: any = {};
-              const initData = (window as any).Telegram?.WebApp?.initData;
-              if (initData) {
-                headers['x-telegram-init-data'] = initData;
-              }
-              const gCheckRes = await fetch(`/api/game/${data.game.id}?requestorId=${currentTgId}`, { headers });
-              const gCheckData = await gCheckRes.json();
-              const myGame = gCheckData.game;
-              
-              if (myGame && myGame.status === 'matched') {
-                setActiveGame(myGame);
-                setIsSearching(false);
-                clearInterval(pollInterval);
-              }
-
-              // After 5 seconds, offer bot backup to satisfy quick gameplay testing
-              if (attempts > 5) {
-                clearInterval(pollInterval);
-                // Force convert to BOT play so it doesn't leave user hanging
-                handleStartLobby(true);
-              }
-            } catch (err) {
-              console.error(err);
-            }
-          }, 1000);
-        }
+        setIsSearching(false);
       }
     } catch (err) {
       setErrorMessage("Server matchmaking failure.");
       setIsSearching(false);
     }
+  };
+
+  // Cancel matchmaking queue
+  const handleCancelMatchmaking = async () => {
+    playClickSound();
+    if (!activeGame) {
+      setIsSearching(false);
+      return;
+    }
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+      await fetch('/api/matchmaking/cancel', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          gameId: activeGame.id,
+          userId: currentTgId
+        })
+      });
+    } catch (err) {
+      console.error("Error canceling matchmaking:", err);
+    } finally {
+      setActiveGame(null);
+      setIsSearching(false);
+      setSelectedMove('');
+    }
+  };
+
+  // Forfeit/Leave Active match during gameplay
+  const handleLeaveMatch = async () => {
+    if (!activeGame) return;
+    playClickSound();
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+      const res = await fetch('/api/game/leave', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          gameId: activeGame.id,
+          userId: currentTgId
+        })
+      });
+      const data = await res.json();
+      if (data && data.game) {
+        setActiveGame(data.game);
+        syncProfile();
+      }
+    } catch (err) {
+      console.error("Error forfeiting match:", err);
+    }
+  };
+
+  // Determines current state of the battle arena
+  const getArenaState = (): 'idle' | 'searching' | 'countdown' | 'move_selection' | 'resolving' | 'completed' | 'cancelled' => {
+    if (!activeGame) return 'idle';
+    
+    if (activeGame.status === 'searching') {
+      return 'searching';
+    }
+    
+    if (activeGame.status === 'cancelled' || activeGame.status === 'canceled') {
+      return 'cancelled';
+    }
+    
+    if (activeGame.status === 'completed') {
+      return 'completed';
+    }
+
+    if (activeGame.status === 'matched') {
+      // If it's a bot game, start move selection immediately 
+      if (activeGame.player2Id === 'bot') {
+        if (!selectedMove) return 'move_selection';
+        return 'resolving';
+      }
+
+      // If PvP, countdown for 3 seconds based on matchedAt
+      if (activeGame.matchedAt) {
+        const elapsed = Date.now() - new Date(activeGame.matchedAt).getTime();
+        if (elapsed < 3000) {
+          return 'countdown';
+        }
+      }
+      
+      const amPlayer1 = activeGame.player1Id === currentTgId;
+      const ourMoveSubmitted = amPlayer1 ? !!activeGame.player1Move : !!activeGame.player2Move;
+      
+      if (!ourMoveSubmitted) {
+        return 'move_selection';
+      } else {
+        return 'resolving';
+      }
+    }
+
+    if (activeGame.status === 'resolving' || activeGame.status === 'move_selection') {
+      const amPlayer1 = activeGame.player1Id === currentTgId;
+      const ourMoveSubmitted = amPlayer1 ? !!activeGame.player1Move : !!activeGame.player2Move;
+      
+      if (!ourMoveSubmitted) {
+        return 'move_selection';
+      } else {
+        return 'resolving';
+      }
+    }
+
+    return 'idle';
+  };
+
+  // Remaining seconds for PvP start countdown
+  const getCountdownSecondsLeft = (): number => {
+    if (!activeGame || !activeGame.matchedAt) return 0;
+    const elapsed = Date.now() - new Date(activeGame.matchedAt).getTime();
+    const remaining = Math.max(0, 3000 - elapsed);
+    return Math.ceil(remaining / 1000);
   };
 
   // Submit Selected Move
@@ -1046,30 +988,11 @@ function GameAppInner() {
             </div>
           </div>
           
-          {/* Real TON / MetaMask Interactive Buttons */}
-          <div id="ton-button-parent" className="scale-[0.82] origin-right flex items-center space-x-1.5 shrink-0">
-            <div className="bg-[#242f3d] rounded-full px-1.5 py-0.5 flex items-center border border-[#2b3745]">
+          {/* Real TON Connection Button */}
+          <div id="ton-button-parent" className="scale-[0.82] origin-right flex items-center shrink-0">
+            <div className="bg-[#242f3d]/60 rounded-full px-2 py-0.5 flex items-center border border-[#2b3745]">
               <TonConnectButton />
             </div>
-            
-            {metaMaskAddress ? (
-              <button 
-                id="metamask-disconnect-header"
-                onClick={disconnectMetaMask} 
-                className="bg-[#242f3d] hover:bg-[#2b3745] rounded-full px-2.5 py-1 flex items-center border border-[#2b3745] text-[10px] font-bold text-amber-500 cursor-pointer transition h-7 shrink-0"
-                title="Disconnect MetaMask"
-              >
-                🦊 {metaMaskAddress.slice(0, 3)}...{metaMaskAddress.slice(-3)}
-              </button>
-            ) : (
-              <button 
-                id="metamask-connect-header"
-                onClick={connectMetaMask}
-                className="bg-[#242f3d] hover:bg-[#2b3745] rounded-full px-2.5 py-1 flex items-center border border-[#2b3745] text-[10px] font-bold text-amber-500 cursor-pointer transition h-7 uppercase tracking-wider shrink-0"
-              >
-                🦊 {metaMaskConnecting ? '...' : 'Connect'}
-              </button>
-            )}
           </div>
         </div>
       </header>
@@ -1137,7 +1060,7 @@ function GameAppInner() {
               </div>
 
               {/* Wallet & Balance overview */}
-              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+              <div className="w-full">
                 {/* TON Balance Card */}
                 <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-5 flex flex-col justify-between">
                   <div>
@@ -1156,7 +1079,7 @@ function GameAppInner() {
                     <div className="flex items-end space-x-1.5 mt-2.5">
                       <h3 className="text-3xl font-extrabold tracking-tight text-white leading-none">
                         {balanceLoading ? (
-                          <RefreshCw className="animate-spin w-5 h-5 text-[#3390ec]" />
+                           <RefreshCw className="animate-spin w-5 h-5 text-[#3390ec]" />
                         ) : walletAddress ? (
                           walletBalance
                         ) : (
@@ -1171,67 +1094,6 @@ function GameAppInner() {
                       <p className="text-[10px] text-amber-500 font-medium">Use header connection</p>
                     </div>
                   )}
-                </div>
-
-                {/* Ethereum Balance Card */}
-                <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-5 flex flex-col justify-between">
-                  <div>
-                    <div className="flex justify-between items-start">
-                      <p className="text-[#708499] text-[10px] font-bold uppercase tracking-widest leading-none">Ethereum Balance</p>
-                      {metaMaskAddress ? (
-                        <button 
-                          onClick={disconnectMetaMask}
-                          className="text-[9px] text-red-500 hover:text-red-400 bg-red-400/10 border border-red-500/20 px-2 py-0.5 rounded-full font-mono transition cursor-pointer"
-                        >
-                          Disconnect
-                        </button>
-                      ) : (
-                        <button 
-                          onClick={connectMetaMask}
-                          className="text-[9px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full font-mono hover:bg-amber-500/20 transition cursor-pointer animate-pulse"
-                        >
-                          Connect
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-end space-x-1.5 mt-2.5">
-                      <h3 className="text-3xl font-extrabold tracking-tight text-white leading-none">
-                        {metaMaskConnecting ? (
-                          <RefreshCw className="animate-spin w-5 h-5 text-amber-500" />
-                        ) : metaMaskAddress ? (
-                          metaMaskBalance
-                        ) : (
-                          "0.0000"
-                        )}
-                      </h3>
-                      <span className="text-amber-500 text-xs font-bold leading-none mb-0.5">ETH</span>
-                    </div>
-                  </div>
-                  <div className="mt-3.5 pt-3 border-t border-[#242f3d]">
-                    <div className="flex justify-between items-center text-[10px] font-mono text-[#708499] bg-[#242f3d]/30 px-3 py-2 rounded-2xl">
-                      <p className="truncate max-w-[110px]">
-                        {metaMaskAddress ? `${metaMaskAddress.slice(0, 8)}...` : 'No Ethereum Account'}
-                      </p>
-                      <p className="text-amber-500 font-bold text-right truncate max-w-[110px]">
-                        {metaMaskAddress ? metaMaskNetwork : ''}
-                      </p>
-                    </div>
-                    {metaMaskAddress && (
-                      <p className="text-[10px] text-[#708499] mt-2.5 leading-tight">
-                        ℹ️ This balance is queried from your active wallet extension/provider. Check the connected account and selected network (Ethereum/Sepolia) inside your wallet app (MetaMask, OKX, etc.) to verify its correctness.
-                      </p>
-                    )}
-                    {!metaMaskAddress && (
-                      <div className="flex justify-end mt-2">
-                        <button 
-                          onClick={connectMetaMask} 
-                          className="text-[10px] text-amber-500 hover:underline font-bold"
-                        >
-                          Click to Pair
-                        </button>
-                      </div>
-                    )}
-                  </div>
                 </div>
               </div>
 
@@ -1451,9 +1313,9 @@ function GameAppInner() {
                 </button>
               </div>
 
-              {!activeGame ? (
+              {getArenaState() === 'idle' ? (
                 // LOBBY ENTRY SCREEN
-                <div className="space-y-6">
+                <div className="space-y-6 animate-fade-in">
                   <div className="text-center py-6">
                     <h3 className="text-xl font-bold text-white">Find or Start a Match</h3>
                     <p className="text-[#708499] text-xs mt-1">Server resolves the game state atomically</p>
@@ -1463,7 +1325,7 @@ function GameAppInner() {
                     {/* Bot match */}
                     <button
                       onClick={() => handleStartLobby(true)}
-                      className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl text-left transition-all flex items-center justify-between"
+                      className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl text-left transition-all flex items-center justify-between cursor-pointer"
                     >
                       <div className="space-y-1">
                         <span className="text-white group-hover:text-white font-bold text-base flex items-center gap-1.5">
@@ -1478,7 +1340,7 @@ function GameAppInner() {
                     {/* Online PVP match */}
                     <button
                       onClick={() => handleStartLobby(false)}
-                      className="group bg-[#17212b] hover:bg-[#3390ec] border border-[#242f3d] p-6 rounded-2xl text-left transition-all flex items-center justify-between relative overflow-hidden"
+                      className="group bg-[#17212b] hover:bg-[#3390ec] border border-[#242f3d] p-6 rounded-2xl text-left transition-all flex items-center justify-between relative overflow-hidden cursor-pointer"
                     >
                       <div className="absolute right-0 top-0 w-24 h-24 bg-[#3390ec]/10 rounded-full blur-xl pointer-events-none" />
                       <div className="space-y-1 relative z-10">
@@ -1491,47 +1353,89 @@ function GameAppInner() {
                       <ChevronRight className="w-5 h-5 text-[#3390ec] group-hover:text-white transition animate-pulse" />
                     </button>
                   </div>
-
-                  {/* Searching Spinner */}
-                  {isSearching && (
-                    <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 text-center space-y-4">
-                      <div className="relative inline-block">
-                        <div className="w-12 h-12 rounded-full border-2 border-[#242f3d]/50 border-t-[#3390ec] animate-spin" />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-bold text-white">Searching for opponents...</h4>
-                        <p className="text-[11px] text-[#708499] mt-0.5">Searching the matchmaking lobby pool. (Falling back to Computer Bot if none available)</p>
-                      </div>
-                    </div>
-                  )}
                 </div>
               ) : (
                 // MATCHING & GAMEPLAY ACTIVE
                 <div className="space-y-6">
                   {/* Matching Info Header */}
-                  <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-4 flex justify-between items-center text-xs">
-                    <div className="text-left">
-                      <span className="text-[10px] text-[#708499] uppercase tracking-widest block font-bold">You</span>
-                      <span className="font-semibold text-[#3390ec] text-sm">@{activeGame.player1Id === currentTgId ? activeGame.player1Username : activeGame.player2Username}</span>
-                    </div>
+                  {activeGame && getArenaState() !== 'searching' && getArenaState() !== 'cancelled' && (
+                    <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-4 flex justify-between items-center text-xs">
+                      <div className="text-left">
+                        <span className="text-[10px] text-[#708499] uppercase tracking-widest block font-bold">You</span>
+                        <span className="font-semibold text-[#3390ec] text-sm">@{activeGame.player1Id === currentTgId ? activeGame.player1Username : activeGame.player2Username}</span>
+                      </div>
 
-                    <div className="px-3 py-1 rounded-full bg-[#242f3d] font-bold text-[10px] tracking-wider uppercase text-[#708499]">
-                      VS
-                    </div>
+                      <div className="px-3 py-1 rounded-full bg-[#242f3d] font-bold text-[10px] tracking-wider uppercase text-[#708499]">
+                        VS
+                      </div>
 
-                    <div className="text-right">
-                      <span className="text-[10px] text-[#708499] uppercase tracking-widest block font-bold">Opponent</span>
-                      <span className="font-semibold text-indigo-400 text-sm">@{activeGame.player1Id === currentTgId ? activeGame.player2Username : activeGame.player1Username}</span>
+                      <div className="text-right">
+                        <span className="text-[10px] text-[#708499] uppercase tracking-widest block font-bold">Opponent</span>
+                        <span className="font-semibold text-indigo-400 text-sm">@{activeGame.player1Id === currentTgId ? activeGame.player2Username : activeGame.player1Username}</span>
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* GAME ENGINE SCREEN */}
                   <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-8 text-center space-y-6 relative overflow-hidden">
                     <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#3390ec] to-transparent opacity-50"></div>
                     
-                    {activeGame.status === 'matched' ? (
-                      // GAME IN PROGRESS (CHOOSING MOVES)
-                      <div className="space-y-6">
+                    {getArenaState() === 'searching' && (
+                      <div className="space-y-6 py-4 animate-fade-in">
+                        <div className="relative inline-block">
+                          <div className="w-16 h-16 rounded-full border-4 border-[#242f3d]/50 border-t-[#3390ec] animate-spin" />
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <Gamepad2 className="w-6 h-6 text-[#3390ec] animate-pulse" />
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <h4 className="text-lg font-bold text-white uppercase tracking-wider animate-pulse">Waiting for Opponent...</h4>
+                          <p className="text-[#708499] text-xs">Searching matchmaking queue. Real Multiplayer PvP matches require exactly two real Telegram players.</p>
+                          <div className="flex items-center justify-center gap-1.5 mt-2 bg-[#242f3d]/40 py-1.5 px-3 rounded-xl max-w-xs mx-auto text-[11px] text-[#3390ec] font-bold">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                            <span>Queue Status: Active</span>
+                          </div>
+                        </div>
+                        
+                        <div className="pt-4 max-w-xs mx-auto">
+                          <button
+                            onClick={handleCancelMatchmaking}
+                            className="w-full bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+                          >
+                            Cancel Matchmaking
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {getArenaState() === 'countdown' && (
+                      <div className="space-y-6 py-6 animate-fade-in">
+                        <span className="bg-[#3390ec]/10 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/30 px-3 py-1 rounded-full animate-pulse">
+                          Match Starts In...
+                        </span>
+                        
+                        <div className="relative py-4">
+                          <motion.div
+                            key={getCountdownSecondsLeft()}
+                            initial={{ scale: 0.3, opacity: 0 }}
+                            animate={{ scale: 1.2, opacity: 1 }}
+                            exit={{ scale: 1.5, opacity: 0 }}
+                            transition={{ duration: 0.4 }}
+                            className="text-7xl font-sans font-black tracking-tighter text-[#3390ec] drop-shadow-[0_0_25px_rgba(51,144,236,0.3)]"
+                          >
+                            {getCountdownSecondsLeft() > 0 ? getCountdownSecondsLeft() : "GO!"}
+                          </motion.div>
+                        </div>
+
+                        <div>
+                          <p className="text-white text-sm font-semibold">Prepare your stance carefully!</p>
+                          <p className="text-[#708499] text-xs mt-0.5">Weapons are being unlocked shortly.</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {getArenaState() === 'move_selection' && (
+                      <div className="space-y-6 animate-fade-in">
                         <div>
                           <span className="bg-[#3390ec]/10 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/20 px-2.5 py-1 rounded-full">
                             Action Phase
@@ -1540,77 +1444,102 @@ function GameAppInner() {
                           <p className="text-[#708499] text-xs mt-0.5">Your move is processed and verified by the server</p>
                         </div>
 
-                        {/* Move submission logic representation */}
-                        {!selectedMove ? (
-                          <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          <button
+                            onClick={() => handleMakeMove('rock')}
+                            className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
+                          >
+                            <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">👊</span>
+                            <span className="font-bold text-sm text-white">ROCK</span>
+                          </button>
+                          <button
+                            onClick={() => handleMakeMove('scissors')}
+                            className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
+                          >
+                            <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">✂️</span>
+                            <span className="font-bold text-sm text-white">SCISSORS</span>
+                          </button>
+                          <button
+                            onClick={() => handleMakeMove('paper')}
+                            className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
+                          >
+                            <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">📄</span>
+                            <span className="font-bold text-sm text-white">PAPER</span>
+                          </button>
+                          <button
+                            onClick={() => handleMakeMove('well')}
+                            className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
+                          >
+                            <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">🕳️</span>
+                            <span className="font-bold text-sm text-white">WELL</span>
+                          </button>
+                        </div>
+                        
+                        {activeGame && activeGame.player2Id !== 'bot' && (
+                          <div className="pt-2 border-t border-[#242f3d]/60 max-w-xs mx-auto">
                             <button
-                              onClick={() => handleMakeMove('rock')}
-                              className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all"
+                              onClick={handleLeaveMatch}
+                              className="text-xs text-[#708499] hover:text-red-400 font-bold transition flex items-center justify-center gap-1 mx-auto cursor-pointer"
                             >
-                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">👊</span>
-                              <span className="font-bold text-sm text-white">ROCK</span>
+                              <span>Forfeit & Leave Match</span>
                             </button>
-                            <button
-                              onClick={() => handleMakeMove('scissors')}
-                              className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all"
-                            >
-                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">✂️</span>
-                              <span className="font-bold text-sm text-white">SCISSORS</span>
-                            </button>
-                            <button
-                              onClick={() => handleMakeMove('paper')}
-                              className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all"
-                            >
-                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">📄</span>
-                              <span className="font-bold text-sm text-white">PAPER</span>
-                            </button>
-                            <button
-                              onClick={() => handleMakeMove('well')}
-                              className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all"
-                            >
-                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">🕳️</span>
-                              <span className="font-bold text-sm text-white">WELL</span>
-                            </button>
-                          </div>
-                        ) : (
-                          // Move submitted, waiting for other player
-                          <div className="space-y-4 py-4">
-                            <div className="inline-block relative">
-                              <span className="text-5xl animate-bounce block">
-                                {selectedMove === 'rock' && '👊'}
-                                {selectedMove === 'scissors' && '✂️'}
-                                {selectedMove === 'paper' && '📄'}
-                                {selectedMove === 'well' && '🕳️'}
-                              </span>
-                            </div>
-                            <div>
-                              <p className="text-white text-sm font-bold">Successfully Submitted {selectedMove.toUpperCase()}!</p>
-                              <p className="text-[#708499] text-[10px] mt-1">Waiting for opponent to commit their action...</p>
-                            </div>
-                            
-                            {/* Fast trigger bot move immediately for smooth bot flow */}
-                            {activeGame.player2Id === 'bot' && (
-                              <button
-                                onClick={() => handleMakeMove(selectedMove)}
-                                className="mt-3 text-xs bg-[#3390ec] hover:bg-[#2b7ad0] text-white px-5 py-2 rounded-full font-bold uppercase transition"
-                              >
-                                Resolve Bot Fight
-                              </button>
-                            )}
                           </div>
                         )}
                       </div>
-                    ) : (
-                      // GAME COMPLETED (RESULTS SCREEN)
-                      <div className="space-y-5">
+                    )}
+
+                    {getArenaState() === 'resolving' && (
+                      <div className="space-y-6 py-6 animate-pulse">
+                        <div className="inline-block relative">
+                          <span className="text-6xl animate-bounce block">
+                            {selectedMove === 'rock' && '👊'}
+                            {selectedMove === 'scissors' && '✂️'}
+                            {selectedMove === 'paper' && '📄'}
+                            {selectedMove === 'well' && '🕳️'}
+                          </span>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-white text-base font-bold">Successfully Submitted {selectedMove.toUpperCase()}!</p>
+                          <p className="text-[#708499] text-xs">Waiting for opponent to lock their weapon...</p>
+                        </div>
+
+                        {activeGame && activeGame.player2Id === 'bot' && (
+                          <button
+                            onClick={() => handleMakeMove(selectedMove)}
+                            className="mt-3 text-xs bg-[#3390ec] hover:bg-[#2b7ad0] text-white px-5 py-2.5 rounded-full font-bold uppercase transition cursor-pointer"
+                          >
+                            Resolve Bot Fight
+                          </button>
+                        )}
+
+                        {activeGame && activeGame.player2Id !== 'bot' && (
+                          <div className="pt-4 border-t border-[#242f3d]/60 max-w-xs mx-auto">
+                            <button
+                              onClick={handleLeaveMatch}
+                              className="w-full bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 py-2.5 px-4 rounded-xl text-xs font-bold uppercase transition cursor-pointer"
+                            >
+                              Forfeit Match
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {getArenaState() === 'completed' && activeGame && (
+                      <div className="space-y-5 animate-fade-in">
                         <div>
                           <span className="bg-[#3390ec]/15 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/25 px-2.5 py-1 rounded-full">
                             Resolution Phase
                           </span>
                           
-                          {/* Main Header Result */}
                           {activeGame.winnerId === 'draw' ? (
                             <h3 className="text-2xl font-bold text-amber-400 mt-4">It's a DRAW! 🤝</h3>
+                          ) : activeGame.forfeitedBy ? (
+                            activeGame.forfeitedBy === currentTgId ? (
+                              <h3 className="text-2xl font-bold text-red-500 mt-4">YOU FORFEIT 💀</h3>
+                            ) : (
+                              <h3 className="text-2xl font-bold text-emerald-400 mt-4">W.O. VICTORY! 🎉</h3>
+                            )
                           ) : activeGame.winnerId === currentTgId ? (
                             <h3 className="text-2xl font-bold text-emerald-400 mt-4">VICTORY! 🎉</h3>
                           ) : (
@@ -1618,19 +1547,18 @@ function GameAppInner() {
                           )}
                         </div>
 
-                        {/* Weapon Comparison */}
                         <div className="grid grid-cols-2 gap-4 bg-[#242f3d] p-6 rounded-2xl border border-[#2b3745]">
                           <div className="text-center space-y-1">
                             <span className="text-[10px] text-[#708499] block font-semibold">Your Move</span>
                             <span className="text-5xl block py-2">
                               {activeGame.player1Id === currentTgId ? (
-                                activeGame.player1Move === 'rock' ? '👊' : activeGame.player1Move === 'scissors' ? '✂️' : activeGame.player1Move === 'paper' ? '📄' : '🕳️'
+                                activeGame.player1Move === 'rock' ? '👊' : activeGame.player1Move === 'scissors' ? '✂️' : activeGame.player1Move === 'paper' ? '📄' : activeGame.player1Move === 'well' ? '🕳️' : '❓'
                               ) : (
-                                activeGame.player2Move === 'rock' ? '👊' : activeGame.player2Move === 'scissors' ? '✂️' : activeGame.player2Move === 'paper' ? '📄' : '🕳️'
+                                activeGame.player2Move === 'rock' ? '👊' : activeGame.player2Move === 'scissors' ? '✂️' : activeGame.player2Move === 'paper' ? '📄' : activeGame.player2Move === 'well' ? '🕳️' : '❓'
                               )}
                             </span>
                             <span className="capitalize text-sm font-bold text-white">
-                              {activeGame.player1Id === currentTgId ? activeGame.player1Move : activeGame.player2Move}
+                              {activeGame.player1Id === currentTgId ? (activeGame.player1Move || "No Move") : (activeGame.player2Move || "No Move")}
                             </span>
                           </div>
 
@@ -1638,24 +1566,44 @@ function GameAppInner() {
                             <span className="text-[10px] text-[#708499] block font-semibold">Opponent Move</span>
                             <span className="text-5xl block py-2">
                               {activeGame.player1Id === currentTgId ? (
-                                activeGame.player2Move === 'rock' ? '👊' : activeGame.player2Move === 'scissors' ? '✂️' : activeGame.player2Move === 'paper' ? '📄' : '🕳️'
+                                activeGame.player2Move === 'rock' ? '👊' : activeGame.player2Move === 'scissors' ? '✂️' : activeGame.player2Move === 'paper' ? '📄' : activeGame.player2Move === 'well' ? '🕳️' : '❓'
                               ) : (
-                                activeGame.player1Move === 'rock' ? '👊' : activeGame.player1Move === 'scissors' ? '✂️' : activeGame.player1Move === 'paper' ? '📄' : '🕳️'
+                                activeGame.player1Move === 'rock' ? '👊' : activeGame.player1Move === 'scissors' ? '✂️' : activeGame.player1Move === 'paper' ? '📄' : activeGame.player1Move === 'well' ? '🕳️' : '❓'
                               )}
                             </span>
                             <span className="capitalize text-sm font-bold text-white">
-                              {activeGame.player1Id === currentTgId ? activeGame.player2Move : activeGame.player1Move}
+                              {activeGame.player1Id === currentTgId ? (activeGame.player2Move || "No Move") : (activeGame.player1Move || "No Move")}
                             </span>
                           </div>
                         </div>
 
-                        {/* Back or replay */}
                         <div className="pt-2">
                           <button
                             onClick={resetGameLobby}
-                            className="bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold w-full py-4 px-4 rounded-2xl transition shadow-lg shadow-[#3390ec]/20"
+                            className="bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold w-full py-4 px-4 rounded-2xl transition shadow-lg shadow-[#3390ec]/20 cursor-pointer"
                           >
                             PLAY AGAIN
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {getArenaState() === 'cancelled' && (
+                      <div className="space-y-6 py-4 animate-fade-in">
+                        <div className="relative inline-block text-red-500">
+                          <ShieldAlert className="w-16 h-16 mx-auto animate-bounce" />
+                        </div>
+                        <div className="space-y-2">
+                          <h4 className="text-lg font-bold text-white">Match Dissolved</h4>
+                          <p className="text-[#708499] text-xs max-w-sm mx-auto">This battle was cancelled or dissolved because a player left the arena queue or failed to select their weapon.</p>
+                        </div>
+                        
+                        <div className="pt-4 max-w-xs mx-auto">
+                          <button
+                            onClick={resetGameLobby}
+                            className="w-full bg-[#3390ec] hover:bg-[#2b7ad0] text-white py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+                          >
+                            Return to Lobby
                           </button>
                         </div>
                       </div>
@@ -2090,12 +2038,6 @@ function GameAppInner() {
                   <span className="text-[#708499]">TON Wallet Address:</span>
                   <span className="font-mono text-[11px] text-[#3390ec] bg-[#242f3d] px-2.5 py-1 rounded-full border border-[#2b3745]">
                     {walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)}` : 'Disconnected'}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center border-t border-[#242f3d] pt-3">
-                  <span className="text-[#708499]">MetaMask Address:</span>
-                  <span className="font-mono text-[11px] text-amber-500 bg-[#242f3d] px-2.5 py-1 rounded-full border border-[#2b3745]">
-                    {metaMaskAddress ? `${metaMaskAddress.slice(0, 6)}...${metaMaskAddress.slice(-4)}` : 'Disconnected'}
                   </span>
                 </div>
                 <div className="flex justify-between border-t border-[#242f3d] pt-3">

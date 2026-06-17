@@ -4,7 +4,7 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { initializeApp } from 'firebase/app';
 import { 
-  getFirestore, 
+  initializeFirestore, 
   collection, 
   doc, 
   setDoc, 
@@ -33,7 +33,9 @@ if (!fs.existsSync(configPath)) {
 const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 
 const firebaseApp = initializeApp(firebaseConfig);
-const firestoreInstance = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+const firestoreInstance = initializeFirestore(firebaseApp, {
+  experimentalForceLongPolling: true
+}, firebaseConfig.firestoreDatabaseId);
 
 // Simple compatibility shim so we do not have to rewrite all DB queries across the codebase:
 class DocumentReferenceShim {
@@ -537,6 +539,45 @@ app.post('/api/matchmaking/join', async (req, res) => {
       return res.status(400).json({ error: "userId is required" });
     }
 
+    let targetWallet: string | null = null;
+    const targetUserSnap = await db.collection('users').doc(targetUserId).get();
+    if (targetUserSnap.exists) {
+      targetWallet = targetUserSnap.data()?.walletAddress || null;
+    }
+
+    // Always clean up any existing uncompleted games created by this same user to avoid phantom matches
+    try {
+      const existingWaiting = await db.collection('games')
+        .where('player1Id', '==', targetUserId)
+        .where('status', 'in', ['searching', 'waiting', 'matched', 'countdown', 'move_selection', 'resolving'])
+        .get();
+      if (existingWaiting.docs.length > 0) {
+        const updatePromises = existingWaiting.docs.map(doc => 
+          db.collection('games').doc(doc.id).update({
+            status: 'canceled',
+            updatedAt: new Date().toISOString()
+          })
+        );
+        await Promise.all(updatePromises);
+      }
+      
+      const existingWaiting2 = await db.collection('games')
+        .where('player2Id', '==', targetUserId)
+        .where('status', 'in', ['searching', 'waiting', 'matched', 'countdown', 'move_selection', 'resolving'])
+        .get();
+      if (existingWaiting2.docs.length > 0) {
+        const updatePromises2 = existingWaiting2.docs.map(doc => 
+          db.collection('games').doc(doc.id).update({
+            status: 'canceled',
+            updatedAt: new Date().toISOString()
+          })
+        );
+        await Promise.all(updatePromises2);
+      }
+    } catch (cleanupErr) {
+      console.error("Error cleaning up previous games:", cleanupErr);
+    }
+
     if (playWithBot) {
       // Create immediate custom bot game
       const botGameRef = db.collection('games').doc();
@@ -550,6 +591,7 @@ app.post('/api/matchmaking/join', async (req, res) => {
         player2Move: "",
         winnerId: "",
         status: "matched",
+        matchedAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
@@ -557,28 +599,50 @@ app.post('/api/matchmaking/join', async (req, res) => {
       return res.json({ game: botGame });
     }
 
-    // Look for a game waiting for active players
+    // Look for a game waiting for active players (searching status or waiting status)
     const querySnapshot = await db.collection('games')
-      .where('status', '==', 'waiting')
-      .limit(5)
+      .where('status', 'in', ['searching', 'waiting'])
       .get();
 
     let foundGame: any = null;
+    const now = Date.now();
     for (const docSnap of querySnapshot.docs) {
       const gData = docSnap.data();
-      if (gData.player1Id !== targetUserId) {
-        foundGame = gData;
-        break;
+      
+      // Prevent self matching on telegramId
+      if (gData.player1Id === targetUserId) {
+        continue;
       }
+
+      // Only match if the game host is actively polling (updatedAt within the last 15 seconds)
+      const lastUpdatedMs = gData.updatedAt ? new Date(gData.updatedAt).getTime() : 0;
+      if (now - lastUpdatedMs > 15000) {
+        continue; // This is a stale/abandoned matchmaking request, bypass it
+      }
+
+      // Prevent matching on same wallet address
+      let opponentWallet: string | null = null;
+      const opponentUserSnap = await db.collection('users').doc(gData.player1Id).get();
+      if (opponentUserSnap.exists) {
+        opponentWallet = opponentUserSnap.data()?.walletAddress || null;
+      }
+
+      if (targetWallet && opponentWallet && targetWallet.toLowerCase() === opponentWallet.toLowerCase()) {
+        continue;
+      }
+
+      foundGame = gData;
+      break;
     }
 
     if (foundGame) {
-      // Met eligibility, match them!
+      // Match them! Set matchedAt and transition to 'matched'
       const gameRef = db.collection('games').doc(foundGame.id);
       const updatedGame = {
         player2Id: targetUserId,
         player2Username: targetUsername || "Player 2",
         status: "matched",
+        matchedAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
       await gameRef.update(updatedGame);
@@ -597,7 +661,7 @@ app.post('/api/matchmaking/join', async (req, res) => {
       player1Move: "",
       player2Move: "",
       winnerId: "",
-      status: "waiting",
+      status: "searching",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -605,6 +669,124 @@ app.post('/api/matchmaking/join', async (req, res) => {
     res.json({ game: sanitizeGameForUser(newGame, targetUserId) });
   } catch (error: any) {
     console.error("Matchmaking error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4a. Cancel Matchmaking
+app.post('/api/matchmaking/cancel', async (req, res) => {
+  try {
+    const verifiedUser = getRequestUser(req);
+    const { gameId, userId } = req.body;
+    let targetUserId = userId || verifiedUser.userId;
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const gameRef = db.collection('games').doc(gameId);
+    const snap = await gameRef.get();
+    if (!snap.exists) {
+      return res.status(404).json({ error: "Game not found" });
+    }
+
+    const gData = snap.data() || {};
+    if (gData.player1Id !== targetUserId && gData.player2Id !== targetUserId) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    await gameRef.update({
+      status: "canceled",
+      updatedAt: new Date().toISOString()
+    });
+
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("Cancel matchmaking error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4b. Forfeit / Leave Active Arena
+app.post('/api/game/leave', async (req, res) => {
+  try {
+    const verifiedUser = getRequestUser(req);
+    const { gameId, userId } = req.body;
+    let targetUserId = userId || verifiedUser.userId;
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const gameRef = db.collection('games').doc(gameId);
+    const snap = await gameRef.get();
+    if (!snap.exists) {
+      return res.status(404).json({ error: "Game not found" });
+    }
+
+    const gData = snap.data() || {};
+    if (gData.player1Id !== targetUserId && gData.player2Id !== targetUserId) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    if (gData.status === 'completed' || gData.status === 'canceled' || gData.status === 'cancelled') {
+      return res.json({ game: gData });
+    }
+
+    const amPlayer1 = gData.player1Id === targetUserId;
+    const opponentId = amPlayer1 ? gData.player2Id : gData.player1Id;
+
+    if (opponentId === 'bot' || opponentId === 'waiting') {
+      await gameRef.update({
+        status: "canceled",
+        updatedAt: new Date().toISOString()
+      });
+      return res.json({ game: { ...gData, status: "canceled" } });
+    }
+
+    // Forfeit real PvP game: declare opponent as winner
+    const updatedFields: any = {
+      winnerId: opponentId,
+      status: "completed",
+      forfeitedBy: targetUserId,
+      updatedAt: new Date().toISOString()
+    };
+    await gameRef.update(updatedFields);
+
+    const p1Ref = db.collection('users').doc(gData.player1Id);
+    const p2Ref = db.collection('users').doc(gData.player2Id);
+    const [p1Snap, p2Snap] = await Promise.all([p1Ref.get(), p2Ref.get()]);
+
+    const updatePromises: Promise<any>[] = [];
+
+    if (p1Snap.exists) {
+      const d1 = p1Snap.data() || {};
+      const won = opponentId === gData.player1Id;
+      updatePromises.push(p1Ref.update({
+        gamesPlayed: (d1.gamesPlayed || 0) + 1,
+        wins: won ? (d1.wins || 0) + 1 : (d1.wins || 0),
+        losses: won ? (d1.losses || 0) : (d1.losses || 0) + 1,
+        xp: (d1.xp || 0) + (won ? 100 : 50)
+      }));
+    }
+
+    if (p2Snap.exists) {
+      const d2 = p2Snap.data() || {};
+      const won = opponentId === gData.player2Id;
+      updatePromises.push(p2Ref.update({
+        gamesPlayed: (d2.gamesPlayed || 0) + 1,
+        wins: won ? (d2.wins || 0) + 1 : (d2.wins || 0),
+        losses: won ? (d2.losses || 0) : (d2.losses || 0) + 1,
+        xp: (d2.xp || 0) + (won ? 100 : 50)
+      }));
+    }
+
+    if (updatePromises.length > 0) {
+      await Promise.all(updatePromises);
+    }
+
+    const fullGame = { ...gData, ...updatedFields };
+    res.json({ game: sanitizeGameForUser(fullGame, targetUserId) });
+  } catch (error: any) {
+    console.error("Forfeit match error:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -635,8 +817,17 @@ app.post('/api/game/move', async (req, res) => {
     }
 
     const gameData = gameSnap.data() || {};
-    if (gameData.status !== "matched") {
-      return res.status(400).json({ error: "Game is not in matched state" });
+    
+    // Check countdown constraint
+    if (gameData.status === 'matched' && gameData.player2Id !== 'bot' && gameData.matchedAt) {
+      const elapsed = Date.now() - new Date(gameData.matchedAt).getTime();
+      if (elapsed < 3000) {
+        return res.status(400).json({ error: "Choose move locked during active match countdown." });
+      }
+    }
+
+    if (gameData.status !== "matched" && gameData.status !== "resolving" && gameData.status !== "move_selection") {
+      return res.status(400).json({ error: "Game session is not in active playable state." });
     }
 
     const isPlayer1 = gameData.player1Id === targetUserId;
@@ -676,36 +867,57 @@ app.post('/api/game/move', async (req, res) => {
       updatePlay.status = "completed";
       updatePlay.updatedAt = new Date().toISOString();
 
-      // Update player profile statistics
-      // Let's update Player 1 stats
+      // Update player profile statistics concurrently to reduce database/network roundtrip latency
       const p1Ref = db.collection('users').doc(gameData.player1Id);
-      const p1Snap = await p1Ref.get();
-      if (p1Snap.exists) {
+      const p2Ref = gameData.player2Id !== "bot" ? db.collection('users').doc(gameData.player2Id) : null;
+
+      const [p1Snap, p2Snap] = await Promise.all([
+        p1Ref.get(),
+        p2Ref ? p2Ref.get() : Promise.resolve(null)
+      ]);
+
+      const updatePromises: Promise<any>[] = [];
+
+      if (p1Snap && p1Snap.exists) {
         const d1 = p1Snap.data() || {};
         const p1Wins = winnerId === gameData.player1Id ? (d1.wins || 0) + 1 : (d1.wins || 0);
         const p1Losses = (winnerId !== gameData.player1Id && winnerId !== "draw") ? (d1.losses || 0) + 1 : (d1.losses || 0);
-        await p1Ref.update({
+        
+        // Reward match participation XP (+50 Base XP + 50 Win bonus XP) to make level progression active
+        const xpReward = (winnerId === gameData.player1Id) ? 100 : 50;
+        const currentXp = d1.xp || 0;
+        
+        updatePromises.push(p1Ref.update({
           gamesPlayed: (d1.gamesPlayed || 0) + 1,
           wins: p1Wins,
-          losses: p1Losses
-        });
+          losses: p1Losses,
+          xp: currentXp + xpReward
+        }));
       }
 
-      // Update Player 2 stats (if not bot)
-      if (gameData.player2Id !== "bot") {
-        const p2Ref = db.collection('users').doc(gameData.player2Id);
-        const p2Snap = await p2Ref.get();
-        if (p2Snap.exists) {
-          const d2 = p2Snap.data() || {};
-          const p2Wins = winnerId === gameData.player2Id ? (d2.wins || 0) + 1 : (d2.wins || 0);
-          const p2Losses = (winnerId !== gameData.player2Id && winnerId !== "draw") ? (d2.losses || 0) + 1 : (d2.losses || 0);
-          await p2Ref.update({
-            gamesPlayed: (d2.gamesPlayed || 0) + 1,
-            wins: p2Wins,
-            losses: p2Losses
-          });
-        }
+      if (p2Snap && p2Snap.exists && p2Ref) {
+        const d2 = p2Snap.data() || {};
+        const p2Wins = winnerId === gameData.player2Id ? (d2.wins || 0) + 1 : (d2.wins || 0);
+        const p2Losses = (winnerId !== gameData.player2Id && winnerId !== "draw") ? (d2.losses || 0) + 1 : (d2.losses || 0);
+        
+        const xpReward = (winnerId === gameData.player2Id) ? 100 : 50;
+        const currentXp = d2.xp || 0;
+        
+        updatePromises.push(p2Ref.update({
+          gamesPlayed: (d2.gamesPlayed || 0) + 1,
+          wins: p2Wins,
+          losses: p2Losses,
+          xp: currentXp + xpReward
+        }));
       }
+
+      if (updatePromises.length > 0) {
+        await Promise.all(updatePromises);
+      }
+    } else {
+      // Only one player has moved
+      updatePlay.status = "resolving";
+      updatePlay.updatedAt = new Date().toISOString();
     }
 
     await gameRef.update(updatePlay);
@@ -732,8 +944,38 @@ app.get('/api/game/:gameId', async (req, res) => {
       return res.status(404).json({ error: "Game not found" });
     }
 
-    const gameData = gameSnap.data();
-    const sanitized = sanitizeGameForUser(gameData, verifiedUser.userId);
+    const gameData = gameSnap.data() || {};
+
+    // Dynamic heartbeat: if player 1 is actively on the matchmaking queue screen, we keep the updatedAt fresh 
+    if (gameData.status === 'searching' && gameData.player1Id === verifiedUser.userId) {
+      gameData.updatedAt = new Date().toISOString();
+      await gameRef.update({ updatedAt: gameData.updatedAt });
+    }
+    
+    // Dynamic status determination of countdown / move_selection for frontend polling symmetry
+    let displayStatus = gameData.status;
+    if (gameData.status === 'matched') {
+      if (gameData.player2Id !== 'bot' && gameData.matchedAt) {
+        const elapsed = Date.now() - new Date(gameData.matchedAt).getTime();
+        if (elapsed >= 3000) {
+          displayStatus = 'move_selection';
+        } else {
+          displayStatus = 'countdown';
+        }
+      } else {
+        displayStatus = 'move_selection';
+      }
+    } else if (gameData.status === 'resolving') {
+      // If resolving on server but player needs choosing move on client, we check moves
+      const isP1 = gameData.player1Id === verifiedUser.userId;
+      const ourMove = isP1 ? gameData.player1Move : gameData.player2Move;
+      if (!ourMove) {
+        displayStatus = 'move_selection';
+      }
+    }
+
+    const fullGame = { ...gameData, status: displayStatus };
+    const sanitized = sanitizeGameForUser(fullGame, verifiedUser.userId);
     res.json({ game: sanitized });
   } catch (error: any) {
     console.error("Get game error:", error);
