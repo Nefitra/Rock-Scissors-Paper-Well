@@ -190,6 +190,8 @@ const getNextRank = (wins: number): { rank: RankConfig | null; winsNeeded: numbe
   };
 };
 
+const ADMIN_TELEGRAM_IDS = ["beskerboris", "admin", "123456789", "711279376", "525364261"];
+
 function GameAppInner() {
   const walletAddress = useTonAddress();
   const wallet = useTonWallet();
@@ -200,9 +202,14 @@ function GameAppInner() {
   const [leaderboardLoading, setLeaderboardLoading] = useState<boolean>(false);
   
   // Simulation / Sandbox Controls (for developer testing outside Telegram)
+  const isDevelopEnvironment = typeof window !== 'undefined' && (() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('debug') === 'true' || params.get('dev') === 'true' || params.get('admin') === 'true' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  })();
+
   const isInsideTMA = typeof window !== 'undefined' && !!(window as any).Telegram?.WebApp?.initData;
-  const [simulatedTgId, setSimulatedTgId] = useState<string>('beskerboris');
-  const [simulatedUsername, setSimulatedUsername] = useState<string>('BorisTester');
+  const [simulatedTgId, setSimulatedTgId] = useState<string>(isDevelopEnvironment ? 'beskerboris' : 'sandbox_guest');
+  const [simulatedUsername, setSimulatedUsername] = useState<string>(isDevelopEnvironment ? 'BorisTester' : 'SandboxGuest');
   const [refParam, setRefParam] = useState<string>('');
   
   // Real or Simulated final credentials
@@ -412,7 +419,8 @@ function GameAppInner() {
   
   // Admin Data
   const [adminData, setAdminData] = useState<AdminMetrics | null>(null);
-  const [adminModeEnabled, setAdminModeEnabled] = useState<boolean>(true); // Let reviewer test Admin tab effortlessly
+  const isUserAnAdmin = ADMIN_TELEGRAM_IDS.includes(String(currentTgId).toLowerCase());
+  const [adminModeEnabled, setAdminModeEnabled] = useState<boolean>(isDevelopEnvironment || isUserAnAdmin);
 
   // Fetch Referral Code from URL or WebApp start_param on boot (survives page reloads)
   useEffect(() => {
@@ -913,8 +921,8 @@ function GameAppInner() {
   return (
     <div className="min-h-screen bg-[#0e1621] text-white flex flex-col font-sans selection:bg-[#3390ec] selection:text-white max-w-full overflow-x-hidden">
       
-      {/* Dynamic Sandbox Controller for Testing (Only shown in Normal Web Browser / Outside Telegram) */}
-      {!isInsideTMA && (
+      {/* Dynamic Sandbox Controller for Testing (Only shown in Normal Web Browser / Outside Telegram for authorized developers/reviewers) */}
+      {!isInsideTMA && isDevelopEnvironment && (
         <div className="bg-[#17212b] border-b border-[#242f3d] px-4 py-2.5 text-xs text-[#708499] md:flex md:items-center md:justify-between space-y-2 md:space-y-0 relative z-50 overflow-x-auto">
           <div className="flex items-center gap-2 shrink-0">
             <span className="px-2 py-0.5 bg-[#3390ec]/10 text-[#3390ec] font-semibold rounded border border-[#2b3745]">
@@ -1380,234 +1388,334 @@ function GameAppInner() {
                   <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-8 text-center space-y-6 relative overflow-hidden">
                     <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#3390ec] to-transparent opacity-50"></div>
                     
-                    {getArenaState() === 'searching' && (
-                      <div className="space-y-6 py-4 animate-fade-in">
-                        <div className="relative inline-block">
-                          <div className="w-16 h-16 rounded-full border-4 border-[#242f3d]/50 border-t-[#3390ec] animate-spin" />
-                          <div className="absolute inset-0 flex items-center justify-center">
-                            <Gamepad2 className="w-6 h-6 text-[#3390ec] animate-pulse" />
+                    <AnimatePresence mode="wait">
+                      {getArenaState() === 'searching' && (
+                        <motion.div
+                          key="searching"
+                          initial={{ opacity: 0, scale: 0.95 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.95 }}
+                          transition={{ duration: 0.22 }}
+                          className="space-y-6 py-4"
+                        >
+                          <div className="relative inline-block">
+                            <div className="w-16 h-16 rounded-full border-4 border-[#242f3d]/50 border-t-[#3390ec] animate-spin" />
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <Gamepad2 className="w-6 h-6 text-[#3390ec] animate-pulse" />
+                            </div>
                           </div>
-                        </div>
-                        <div className="space-y-1">
-                          <h4 className="text-lg font-bold text-white uppercase tracking-wider animate-pulse">Waiting for Opponent...</h4>
-                          <p className="text-[#708499] text-xs">Searching matchmaking queue. Real Multiplayer PvP matches require exactly two real Telegram players.</p>
-                          <div className="flex items-center justify-center gap-1.5 mt-2 bg-[#242f3d]/40 py-1.5 px-3 rounded-xl max-w-xs mx-auto text-[11px] text-[#3390ec] font-bold">
-                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                            <span>Queue Status: Active</span>
+                          <div className="space-y-1">
+                            <h4 className="text-lg font-bold text-white uppercase tracking-wider animate-pulse">Waiting for Opponent...</h4>
+                            <p className="text-[#708499] text-xs">Searching matchmaking queue. Real Multiplayer PvP matches require exactly two real Telegram players.</p>
+                            <div className="flex items-center justify-center gap-1.5 mt-2 bg-[#242f3d]/40 py-1.5 px-3 rounded-xl max-w-xs mx-auto text-[11px] text-[#3390ec] font-bold">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                              <span>Queue Status: Active</span>
+                            </div>
                           </div>
-                        </div>
-                        
-                        <div className="pt-4 max-w-xs mx-auto">
-                          <button
-                            onClick={handleCancelMatchmaking}
-                            className="w-full bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
-                          >
-                            Cancel Matchmaking
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {getArenaState() === 'countdown' && (
-                      <div className="space-y-6 py-6 animate-fade-in">
-                        <span className="bg-[#3390ec]/10 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/30 px-3 py-1 rounded-full animate-pulse">
-                          Match Starts In...
-                        </span>
-                        
-                        <div className="relative py-4">
-                          <motion.div
-                            key={getCountdownSecondsLeft()}
-                            initial={{ scale: 0.3, opacity: 0 }}
-                            animate={{ scale: 1.2, opacity: 1 }}
-                            exit={{ scale: 1.5, opacity: 0 }}
-                            transition={{ duration: 0.4 }}
-                            className="text-7xl font-sans font-black tracking-tighter text-[#3390ec] drop-shadow-[0_0_25px_rgba(51,144,236,0.3)]"
-                          >
-                            {getCountdownSecondsLeft() > 0 ? getCountdownSecondsLeft() : "GO!"}
-                          </motion.div>
-                        </div>
-
-                        <div>
-                          <p className="text-white text-sm font-semibold">Prepare your stance carefully!</p>
-                          <p className="text-[#708499] text-xs mt-0.5">Weapons are being unlocked shortly.</p>
-                        </div>
-                      </div>
-                    )}
-
-                    {getArenaState() === 'move_selection' && (
-                      <div className="space-y-6 animate-fade-in">
-                        <div>
-                          <span className="bg-[#3390ec]/10 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/20 px-2.5 py-1 rounded-full">
-                            Action Phase
-                          </span>
-                          <h4 className="text-xl font-bold text-white mt-3">Choose Your Weapon</h4>
-                          <p className="text-[#708499] text-xs mt-0.5">Your move is processed and verified by the server</p>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-4">
-                          <button
-                            onClick={() => handleMakeMove('rock')}
-                            className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
-                          >
-                            <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">👊</span>
-                            <span className="font-bold text-sm text-white">ROCK</span>
-                          </button>
-                          <button
-                            onClick={() => handleMakeMove('scissors')}
-                            className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
-                          >
-                            <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">✂️</span>
-                            <span className="font-bold text-sm text-white">SCISSORS</span>
-                          </button>
-                          <button
-                            onClick={() => handleMakeMove('paper')}
-                            className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
-                          >
-                            <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">📄</span>
-                            <span className="font-bold text-sm text-white">PAPER</span>
-                          </button>
-                          <button
-                            onClick={() => handleMakeMove('well')}
-                            className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
-                          >
-                            <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">🕳️</span>
-                            <span className="font-bold text-sm text-white">WELL</span>
-                          </button>
-                        </div>
-                        
-                        {activeGame && activeGame.player2Id !== 'bot' && (
-                          <div className="pt-2 border-t border-[#242f3d]/60 max-w-xs mx-auto">
+                          
+                          <div className="pt-4 max-w-xs mx-auto">
                             <button
-                              onClick={handleLeaveMatch}
-                              className="text-xs text-[#708499] hover:text-red-400 font-bold transition flex items-center justify-center gap-1 mx-auto cursor-pointer"
+                              onClick={handleCancelMatchmaking}
+                              className="w-full bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
                             >
-                              <span>Forfeit & Leave Match</span>
+                              Cancel Matchmaking
                             </button>
                           </div>
-                        )}
-                      </div>
-                    )}
+                        </motion.div>
+                      )}
 
-                    {getArenaState() === 'resolving' && (
-                      <div className="space-y-6 py-6 animate-pulse">
-                        <div className="inline-block relative">
-                          <span className="text-6xl animate-bounce block">
-                            {selectedMove === 'rock' && '👊'}
-                            {selectedMove === 'scissors' && '✂️'}
-                            {selectedMove === 'paper' && '📄'}
-                            {selectedMove === 'well' && '🕳️'}
-                          </span>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-white text-base font-bold">Successfully Submitted {selectedMove.toUpperCase()}!</p>
-                          <p className="text-[#708499] text-xs">Waiting for opponent to lock their weapon...</p>
-                        </div>
-
-                        {activeGame && activeGame.player2Id === 'bot' && (
-                          <button
-                            onClick={() => handleMakeMove(selectedMove)}
-                            className="mt-3 text-xs bg-[#3390ec] hover:bg-[#2b7ad0] text-white px-5 py-2.5 rounded-full font-bold uppercase transition cursor-pointer"
-                          >
-                            Resolve Bot Fight
-                          </button>
-                        )}
-
-                        {activeGame && activeGame.player2Id !== 'bot' && (
-                          <div className="pt-4 border-t border-[#242f3d]/60 max-w-xs mx-auto">
-                            <button
-                              onClick={handleLeaveMatch}
-                              className="w-full bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 py-2.5 px-4 rounded-xl text-xs font-bold uppercase transition cursor-pointer"
-                            >
-                              Forfeit Match
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {getArenaState() === 'completed' && activeGame && (
-                      <div className="space-y-5 animate-fade-in">
-                        <div>
-                          <span className="bg-[#3390ec]/15 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/25 px-2.5 py-1 rounded-full">
-                            Resolution Phase
+                      {getArenaState() === 'countdown' && (
+                        <motion.div
+                          key="countdown"
+                          initial={{ opacity: 0, scale: 0.9, y: 15 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.9, y: -15 }}
+                          transition={{ duration: 0.22 }}
+                          className="space-y-6 py-6"
+                        >
+                          <span className="bg-[#3390ec]/10 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/30 px-3 py-1 rounded-full animate-pulse">
+                            Match Starts In...
                           </span>
                           
-                          {activeGame.winnerId === 'draw' ? (
-                            <h3 className="text-2xl font-bold text-amber-400 mt-4">It's a DRAW! 🤝</h3>
-                          ) : activeGame.forfeitedBy ? (
-                            activeGame.forfeitedBy === currentTgId ? (
-                              <h3 className="text-2xl font-bold text-red-500 mt-4">YOU FORFEIT 💀</h3>
-                            ) : (
-                              <h3 className="text-2xl font-bold text-emerald-400 mt-4">W.O. VICTORY! 🎉</h3>
-                            )
-                          ) : activeGame.winnerId === currentTgId ? (
-                            <h3 className="text-2xl font-bold text-emerald-400 mt-4">VICTORY! 🎉</h3>
-                          ) : (
-                            <h3 className="text-2xl font-bold text-red-400 mt-4">DEFEAT! 💀</h3>
+                          <div className="relative py-4">
+                            <motion.div
+                              key={getCountdownSecondsLeft()}
+                              initial={{ scale: 0.3, opacity: 0 }}
+                              animate={{ scale: 1.2, opacity: 1 }}
+                              exit={{ scale: 1.5, opacity: 0 }}
+                              transition={{ duration: 0.45 }}
+                              className="text-7xl font-sans font-black tracking-tighter text-[#3390ec] drop-shadow-[0_0_25px_rgba(51,144,236,0.3)]"
+                            >
+                              {getCountdownSecondsLeft() > 0 ? getCountdownSecondsLeft() : "GO!"}
+                            </motion.div>
+                          </div>
+
+                          <div>
+                            <p className="text-white text-sm font-semibold">Prepare your stance carefully!</p>
+                            <p className="text-[#708499] text-xs mt-0.5">Weapons are being unlocked shortly.</p>
+                          </div>
+                        </motion.div>
+                      )}
+
+                      {getArenaState() === 'move_selection' && (
+                        <motion.div
+                          key="move_selection"
+                          initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.95, y: -15 }}
+                          transition={{ duration: 0.22 }}
+                          className="space-y-6"
+                        >
+                          <div>
+                            <span className="bg-[#3390ec]/10 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/20 px-2.5 py-1 rounded-full">
+                              Action Phase
+                            </span>
+                            <h4 className="text-xl font-bold text-white mt-3">Choose Your Weapon</h4>
+                            <p className="text-[#708499] text-xs mt-0.5">Your move is processed and verified by the server</p>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4">
+                            <button
+                              onClick={() => handleMakeMove('rock')}
+                              className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
+                            >
+                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">👊</span>
+                              <span className="font-bold text-sm text-white">ROCK</span>
+                            </button>
+                            <button
+                              onClick={() => handleMakeMove('scissors')}
+                              className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
+                            >
+                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">✂️</span>
+                              <span className="font-bold text-sm text-white">SCISSORS</span>
+                            </button>
+                            <button
+                              onClick={() => handleMakeMove('paper')}
+                              className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
+                            >
+                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">📄</span>
+                              <span className="font-bold text-sm text-white">PAPER</span>
+                            </button>
+                            <button
+                              onClick={() => handleMakeMove('well')}
+                              className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
+                            >
+                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">🕳️</span>
+                              <span className="font-bold text-sm text-white">WELL</span>
+                            </button>
+                          </div>
+                          
+                          {activeGame && activeGame.player2Id !== 'bot' && (
+                            <div className="pt-2 border-t border-[#242f3d]/60 max-w-xs mx-auto">
+                              <button
+                                onClick={handleLeaveMatch}
+                                className="text-xs text-[#708499] hover:text-red-400 font-bold transition flex items-center justify-center gap-1 mx-auto cursor-pointer"
+                              >
+                                <span>Forfeit & Leave Match</span>
+                              </button>
+                            </div>
                           )}
-                        </div>
+                        </motion.div>
+                      )}
 
-                        <div className="grid grid-cols-2 gap-4 bg-[#242f3d] p-6 rounded-2xl border border-[#2b3745]">
-                          <div className="text-center space-y-1">
-                            <span className="text-[10px] text-[#708499] block font-semibold">Your Move</span>
-                            <span className="text-5xl block py-2">
-                              {activeGame.player1Id === currentTgId ? (
-                                activeGame.player1Move === 'rock' ? '👊' : activeGame.player1Move === 'scissors' ? '✂️' : activeGame.player1Move === 'paper' ? '📄' : activeGame.player1Move === 'well' ? '🕳️' : '❓'
-                              ) : (
-                                activeGame.player2Move === 'rock' ? '👊' : activeGame.player2Move === 'scissors' ? '✂️' : activeGame.player2Move === 'paper' ? '📄' : activeGame.player2Move === 'well' ? '🕳️' : '❓'
-                              )}
-                            </span>
-                            <span className="capitalize text-sm font-bold text-white">
-                              {activeGame.player1Id === currentTgId ? (activeGame.player1Move || "No Move") : (activeGame.player2Move || "No Move")}
-                            </span>
-                          </div>
-
-                          <div className="text-center space-y-1 border-l border-[#2b3745]">
-                            <span className="text-[10px] text-[#708499] block font-semibold">Opponent Move</span>
-                            <span className="text-5xl block py-2">
-                              {activeGame.player1Id === currentTgId ? (
-                                activeGame.player2Move === 'rock' ? '👊' : activeGame.player2Move === 'scissors' ? '✂️' : activeGame.player2Move === 'paper' ? '📄' : activeGame.player2Move === 'well' ? '🕳️' : '❓'
-                              ) : (
-                                activeGame.player1Move === 'rock' ? '👊' : activeGame.player1Move === 'scissors' ? '✂️' : activeGame.player1Move === 'paper' ? '📄' : activeGame.player1Move === 'well' ? '🕳️' : '❓'
-                              )}
-                            </span>
-                            <span className="capitalize text-sm font-bold text-white">
-                              {activeGame.player1Id === currentTgId ? (activeGame.player2Move || "No Move") : (activeGame.player1Move || "No Move")}
+                      {getArenaState() === 'resolving' && (
+                        <motion.div
+                          key="resolving"
+                          initial={{ opacity: 0, scale: 0.92 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.92 }}
+                          transition={{ duration: 0.22 }}
+                          className="space-y-6 py-6"
+                        >
+                          <div className="inline-block relative">
+                            <span className="text-6xl animate-bounce block">
+                              {selectedMove === 'rock' && '👊'}
+                              {selectedMove === 'scissors' && '✂️'}
+                              {selectedMove === 'paper' && '📄'}
+                              {selectedMove === 'well' && '🕳️'}
                             </span>
                           </div>
-                        </div>
+                          <div className="space-y-1">
+                            <p className="text-white text-base font-bold">Successfully Submitted {selectedMove.toUpperCase()}!</p>
+                            <p className="text-[#708499] text-xs">Waiting for opponent to lock their weapon...</p>
+                          </div>
 
-                        <div className="pt-2">
-                          <button
-                            onClick={resetGameLobby}
-                            className="bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold w-full py-4 px-4 rounded-2xl transition shadow-lg shadow-[#3390ec]/20 cursor-pointer"
-                          >
-                            PLAY AGAIN
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                          {activeGame && activeGame.player2Id === 'bot' && (
+                            <button
+                              onClick={() => handleMakeMove(selectedMove)}
+                              className="mt-3 text-xs bg-[#3390ec] hover:bg-[#2b7ad0] text-white px-5 py-2.5 rounded-full font-bold uppercase transition cursor-pointer"
+                            >
+                              Resolve Bot Fight
+                            </button>
+                          )}
 
-                    {getArenaState() === 'cancelled' && (
-                      <div className="space-y-6 py-4 animate-fade-in">
-                        <div className="relative inline-block text-red-500">
-                          <ShieldAlert className="w-16 h-16 mx-auto animate-bounce" />
-                        </div>
-                        <div className="space-y-2">
-                          <h4 className="text-lg font-bold text-white">Match Dissolved</h4>
-                          <p className="text-[#708499] text-xs max-w-sm mx-auto">This battle was cancelled or dissolved because a player left the arena queue or failed to select their weapon.</p>
-                        </div>
-                        
-                        <div className="pt-4 max-w-xs mx-auto">
-                          <button
-                            onClick={resetGameLobby}
-                            className="w-full bg-[#3390ec] hover:bg-[#2b7ad0] text-white py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+                          {activeGame && activeGame.player2Id !== 'bot' && (
+                            <div className="pt-4 border-t border-[#242f3d]/60 max-w-xs mx-auto">
+                              <button
+                                onClick={handleLeaveMatch}
+                                className="w-full bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 py-2.5 px-4 rounded-xl text-xs font-bold uppercase transition cursor-pointer"
+                              >
+                                Forfeit Match
+                              </button>
+                            </div>
+                          )}
+                        </motion.div>
+                      )}
+
+                      {getArenaState() === 'completed' && activeGame && (
+                        <motion.div
+                          key="completed"
+                          initial="initial"
+                          animate="animate"
+                          exit="exit"
+                          variants={{
+                            initial: { opacity: 0, scale: 0.93, y: 15 },
+                            animate: { 
+                              opacity: 1, 
+                              scale: 1, 
+                              y: 0,
+                              transition: {
+                                duration: 0.45,
+                                ease: [0.16, 1, 0.3, 1],
+                                when: "beforeChildren",
+                                staggerChildren: 0.12
+                              }
+                            },
+                            exit: { 
+                              opacity: 0, 
+                              scale: 0.95, 
+                              y: -15,
+                              transition: { duration: 0.2 }
+                            }
+                          }}
+                          className="space-y-5"
+                        >
+                          <motion.div
+                            variants={{
+                              initial: { opacity: 0, y: 10 },
+                              animate: { opacity: 1, y: 0, transition: { duration: 0.3 } }
+                            }}
                           >
-                            Return to Lobby
-                          </button>
-                        </div>
-                      </div>
-                    )}
+                            <span className="bg-[#3390ec]/15 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/25 px-2.5 py-1 rounded-full">
+                              Resolution Phase
+                            </span>
+                            
+                            {activeGame.winnerId === 'draw' ? (
+                              <h3 className="text-2xl font-bold text-amber-400 mt-4">It's a DRAW! 🤝</h3>
+                            ) : activeGame.forfeitedBy ? (
+                              activeGame.forfeitedBy === currentTgId ? (
+                                <h3 className="text-2xl font-bold text-red-500 mt-4">YOU FORFEIT 💀</h3>
+                              ) : (
+                                <h3 className="text-2xl font-bold text-emerald-400 mt-4">W.O. VICTORY! 🎉</h3>
+                              )
+                            ) : activeGame.winnerId === currentTgId ? (
+                              <motion.h3 
+                                className="text-2xl font-bold text-emerald-400 mt-4"
+                                animate={{ scale: [1, 1.08, 1], rotate: [0, 1, -1, 0] }}
+                                transition={{ duration: 0.5, delay: 0.2, repeat: Infinity, repeatType: "reverse", repeatDelay: 3 }}
+                              >
+                                VICTORY! 🎉
+                              </motion.h3>
+                            ) : (
+                              <h3 className="text-2xl font-bold text-red-400 mt-4">DEFEAT! 💀</h3>
+                            )}
+                          </motion.div>
+
+                          <motion.div 
+                            variants={{
+                              initial: { opacity: 0, y: 15, scale: 0.96 },
+                              animate: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.35, ease: "easeOut" } }
+                            }}
+                            className="grid grid-cols-2 gap-4 bg-[#242f3d] p-6 rounded-2xl border border-[#2b3745] relative overflow-hidden"
+                          >
+                            {/* Backdrop highlight depending on status */}
+                            <div className={`absolute inset-0 opacity-[0.03] pointer-events-none ${
+                              activeGame.winnerId === 'draw' ? 'bg-amber-400' :
+                              activeGame.winnerId === currentTgId ? 'bg-emerald-400' : 'bg-red-500'
+                            }`} />
+
+                            <div className="text-center space-y-1 z-10">
+                              <span className="text-[10px] text-[#708499] block font-semibold">Your Move</span>
+                              <motion.span 
+                                className="text-5xl block py-2"
+                                initial={{ scale: 0.5 }}
+                                animate={{ scale: 1, transition: { type: "spring", stiffness: 200, damping: 12, delay: 0.25 } }}
+                              >
+                                {activeGame.player1Id === currentTgId ? (
+                                  activeGame.player1Move === 'rock' ? '👊' : activeGame.player1Move === 'scissors' ? '✂️' : activeGame.player1Move === 'paper' ? '📄' : activeGame.player1Move === 'well' ? '🕳️' : '❓'
+                                ) : (
+                                  activeGame.player2Move === 'rock' ? '👊' : activeGame.player2Move === 'scissors' ? '✂️' : activeGame.player2Move === 'paper' ? '📄' : activeGame.player2Move === 'well' ? '🕳️' : '❓'
+                                )}
+                              </motion.span>
+                              <span className="capitalize text-sm font-bold text-white">
+                                {activeGame.player1Id === currentTgId ? (activeGame.player1Move || "No Move") : (activeGame.player2Move || "No Move")}
+                              </span>
+                            </div>
+
+                            <div className="text-center space-y-1 border-l border-[#2b3745] z-10">
+                              <span className="text-[10px] text-[#708499] block font-semibold">Opponent Move</span>
+                              <motion.span 
+                                className="text-5xl block py-2"
+                                initial={{ scale: 0.5 }}
+                                animate={{ scale: 1, transition: { type: "spring", stiffness: 200, damping: 12, delay: 0.35 } }}
+                              >
+                                {activeGame.player1Id === currentTgId ? (
+                                  activeGame.player2Move === 'rock' ? '👊' : activeGame.player2Move === 'scissors' ? '✂️' : activeGame.player2Move === 'paper' ? '📄' : activeGame.player2Move === 'well' ? '🕳️' : '❓'
+                                ) : (
+                                  activeGame.player1Move === 'rock' ? '👊' : activeGame.player1Move === 'scissors' ? '✂️' : activeGame.player1Move === 'paper' ? '📄' : activeGame.player1Move === 'well' ? '🕳️' : '❓'
+                                )}
+                              </motion.span>
+                              <span className="capitalize text-sm font-bold text-white">
+                                {activeGame.player1Id === currentTgId ? (activeGame.player2Move || "No Move") : (activeGame.player1Move || "No Move")}
+                              </span>
+                            </div>
+                          </motion.div>
+
+                          <motion.div 
+                            variants={{
+                              initial: { opacity: 0, scale: 0.95, y: 10 },
+                              animate: { opacity: 1, scale: 1, y: 0, transition: { duration: 0.3 } }
+                            }}
+                            className="pt-2"
+                          >
+                            <button
+                              onClick={resetGameLobby}
+                              className="bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold w-full py-4 px-4 rounded-2xl transition shadow-lg shadow-[#3390ec]/20 cursor-pointer"
+                            >
+                              PLAY AGAIN
+                            </button>
+                          </motion.div>
+                        </motion.div>
+                      )}
+
+                      {getArenaState() === 'cancelled' && (
+                        <motion.div
+                          key="cancelled"
+                          initial={{ opacity: 0, scale: 0.95 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          exit={{ opacity: 0, scale: 0.95 }}
+                          transition={{ duration: 0.22 }}
+                          className="space-y-6 py-4"
+                        >
+                          <div className="relative inline-block text-red-500">
+                            <ShieldAlert className="w-16 h-16 mx-auto animate-bounce" />
+                          </div>
+                          <div className="space-y-2">
+                            <h4 className="text-lg font-bold text-white">Match Dissolved</h4>
+                            <p className="text-[#708499] text-xs max-w-sm mx-auto">This battle was cancelled or dissolved because a player left the arena queue or failed to select their weapon.</p>
+                          </div>
+                          
+                          <div className="pt-4 max-w-xs mx-auto">
+                            <button
+                              onClick={resetGameLobby}
+                              className="w-full bg-[#3390ec] hover:bg-[#2b7ad0] text-white py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
+                            >
+                              Return to Lobby
+                            </button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 </div>
               )}
