@@ -486,18 +486,82 @@ function GameAppInner() {
   const isUserAnAdmin = ADMIN_TELEGRAM_IDS.includes(String(currentTgId).toLowerCase());
   const [adminModeEnabled, setAdminModeEnabled] = useState<boolean>(isDevelopEnvironment || isUserAnAdmin);
 
+  const [announcementText, setAnnouncementText] = useState<string>('');
+  const [announcementLoading, setAnnouncementLoading] = useState<boolean>(false);
+  const [announcementSuccess, setAnnouncementSuccess] = useState<string | null>(null);
+
+  const [pinningLoading, setPinningLoading] = useState<boolean>(false);
+  const [pinningSuccess, setPinningSuccess] = useState<string | null>(null);
+
+  const [cancelLoading, setCancelLoading] = useState<boolean>(false);
+  const [cancelSuccess, setCancelSuccess] = useState<string | null>(null);
+
   // Fetch Referral Code from URL or WebApp start_param on boot (survives page reloads)
+  const handleJoinSpecificDuel = async (challengeId: string) => {
+    setIsSearching(true);
+    setErrorMessage(null);
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
+      const res = await fetch('/api/matchmaking/join', {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify({
+          userId: currentTgId,
+          username: currentUsername,
+          challengeId: challengeId
+        })
+      });
+      const data = await res.json();
+      if (data.error) {
+        setErrorMessage(data.error);
+        setIsSearching(false);
+      } else {
+        setActiveGame(data.game);
+        setActiveTab('play');
+        setIsSearching(false);
+      }
+    } catch (err) {
+      setErrorMessage("Could not join duel challenge.");
+      setIsSearching(false);
+    }
+  };
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     let code = params.get('startapp') || params.get('tgWebAppStartParam') || params.get('ref') || (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
     if (code) {
-      code = sanitizeUserId(code);
-      localStorage.setItem('rpsw_referred_by', code);
+      const normalizedCode = code.toLowerCase().trim();
+      if (normalizedCode === 'arena') {
+        setActiveTab('play');
+      } else if (normalizedCode === 'missions') {
+        setActiveTab('missions');
+      } else if (normalizedCode === 'leaderboard') {
+        setActiveTab('leaderboard');
+      } else if (normalizedCode === 'profile') {
+        setActiveTab('profile');
+      } else if (normalizedCode.startsWith('duel_')) {
+        const challengeId = normalizedCode.replace('duel_', '');
+        handleJoinSpecificDuel(challengeId);
+      } else {
+        code = sanitizeUserId(code);
+        localStorage.setItem('rpsw_referred_by', code);
+        setRefParam(code);
+      }
     } else {
       code = localStorage.getItem('rpsw_referred_by') || '';
-    }
-    if (code) {
-      setRefParam(code);
+      const isStoredRoute = code.toLowerCase().trim() === 'arena' || code.toLowerCase().trim() === 'missions' || code.toLowerCase().trim() === 'leaderboard' || code.toLowerCase().trim() === 'profile' || code.toLowerCase().trim().startsWith('duel_');
+      if (isStoredRoute) {
+        localStorage.removeItem('rpsw_referred_by');
+        code = '';
+      }
+      if (code) {
+        setRefParam(code);
+      }
     }
 
     // Fetch Global settings
@@ -511,7 +575,7 @@ function GameAppInner() {
         }
       })
       .catch(err => console.error("Error fetching global settings:", err));
-  }, []);
+  }, [currentTgId]);
 
   // Sync / Register user with DB
   const syncProfile = async () => {
@@ -521,13 +585,22 @@ function GameAppInner() {
       // Resolve referral code synchronously to eliminate state setters timing lag
       const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
       let code = params.get('startapp') || params.get('tgWebAppStartParam') || params.get('ref') || (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
-      if (code) {
+      const normalizedCode = code.toLowerCase().trim();
+      const isRoute = normalizedCode === 'arena' || normalizedCode === 'missions' || normalizedCode === 'leaderboard' || normalizedCode === 'profile' || normalizedCode.startsWith('duel_');
+
+      if (code && !isRoute) {
         code = sanitizeUserId(code);
         localStorage.setItem('rpsw_referred_by', code);
       } else {
         code = localStorage.getItem('rpsw_referred_by') || '';
         if (code) {
-          code = sanitizeUserId(code);
+          const isStoredRoute = code.toLowerCase().trim() === 'arena' || code.toLowerCase().trim() === 'missions' || code.toLowerCase().trim() === 'leaderboard' || code.toLowerCase().trim() === 'profile' || code.toLowerCase().trim().startsWith('duel_');
+          if (isStoredRoute) {
+            code = '';
+            localStorage.removeItem('rpsw_referred_by');
+          } else {
+            code = sanitizeUserId(code);
+          }
         }
       }
 
@@ -938,6 +1011,117 @@ function GameAppInner() {
       setTimeout(() => setSettingsSaveSuccess(null), 6000);
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  // Submit Custom Tournament Broadcast Announcement to Group
+  const handleSendAnnouncement = async () => {
+    if (!announcementText.trim()) return;
+    setAnnouncementLoading(true);
+    setAnnouncementSuccess(null);
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
+      const res = await fetch('/api/admin/announcement', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          requestorId: currentTgId,
+          text: announcementText
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAnnouncementSuccess("Tournament announcement broadcasted successfully!");
+        setAnnouncementText('');
+        setTimeout(() => setAnnouncementSuccess(null), 4000);
+      } else {
+        setAnnouncementSuccess("Error: " + (data.error || "Broadcast failed."));
+        setTimeout(() => setAnnouncementSuccess(null), 6000);
+      }
+    } catch (e: any) {
+      console.error(e);
+      setAnnouncementSuccess("Error: " + e.message);
+      setTimeout(() => setAnnouncementSuccess(null), 6000);
+    } finally {
+      setAnnouncementLoading(false);
+    }
+  };
+
+  // Construct and Pin Leaderboard message in community group
+  const handlePublishLeaderboard = async () => {
+    setPinningLoading(true);
+    setPinningSuccess(null);
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
+      const res = await fetch('/api/admin/pinned-message', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          requestorId: currentTgId
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPinningSuccess("Community leaderboard pinned successfully!");
+        setTimeout(() => setPinningSuccess(null), 4000);
+      } else {
+        setPinningSuccess("Error: " + (data.error || "Pinning failed."));
+        setTimeout(() => setPinningSuccess(null), 6000);
+      }
+    } catch (e: any) {
+      console.error(e);
+      setPinningSuccess("Error: " + e.message);
+      setTimeout(() => setPinningSuccess(null), 6000);
+    } finally {
+      setPinningLoading(false);
+    }
+  };
+
+  // Cancel and Refund an active duel challenge
+  const handleCancelActiveChallenge = async (gameId: string) => {
+    setCancelLoading(true);
+    setCancelSuccess(null);
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
+      const res = await fetch('/api/admin/cancel-challenge', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          requestorId: currentTgId,
+          gameId: gameId
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCancelSuccess("Lobby challenge cancelled and refunded successfully!");
+        // Refresh metrics list
+        fetchAdminMetrics();
+        setTimeout(() => setCancelSuccess(null), 4000);
+      } else {
+        setCancelSuccess("Error: " + (data.error || "Cancellation failed."));
+        setTimeout(() => setCancelSuccess(null), 6000);
+      }
+    } catch (e: any) {
+      console.error(e);
+      setCancelSuccess("Error: " + e.message);
+      setTimeout(() => setCancelSuccess(null), 6000);
+    } finally {
+      setCancelLoading(false);
     }
   };
 
@@ -2834,7 +3018,7 @@ function GameAppInner() {
                       type="text"
                       value={settingsBotUsername}
                       onChange={(e) => setSettingsBotUsername(e.target.value)}
-                      placeholder="e.g. RpsRockPaperBot"
+                      placeholder="e.g. CyberDuellitebot"
                       className="w-full bg-[#242f3d] border border-[#2b3745] hover:border-[#3390ec]/50 focus:border-[#3390ec] rounded-xl px-3 py-2 text-white text-xs focus:outline-none transition font-medium"
                     />
                   </div>
@@ -2871,6 +3055,53 @@ function GameAppInner() {
                 </div>
               </div>
 
+              {/* Tournament Announcements & Pins (New Admin Features) */}
+              <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-5 space-y-4">
+                <div className="flex items-center gap-2 border-b border-[#242f3d]/60 pb-2.5">
+                  <ShieldAlert className="w-4 h-4 text-amber-500" />
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">Tournament Announcements & Pinning</span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[#708499] font-bold text-[10px] uppercase block">Broadcast Telegram Announcement</label>
+                  <textarea
+                    rows={3}
+                    value={announcementText}
+                    onChange={(e) => setAnnouncementText(e.target.value)}
+                    placeholder="Type official community tournament announcement to broadcast..."
+                    className="w-full bg-[#242f3d] border border-[#2b3745] hover:border-[#3390ec]/50 focus:border-[#3390ec] rounded-xl px-3 py-2 text-white text-xs focus:outline-none transition font-medium"
+                  />
+                  {announcementSuccess && (
+                    <div className="text-amber-400 text-[11px] font-semibold bg-amber-500/10 p-2 rounded-lg border border-amber-500/20 text-center">
+                      {announcementSuccess}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleSendAnnouncement}
+                    disabled={announcementLoading || !announcementText.trim()}
+                    className="w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:bg-amber-500/40 text-black text-xs font-bold transition cursor-pointer"
+                  >
+                    {announcementLoading ? "Broadcasting..." : "Broadcast Announcement"}
+                  </button>
+                </div>
+
+                <div className="pt-2 border-t border-[#242f3d]/50 space-y-1.5">
+                  <label className="text-[#708499] font-bold text-[10px] uppercase block">Ecosystem Live Leaderboard Pinned Message</label>
+                  {pinningSuccess && (
+                    <div className="text-emerald-400 text-[11px] font-semibold bg-emerald-500/10 p-2 rounded-lg border border-emerald-500/20 text-center">
+                      {pinningSuccess}
+                    </div>
+                  )}
+                  <button
+                    onClick={handlePublishLeaderboard}
+                    disabled={pinningLoading}
+                    className="w-full py-2 rounded-xl bg-[#3390ec] hover:bg-[#2b7ad0] text-white text-xs font-bold transition cursor-pointer"
+                  >
+                    {pinningLoading ? "Publishing..." : "Publish & Pin Leaderboard to Community Group"}
+                  </button>
+                </div>
+              </div>
+
               {/* Users Details Lists */}
               <div className="space-y-3">
                 <span className="text-xs font-bold text-white block">Registered Players</span>
@@ -2898,7 +3129,12 @@ function GameAppInner() {
 
               {/* Matches History Lists */}
               <div className="space-y-3">
-                <span className="text-xs font-bold text-white block">Latest Lobbies</span>
+                <span className="text-xs font-bold text-white block">Latest Lobbies & Challenges</span>
+                {cancelSuccess && (
+                  <div className="text-emerald-400 text-[11px] font-semibold bg-emerald-500/10 p-2.5 rounded-xl border border-emerald-500/20 text-center transition">
+                    {cancelSuccess}
+                  </div>
+                )}
                 <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl overflow-hidden divide-y divide-[#242f3d]/60 max-h-48 overflow-y-auto">
                   {adminData?.games && adminData.games.length > 0 ? (
                     adminData.games.map((gm, i) => (
@@ -2906,10 +3142,21 @@ function GameAppInner() {
                         <div>
                           <span className="block text-slate-200">@{gm.player1Username} vs @{gm.player2Username}</span>
                           <span className="text-[10px] text-[#708499]">Moves: {gm.player1Move || '(none)'} vs {gm.player2Move || '(none)'}</span>
+                          {gm.stake > 0 && <span className="text-[9px] text-amber-500 font-bold block">Stake: {gm.stake} vVIRAL</span>}
                         </div>
-                        <div className="text-right">
+                        <div className="text-right flex flex-col items-end gap-1">
                           <span className="text-xs font-mono font-semibold uppercase block text-[#3390ec]">{gm.status}</span>
-                          <span className="text-[10px] text-amber-400 font-medium">Winner: {gm.winnerId === 'draw' ? 'Draw' : `@${gm.winnerId}`}</span>
+                          {(gm.status === 'waiting' || gm.status === 'matched') ? (
+                            <button
+                              onClick={() => { playClickSound(); handleCancelActiveChallenge(gm.id); }}
+                              disabled={cancelLoading}
+                              className="px-2 py-1 bg-red-500/15 hover:bg-red-500/20 border border-red-500/30 text-red-400 text-[10px] font-bold rounded-lg transition transform active:scale-95 cursor-pointer"
+                            >
+                              {cancelLoading ? "Refunding..." : "Cancel & Refund"}
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-amber-400 font-medium">Winner: {gm.winnerId === 'draw' ? 'Draw' : `@${gm.winnerId}`}</span>
+                          )}
                         </div>
                       </div>
                     ))
