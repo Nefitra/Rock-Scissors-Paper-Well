@@ -1957,6 +1957,8 @@ app.post('/api/settings', async (req, res) => {
 
 // Background Telegram Bot Worker Setup
 const userCooldowns = new Map<string, number>();
+const userDuelCooldowns = new Map<string, number>();
+const userChallengeCooldowns = new Map<string, number>();
 
 // Unified update handler for both Webhook and Fallback Long-Polling
 async function handleTelegramUpdate(update: any) {
@@ -2191,15 +2193,6 @@ async function handleTelegramUpdate(update: any) {
 
   // Command parser
   if (text.startsWith('/')) {
-    // Implement absolute anti-spam (3 second command cooldown)
-    const now = Date.now();
-    const lastTime = userCooldowns.get(tgId) || 0;
-    if (now - lastTime < 3000) {
-      console.log(`[Telegram Bot] Cooldown ignored command from @${username}`);
-      return;
-    }
-    userCooldowns.set(tgId, now);
-
     // Support group command suffixes (e.g. /arena@CyberDuellitebot -> /arena)
     const command = text
       .split(/\s+/)[0]
@@ -2219,7 +2212,8 @@ async function handleTelegramUpdate(update: any) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               chat_id: chatId,
-              text: "🏓 VIRAL Arena bot is online."
+              text: "🏓 *VIRAL Arena bot is online.*",
+              parse_mode: "Markdown"
             })
           });
           success = pingRes.ok;
@@ -2227,13 +2221,14 @@ async function handleTelegramUpdate(update: any) {
             console.error(`[Telegram Bot] Error sending /ping response:`, await pingRes.text());
           }
         } else if (command === '/arena') {
-          const arenaText = `⚔️ VIRAL ARENA\n\nPlay, challenge community members and earn vVIRAL.`;
+          const arenaText = `⚔️ *VIRAL ARENA*\n\nPlay, challenge community members and earn vVIRAL.`;
           const arenaRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               chat_id: chatId,
               text: arenaText,
+              parse_mode: "Markdown",
               reply_markup: {
                 inline_keyboard: [
                   [
@@ -2255,6 +2250,15 @@ async function handleTelegramUpdate(update: any) {
       console.log(`TELEGRAM_COMMAND_HANDLED\ncommand: ${command}\nsuccess: ${success}`);
       return;
     }
+
+    // Implement absolute anti-spam (3 second command cooldown)
+    const now = Date.now();
+    const lastTime = userCooldowns.get(tgId) || 0;
+    if (now - lastTime < 3000) {
+      console.log(`[Telegram Bot] Cooldown ignored command from @${username}`);
+      return;
+    }
+    userCooldowns.set(tgId, now);
 
     // Check group access restrictions (Requirement 10)
     const chatType = message.chat.type;
@@ -2345,6 +2349,23 @@ async function handleTelegramUpdate(update: any) {
 
     let replyText = "";
 
+    const getPlayerRankLocal = (wins: number): string => {
+      const RANKS_LIST = [
+        { name: "Bronze Novice", minWins: 0 },
+        { name: "Silver Gladiator", minWins: 5 },
+        { name: "Gold Elite", minWins: 15 },
+        { name: "Platinum Legend", minWins: 30 },
+        { name: "RSPW Grand Master", minWins: 50 }
+      ];
+      let matchedRank = RANKS_LIST[0].name;
+      for (const rank of RANKS_LIST) {
+        if (wins >= rank.minWins) {
+          matchedRank = rank.name;
+        }
+      }
+      return matchedRank;
+    };
+
     // 5. Add /ping diagnostic command
     if (command === '/ping') {
       replyText = `🏓 *VIRAL Arena bot is online.*`;
@@ -2407,24 +2428,14 @@ async function handleTelegramUpdate(update: any) {
       return;
     } 
     else if (command === '/help') {
-      replyText = `⚔️ *WELCOME TO VIRAL ARENA* ⚔️\n\n` +
-                  `The official Rock-Paper-Scissors-Well Duel game of the *VIRAL Ecosystem*!\n\n` +
-                  `🎮 *Play directly on your smartphone:* [Launch VIRAL Arena App](https://t.me/CyberDuellitebot/play?startapp=arena)\n\n` +
-                  `🛡️ *Commands available inside this bot:*\n` +
-                  `• /start - Launch instructions\n` +
-                  `• /arena - Enter Arena group panel with visual controls\n` +
-                  `• /duel <stake> - Settle custom stakes duels inside group chat\n` +
-                  `• /challenge @username - Invite direct friend duel invitations\n` +
-                  `• /myrank - View your current balance and game statistics\n` +
-                  `• /balance - Quick check of your current balance\n` +
-                  `• /top - View the active Top Champions Leaderboard\n` +
-                  `• /leaderboard - View the active Top Champions Leaderboard\n` +
-                  `• /missions - View daily mission milestone goals\n` +
-                  `• /ping - Diagnostic bot health check\n` +
-                  `• /help - Display this assistance manual\n\n` +
-                  `_Powered by VIRAL Ecosystem_`;
+      replyText = `🟣 *VIRAL ARENA COMMANDS*\n\n` +
+                  `⚔️ /arena — Open game\n` +
+                  `🔥 /duel — Challenge community\n` +
+                  `🏆 /top — Rankings\n` +
+                  `👤 /myrank — Your profile\n` +
+                  `🎯 /missions — Daily rewards`;
     } 
-    else if (command === '/myrank' || command === '/balance') {
+    else if (command === '/myrank') {
       const uSnap = await db.collection('users').doc(tgId).get();
       if (uSnap.exists) {
         const ud = uSnap.data() || {};
@@ -2433,243 +2444,363 @@ async function handleTelegramUpdate(update: any) {
         const losses = ud.losses || 0;
         const gamesPlayed = ud.gamesPlayed || (wins + losses);
         const winRate = gamesPlayed > 0 ? Math.round((wins / gamesPlayed) * 100) : 0;
-        const xp = ud.xp || 0;
-        const streak = ud.streak || 0;
+        const rankName = getPlayerRankLocal(wins);
 
-        replyText = `👤 *Player Profile: @${username}*\n\n` +
-                    `💰 *vVIRAL Balance:* ${balance} vVIRAL\n` +
-                    `🏆 *Total Wins:* ${wins}\n` +
-                    `💀 *Total Losses:* ${losses}\n` +
-                    `🎮 *Games Played:* ${gamesPlayed}\n` +
-                    `📈 *Win Rate:* ${winRate}%\n` +
-                    `🌟 *Experience:* ${xp} XP\n` +
-                    `🔥 *Check-In Streak:* ${streak} days`;
+        replyText = `🟣 *YOUR VIRAL PROFILE*\n\n` +
+                    `Rank:\n` +
+                    `*${rankName}*\n\n` +
+                    `Balance:\n` +
+                    `*${balance.toLocaleString()} vVIRAL*\n\n` +
+                    `Wins:\n` +
+                    `*${wins}*\n\n` +
+                    `Win Rate:\n` +
+                    `*${winRate}%*`;
+
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { "text": "👤 OPEN PROFILE", "url": "https://t.me/CyberDuellitebot/play?startapp=profile" }
+                ]
+              ]
+            }
+          })
+        });
+        return;
       } else {
-        replyText = `⚠️ *Account not found!*\n\nPlease click [Launch VIRAL Arena App](https://t.me/CyberDuellitebot/play?startapp=arena) to initialize your profile and receive a *+500 vVIRAL Welcome Reward*!`;
+        replyText = `⚠️ *Account not found!*\n\nPlease open VIRAL Arena first to initialize your profile and start duelling!`;
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: "Markdown",
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { "text": "⚔️ OPEN VIRAL ARENA", "url": "https://t.me/CyberDuellitebot/play?startapp=arena" }
+                ]
+              ]
+            }
+          })
+        });
+        return;
       }
+    } 
+    else if (command === '/balance') {
+      const uSnap = await db.collection('users').doc(tgId).get();
+      const balance = uSnap.exists ? (uSnap.data()?.vViral !== undefined ? uSnap.data()?.vViral : 500) : 0;
+      replyText = `💎 *vVIRAL BALANCE*\n\nYour balance:\n\n*${balance.toLocaleString()} vVIRAL*`;
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: replyText,
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { "text": "⚔️ Earn more in VIRAL Arena", "url": "https://t.me/CyberDuellitebot/play?startapp=arena" }
+              ]
+            ]
+          }
+        })
+      });
+      return;
     } 
     else if (command === '/top' || command === '/leaderboard') {
-      const usersSnap = await db.collection('users').get();
-      const list: any[] = [];
-      usersSnap.forEach((d) => {
-        const data = d.data() || {};
-        if (data.telegramId) {
-          list.push({
-            username: data.username || `User_${data.telegramId}`,
-            wins: data.wins || 0,
-            vViral: data.vViral !== undefined ? data.vViral : 500
+      try {
+        const usersSnap = await db.collection('users').get();
+        const list: any[] = [];
+        usersSnap.forEach((d) => {
+          const data = d.data() || {};
+          if (data.username) {
+            list.push({
+              username: data.username,
+              wins: data.wins || 0
+            });
+          }
+        });
+
+        list.sort((a, b) => b.wins - a.wins);
+        const activeList = list.filter(p => p.wins > 0);
+
+        if (activeList.length === 0) {
+          replyText = `🏆 *VIRAL ARENA TOP PLAYERS*\n\nThe Arena season is just beginning.`;
+        } else {
+          replyText = `🏆 *VIRAL ARENA TOP PLAYERS*\n\n`;
+          const top3 = activeList.slice(0, 3);
+          top3.forEach((player, idx) => {
+            const medal = idx === 0 ? "🥇" : (idx === 1 ? "🥈" : "🥉");
+            replyText += `${medal} *@${player.username}* — ${player.wins} wins\n`;
           });
         }
-      });
+      } catch (err) {
+        replyText = `🏆 *VIRAL ARENA TOP PLAYERS*\n\nThe Arena season is just beginning.`;
+      }
 
-      list.sort((a, b) => b.wins - a.wins);
-      const top5 = list.slice(0, 5);
-
-      replyText = `🏆 *VIRAL ARENA CHAMPIONS LEADERBOARD* 🏆\n\n`;
-      top5.forEach((player, idx) => {
-        const medal = idx === 0 ? "🥇" : (idx === 1 ? "🥈" : (idx === 2 ? "🥉" : "⚔️"));
-        replyText += `${medal} *#${idx + 1} @${player.username}* - ${player.wins} Wins | ${player.vViral} vVIRAL\n`;
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: replyText,
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { "text": "🏆 FULL LEADERBOARD", "url": "https://t.me/CyberDuellitebot/play?startapp=leaderboard" }
+              ]
+            ]
+          }
+        })
       });
+      return;
     } 
     else if (command === '/missions') {
-      const uSnap = await db.collection('users').doc(tgId).get();
-      replyText = `🎯 *DAILY MISSION TARGETS* 🎯\n\n`;
-      
-      const userMissions = uSnap.exists ? (uSnap.data()?.missions || {}) : {};
-
-      Object.entries(MISSION_CONFIGS).forEach(([mId, config]) => {
-        const userProg = userMissions[mId] || { progress: 0, completed: false, claimed: false };
-        const statusEmoji = userProg.claimed ? "✅" : (userProg.completed ? "🎁" : "⏳");
-        replyText += `${statusEmoji} *${config.title}*\n` +
-                     `├ _${config.desc}_\n` +
-                     `└ Progress: [${userProg.progress}/${config.maxProgress}] | Reward: *+${config.reward} vVIRAL*\n\n`;
+      replyText = `🎯 *VIRAL MISSIONS*\n\nToday's challenges:\n\n⚔️ *Play Duel*\n🏆 *Win Battle*\n🤝 *Invite Friend*`;
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: replyText,
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { "text": "OPEN MISSIONS", "url": "https://t.me/CyberDuellitebot/play?startapp=missions" }
+              ]
+            ]
+          }
+        })
       });
+      return;
     } 
     else if (command === '/duel') {
-      const args = text.split(' ').slice(1);
-      let stake = 0;
-      let isValid = true;
+      // 12. Implement 30s Cooldown
+      const now = Date.now();
+      const lastDuel = userDuelCooldowns.get(tgId) || 0;
+      if (now - lastDuel < 30000) {
+        const remaining = Math.ceil((30000 - (now - lastDuel)) / 1000);
+        replyText = `⚠️ *@${username}*, please wait ${remaining}s before creating another duel challenge.`;
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: "Markdown"
+          })
+        });
+        return;
+      }
+      userDuelCooldowns.set(tgId, now);
 
-      if (args.length > 0) {
-        const val = parseInt(args[0], 10);
-        if (isNaN(val) || val < 0) {
-          isValid = false;
-          replyText = `⚠️ *Invalid stake:* Please specify a valid positive number! e.g. \`/duel 100\``;
-        } else if (val > 0 && !ECONOMY_CONFIG.stakePresets.includes(val)) {
-          isValid = false;
-          replyText = `⚠️ *Invalid preset:* Please use one of the standard presets: ${ECONOMY_CONFIG.stakePresets.join(', ')} vVIRAL.`;
-        } else {
-          stake = val;
-        }
+      // Check maximum active challenges: 1 per user
+      const activeSnap = await db.collection('games')
+        .where('player1Id', '==', tgId)
+        .where('status', '==', 'waiting')
+        .get();
+
+      if (activeSnap.docs.length > 0) {
+        replyText = `⚠️ *@${username}*, you already have an active pending duel challenge! Settle or let it expire first.`;
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: "Markdown"
+          })
+        });
+        return;
       }
 
-      if (isValid) {
-        const activeSnap = await db.collection('games')
-          .where('player1Id', '==', tgId)
-          .where('status', '==', 'waiting')
-          .get();
+      // Check user profile exists
+      const uSnap = await db.collection('users').doc(tgId).get();
+      if (!uSnap.exists) {
+        replyText = `⚠️ *Account not found!* Please open [Launch VIRAL Arena App](https://t.me/CyberDuellitebot/play?startapp=arena) once to initialize your profile before creating a duel.`;
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: "Markdown"
+          })
+        });
+        return;
+      }
 
-        if (activeSnap.docs.length > 0) {
-          replyText = `⚠️ *@${username}*, you already have an active pending duel challenge! Settle or let it expire first.`;
-        } else {
-          const uSnap = await db.collection('users').doc(tgId).get();
-          const ud = uSnap.exists ? uSnap.data() : null;
+      // Generate challenge ID
+      const gameId = db.collection('games').doc().id;
+      const newGame = {
+        id: gameId,
+        player1Id: tgId,
+        player1Username: username,
+        player2Id: "waiting",
+        player2Username: "waiting",
+        status: "waiting",
+        mode: "free",
+        stake: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        tgChatId: String(chatId),
+        tgMessageId: ""
+      };
 
-          if (!ud) {
-            replyText = `⚠️ *Account not found!* Click [Launch VIRAL Arena App](https://t.me/CyberDuellitebot/play?startapp=arena) first to initialize your profile.`;
-          } else {
-            const balance = ud.vViral !== undefined ? ud.vViral : 0;
-            if (stake > 0 && balance < stake) {
-              replyText = `⚠️ *Insufficient Balance!* You need at least *${stake} vVIRAL* to host this duel (your balance: ${balance} vVIRAL).`;
-            } else {
-              if (stake > 0) {
-                await adjustUserVViral(
-                  tgId,
-                  -stake,
-                  'debit',
-                  'stake_duel_entry',
-                  'bot_duel_creation',
-                  `create_bot_duel_${tgId}_${Date.now()}`
-                );
-              }
+      await db.collection('games').doc(gameId).set(newGame);
 
-              const gameId = db.collection('games').doc().id;
-              const newGame = {
-                id: gameId,
-                player1Id: tgId,
-                player1Username: username,
-                player2Id: "waiting",
-                player2Username: "waiting",
-                status: "waiting",
-                mode: stake > 0 ? "stake" : "free",
-                stake: stake,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                tgChatId: String(chatId),
-                tgMessageId: ""
-              };
+      const duelMsg = `⚔️ *VIRAL DUEL CHALLENGE*\n\n` +
+                      `@${username} entered the Arena!\n\n` +
+                      `Who accepts the battle?`;
 
-              await db.collection('games').doc(gameId).set(newGame);
-
-              const fStake = stake > 0 ? `${stake} vVIRAL` : "Free Match";
-              const duelMsg = `⚔️ *NEW DUEL CHALLENGE!*\n\n` +
-                              `👤 *Host:* @${username}\n` +
-                              `💰 *Stake:* ${fStake}\n` +
-                              `⏱ *Expires in:* 5 minutes\n\n` +
-                              `_Will you accept the challenge and fight for glory?_`;
-
-              const responseTg = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  chat_id: chatId,
-                  text: duelMsg,
-                  parse_mode: "Markdown",
-                  reply_markup: {
-                    inline_keyboard: [
-                      [
-                        { "text": "⚔️ ACCEPT DUEL", "callback_data": `accept_duel:${gameId}` }
-                      ]
-                    ]
-                  }
-                })
-              });
-
-              if (responseTg.ok) {
-                const sentData = await responseTg.json();
-                const msgId = sentData.result?.message_id;
-                if (msgId) {
-                  await db.collection('games').doc(gameId).update({
-                    tgMessageId: String(msgId)
-                  });
-                }
-              }
-              return;
-            }
+      const responseTg = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: duelMsg,
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { "text": "🔥 ACCEPT DUEL", "callback_data": `accept_duel:${gameId}` }
+              ]
+            ]
           }
+        })
+      });
+
+      if (responseTg.ok) {
+        const sentData = await responseTg.json();
+        const msgId = sentData.result?.message_id;
+        if (msgId) {
+          await db.collection('games').doc(gameId).update({
+            tgMessageId: String(msgId)
+          });
         }
       }
+      return;
     } 
     else if (command === '/challenge') {
-      const args = text.split(' ').slice(1);
-      if (args.length === 0) {
-        replyText = `🤝 *CHALLENGE A FRIEND* 🤝\n\n` +
-                    `Invite friends to duel in the VIRAL ARENA!\n\n` +
-                    `Send \`/challenge @username\` in this group to challenge a specific member, or forward this link:\n` +
-                    `👉 \`https://t.me/CyberDuellitebot/play?startapp=${tgId}\`\n\n` +
-                    `_Both of you will receive referral match achievements!_`;
-      } else {
-        const targetUser = args[0].replace('@', '').toLowerCase().trim();
-        if (targetUser === username.toLowerCase()) {
-          replyText = `⚠️ You cannot challenge yourself! Invite another community member.`;
-        } else {
-          const activeSnap = await db.collection('games')
-            .where('player1Id', '==', tgId)
-            .where('status', '==', 'waiting')
-            .get();
+      // 12. Implement 10s Cooldown
+      const now = Date.now();
+      const lastChallenge = userChallengeCooldowns.get(tgId) || 0;
+      if (now - lastChallenge < 10000) {
+        const remaining = Math.ceil((10000 - (now - lastChallenge)) / 1000);
+        replyText = `⚠️ *@${username}*, please wait ${remaining}s before creating another private challenge.`;
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: "Markdown"
+          })
+        });
+        return;
+      }
+      userChallengeCooldowns.set(tgId, now);
 
-          if (activeSnap.docs.length > 0) {
-            replyText = `⚠️ *@${username}*, you already have an active pending duel! Cancel or let it expire first.`;
-          } else {
-            const gameId = db.collection('games').doc().id;
-            const newGame = {
-              id: gameId,
-              player1Id: tgId,
-              player1Username: username,
-              player2Id: "waiting",
-              player2Username: "waiting",
-              status: "waiting",
-              mode: "free",
-              stake: 0,
-              allowedOpponent: targetUser,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              tgChatId: String(chatId),
-              tgMessageId: ""
-            };
+      // Check maximum active challenges: 1 per user
+      const activeSnap = await db.collection('games')
+        .where('player1Id', '==', tgId)
+        .where('status', '==', 'waiting')
+        .get();
 
-            await db.collection('games').doc(gameId).set(newGame);
+      if (activeSnap.docs.length > 0) {
+        replyText = `⚠️ *@${username}*, you already have an active pending duel challenge! Settle or let it expire first.`;
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: "Markdown"
+          })
+        });
+        return;
+      }
 
-            const challengeMsg = `⚔️ *DIRECT CHALLENGE INVITATION!*\n\n` +
-                                 `👤 *Host:* @${username}\n` +
-                                 `🎯 *Target Opponent:* @${targetUser}\n` +
-                                 `💰 *Stake:* Free Match\n` +
-                                 `⏱ *Expires in:* 5 minutes\n\n` +
-                                 `_Only @${targetUser} can accept this direct duel!_`;
+      // Check user profile exists
+      const uSnap = await db.collection('users').doc(tgId).get();
+      if (!uSnap.exists) {
+        replyText = `⚠️ *Account not found!* Please open [Launch VIRAL Arena App](https://t.me/CyberDuellitebot/play?startapp=arena) once to initialize your profile before creating a challenge.`;
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: "Markdown"
+          })
+        });
+        return;
+      }
 
-            const responseTg = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chat_id: chatId,
-                text: challengeMsg,
-                parse_mode: "Markdown",
-                reply_markup: {
-                  inline_keyboard: [
-                    [
-                      { "text": "⚔️ ACCEPT DIRECT CHALLENGE", "callback_data": `accept_duel:${gameId}` }
-                    ]
-                  ]
-                }
-              })
-            });
+      // Generate challenge ID
+      const gameId = db.collection('games').doc().id;
+      const newGame = {
+        id: gameId,
+        player1Id: tgId,
+        player1Username: username,
+        player2Id: "waiting",
+        player2Username: "waiting",
+        status: "waiting",
+        mode: "free",
+        stake: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        tgChatId: String(chatId),
+        tgMessageId: ""
+      };
 
-            if (responseTg.ok) {
-              const sentData = await responseTg.json();
-              const msgId = sentData.result?.message_id;
-              if (msgId) {
-                await db.collection('games').doc(gameId).update({
-                  tgMessageId: String(msgId)
-                });
-              }
-            }
-            return;
+      await db.collection('games').doc(gameId).set(newGame);
+
+      replyText = `⚔️ *VIRAL PRIVATE CHALLENGE*\n\n` +
+                  `Your battle invitation is ready.\n\n` +
+                  `Send it to a friend.`;
+
+      const responseTg = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: replyText,
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { "text": "📨 SHARE CHALLENGE", "url": `https://t.me/CyberDuellitebot/play?startapp=duel_${gameId}` }
+              ]
+            ]
           }
+        })
+      });
+
+      if (responseTg.ok) {
+        const sentData = await responseTg.json();
+        const msgId = sentData.result?.message_id;
+        if (msgId) {
+          await db.collection('games').doc(gameId).update({
+            tgMessageId: String(msgId)
+          });
         }
       }
+      return;
     } 
     else {
-      replyText = `❓ *Unknown Command!*\n\nUse /start to see available options.`;
+      replyText = `❓ *Unknown Command!*\n\nUse /help to see available options.`;
     }
 
     // Send telegram reply if set
@@ -2764,14 +2895,21 @@ async function startTelegramBot() {
     return;
   }
 
-  // 2. Configure Bot Menu & Commands on startup (Requirement 6 - minimal commands only)
+  // 2. Configure Bot Menu & Commands on startup (Requirement 6)
   try {
     await fetch(`https://api.telegram.org/bot${token}/setMyCommands`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         commands: [
-          { command: "ping", description: "Check VIRAL Arena bot status" },
+          { command: "duel", description: "Challenge a player" },
+          { command: "challenge", description: "Create a private duel invite" },
+          { command: "top", description: "VIRAL Arena leaderboard" },
+          { command: "myrank", description: "View your rank" },
+          { command: "balance", description: "View vVIRAL balance" },
+          { command: "missions", description: "Daily VIRAL missions" },
+          { command: "help", description: "VIRAL Arena help" },
+          { command: "ping", description: "Check bot status" },
           { command: "arena", description: "Open VIRAL Arena" }
         ]
       })
@@ -2798,14 +2936,14 @@ async function startTelegramBot() {
   // 3. Setup active challenge expiration background monitor (polls every 30 seconds)
   setInterval(async () => {
     try {
-      const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const expiredGames = await db.collection('games')
         .where('status', '==', 'waiting')
         .get();
 
       for (const doc of expiredGames.docs) {
         const gd = doc.data() || {};
-        const isExpired = gd.createdAt && gd.createdAt < fiveMinutesAgo;
+        const isExpired = gd.createdAt && gd.createdAt < tenMinutesAgo;
         if (isExpired) {
           if (gd.mode === 'stake' && gd.stake > 0) {
             await adjustUserVViral(

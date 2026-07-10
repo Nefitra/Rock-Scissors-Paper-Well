@@ -1418,10 +1418,26 @@ function GameAppInner() {
             </div>
           </div>
           
-          {/* Real TON Connection Button */}
-          <div id="ton-button-parent" className="scale-[0.82] origin-right flex items-center shrink-0">
-            <div className="bg-[#242f3d]/60 rounded-full px-2 py-0.5 flex items-center border border-[#2b3745]">
-              <TonConnectButton />
+          {/* Real TON Connection Button & Sound Toggle */}
+          <div className="flex items-center space-x-2 shrink-0">
+            {/* Global Sound Toggle */}
+            <button
+              id="btn_sound_toggle_header"
+              onClick={toggleSoundMute}
+              className="w-8 h-8 rounded-xl bg-[#242f3d]/60 hover:bg-[#2c394a] border border-[#2b3745] flex items-center justify-center text-slate-300 hover:text-white transition-all active:scale-95 cursor-pointer"
+              title={soundsMuted ? "Unmute Sounds" : "Mute Sounds"}
+            >
+              {soundsMuted ? (
+                <VolumeX className="w-4.5 h-4.5 text-rose-400" />
+              ) : (
+                <Volume2 className="w-4.5 h-4.5 text-[#3390ec]" />
+              )}
+            </button>
+
+            <div id="ton-button-parent" className="scale-[0.82] origin-right flex items-center">
+              <div className="bg-[#242f3d]/60 rounded-full px-2 py-0.5 flex items-center border border-[#2b3745]">
+                <TonConnectButton />
+              </div>
             </div>
           </div>
         </div>
