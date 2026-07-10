@@ -2711,6 +2711,30 @@ app.get('/api/telegram-health', (req, res) => {
   });
 });
 
+// GET telegram diagnostic endpoint
+app.get('/api/telegram-diag', async (req, res) => {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    return res.status(500).json({ ok: false, error: "No TELEGRAM_BOT_TOKEN in environment" });
+  }
+  try {
+    const meRes = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+    const meData = await meRes.json();
+    
+    const hookInfoRes = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+    const hookInfoData = await hookInfoRes.json();
+
+    res.status(200).json({
+      ok: true,
+      env_app_url: process.env.APP_URL || "not_set",
+      getMe: meData,
+      getWebhookInfo: hookInfoData
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Configure and start background Telegram Bot worker (Webhook primary with fallback Polling)
 async function startTelegramBot() {
   const token = process.env.TELEGRAM_BOT_TOKEN;
