@@ -48,7 +48,9 @@ import {
   Volume2,
   VolumeX,
   Layers,
-  QrCode
+  QrCode,
+  Bot,
+  Award
 } from 'lucide-react';
 import WindowGame from './components/WindowGame';
 
@@ -65,7 +67,14 @@ interface UserProfile {
   createdAt: string;
   streak?: number;
   xp?: number;
+  vViral?: number;
   lastLoginDate?: string;
+  missions?: Record<string, {
+    progress: number;
+    completed: boolean;
+    claimed: boolean;
+    lastUpdated?: string;
+  }>;
 }
 
 interface GameSession {
@@ -78,6 +87,8 @@ interface GameSession {
   player2Move: string;
   winnerId: string;
   status: string; // "waiting" | "matched" | "completed"
+  mode?: string;   // "free" | "stake"
+  stake?: number;  // amount of vVIRAL staked
   createdAt: string;
   updatedAt: string;
 }
@@ -192,12 +203,48 @@ const getNextRank = (wins: number): { rank: RankConfig | null; winsNeeded: numbe
 
 const ADMIN_TELEGRAM_IDS = ["beskerboris", "admin", "123456789", "711279376", "525364261"];
 
+const getUniqueGuestId = (): string => {
+  if (typeof window === 'undefined') return 'sandbox_guest';
+  let storedId = localStorage.getItem('rpsw_guest_id');
+  if (!storedId) {
+    storedId = 'guest_' + Math.random().toString(36).substring(2, 10);
+    localStorage.setItem('rpsw_guest_id', storedId);
+  }
+  return storedId;
+};
+
+const getUniqueGuestUsername = (): string => {
+  if (typeof window === 'undefined') return 'SandboxGuest';
+  let storedUsername = localStorage.getItem('rpsw_guest_username');
+  if (!storedUsername) {
+    const adjectives = ['Cyber', 'Mega', 'Ton', 'Super', 'Hyper', 'Sonic', 'Crypto', 'Alpha', 'Delta', 'Zero'];
+    const nouns = ['Player', 'Gamer', 'Champ', 'Pro', 'Ninja', 'Rival', 'Rider', 'Fighter', 'Winner', 'Star'];
+    const randomAdj = adjectives[Math.floor(Math.random() * adjectives.length)];
+    const randomNoun = nouns[Math.floor(Math.random() * nouns.length)];
+    const num = Math.floor(100 + Math.random() * 900);
+    storedUsername = `${randomAdj}${randomNoun}${num}`;
+    localStorage.setItem('rpsw_guest_username', storedUsername);
+  }
+  return storedUsername;
+};
+
+const sanitizeUserId = (id: string): string => {
+  if (!id) return "";
+  const trimmed = id.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return trimmed;
+  }
+  return trimmed.toLowerCase();
+};
+
 function GameAppInner() {
   const walletAddress = useTonAddress();
   const wallet = useTonWallet();
   
-  // Tabs: 'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows'
-  const [activeTab, setActiveTab ] = useState<'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows'>('home');
+  // Tabs: 'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows' | 'missions'
+  const [activeTab, setActiveTab ] = useState<'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows' | 'missions'>('home');
+  const [selectedLobbyMode, setSelectedLobbyMode] = useState<'free' | 'stake'>('free');
+  const [selectedLobbyStake, setSelectedLobbyStake] = useState<number>(50);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState<boolean>(false);
   
@@ -208,13 +255,19 @@ function GameAppInner() {
   })();
 
   const isInsideTMA = typeof window !== 'undefined' && !!(window as any).Telegram?.WebApp?.initData;
-  const [simulatedTgId, setSimulatedTgId] = useState<string>(isDevelopEnvironment ? 'beskerboris' : 'sandbox_guest');
-  const [simulatedUsername, setSimulatedUsername] = useState<string>(isDevelopEnvironment ? 'BorisTester' : 'SandboxGuest');
+  const [simulatedTgId, setSimulatedTgId] = useState<string>(() => getUniqueGuestId());
+  const [simulatedUsername, setSimulatedUsername ] = useState<string>(() => getUniqueGuestUsername());
   const [refParam, setRefParam] = useState<string>('');
   
-  // Real or Simulated final credentials
-  const currentTgId = isInsideTMA ? ((window as any).Telegram?.WebApp?.initDataUnsafe?.user?.username || (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 'tma_user') : simulatedTgId;
-  const currentUsername = isInsideTMA ? ((window as any).Telegram?.WebApp?.initDataUnsafe?.user?.first_name || 'TMA User') : simulatedUsername;
+  // Real or Simulated final credentials (all string ids are normalized case insensitively via sanitizeUserId)
+  const rawTgId = isInsideTMA 
+    ? ((window as any).Telegram?.WebApp?.initDataUnsafe?.user?.username || (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || simulatedTgId) 
+    : simulatedTgId;
+  const currentTgId = sanitizeUserId(rawTgId);
+
+  const currentUsername = isInsideTMA 
+    ? ((window as any).Telegram?.WebApp?.initDataUnsafe?.user?.first_name || (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.username || simulatedUsername) 
+    : simulatedUsername;
 
   // App & User state
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -235,6 +288,17 @@ function GameAppInner() {
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [countdownTick, setCountdownTick] = useState<number>(3);
   const [gameResultTimeout, setGameResultTimeout] = useState<any>(null);
+
+  // Global Configured TG Settings
+  const [globalSettings, setGlobalSettings] = useState<{ botUsername: string; appName: string; webUrl: string }>({
+    botUsername: "RpsRockPaperBot",
+    appName: "play",
+    webUrl: ""
+  });
+  const [settingsBotUsername, setSettingsBotUsername] = useState<string>('');
+  const [settingsAppName, setSettingsAppName] = useState<string>('');
+  const [savingSettings, setSavingSettings] = useState<boolean>(false);
+  const [settingsSaveSuccess, setSettingsSaveSuccess] = useState<string | null>(null);
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
   const [showRankTiersModal, setShowRankTiersModal] = useState<boolean>(false);
   const [showReferralQrModal, setShowReferralQrModal] = useState<boolean>(false);
@@ -425,8 +489,9 @@ function GameAppInner() {
   // Fetch Referral Code from URL or WebApp start_param on boot (survives page reloads)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    let code = params.get('startapp') || params.get('ref') || (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
+    let code = params.get('startapp') || params.get('tgWebAppStartParam') || params.get('ref') || (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
     if (code) {
+      code = sanitizeUserId(code);
       localStorage.setItem('rpsw_referred_by', code);
     } else {
       code = localStorage.getItem('rpsw_referred_by') || '';
@@ -435,7 +500,17 @@ function GameAppInner() {
       setRefParam(code);
     }
 
-
+    // Fetch Global settings
+    fetch('/api/settings')
+      .then(res => res.json())
+      .then(data => {
+        if (data && !data.error) {
+          setGlobalSettings(data);
+          setSettingsBotUsername(data.botUsername || '');
+          setSettingsAppName(data.appName || '');
+        }
+      })
+      .catch(err => console.error("Error fetching global settings:", err));
   }, []);
 
   // Sync / Register user with DB
@@ -443,6 +518,19 @@ function GameAppInner() {
     if (!currentTgId) return;
     setSyncing(true);
     try {
+      // Resolve referral code synchronously to eliminate state setters timing lag
+      const params = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
+      let code = params.get('startapp') || params.get('tgWebAppStartParam') || params.get('ref') || (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
+      if (code) {
+        code = sanitizeUserId(code);
+        localStorage.setItem('rpsw_referred_by', code);
+      } else {
+        code = localStorage.getItem('rpsw_referred_by') || '';
+        if (code) {
+          code = sanitizeUserId(code);
+        }
+      }
+
       const headers: any = { 'Content-Type': 'application/json' };
       const initData = (window as any).Telegram?.WebApp?.initData;
       if (initData) {
@@ -456,7 +544,7 @@ function GameAppInner() {
           telegramId: currentTgId,
           username: currentUsername,
           walletAddress: walletAddress || null,
-          referredBy: refParam || null
+          referredBy: code || null
         })
       });
       const data = await response.json();
@@ -506,6 +594,94 @@ function GameAppInner() {
       color: "text-emerald-400 bg-emerald-400/10 border-emerald-400/30",
       description: "Getting warmed up inside the daily arena (1-2 Days)"
     };
+  };
+
+  // Mission claiming states and helpers
+  const [claimingMission, setClaimingMission] = useState<Record<string, boolean>>({});
+  const [triggeringMission, setTriggeringMission] = useState<Record<string, boolean>>({});
+
+  const handleClaimMission = async (missionId: string) => {
+    if (!currentTgId) return;
+    setClaimingMission(prev => ({ ...prev, [missionId]: true }));
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
+      const res = await fetch('/api/mission/claim', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          userId: currentTgId,
+          missionId: missionId
+        })
+      });
+      const data = await res.json();
+      if (data.error) {
+        setErrorMessage(data.error);
+      } else {
+        playRewardXPSound();
+        confetti({
+          particleCount: 120,
+          spread: 70,
+          origin: { y: 0.6 }
+        });
+        
+        // Update profile in local state
+        setProfile(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            vViral: data.vViral,
+            missions: data.missions
+          };
+        });
+        
+        setStreakClaimSuccess(`Mission reward claimed! Received +${data.reward} vVIRAL.`);
+        setTimeout(() => setStreakClaimSuccess(null), 4000);
+      }
+    } catch (e) {
+      console.error("Error claiming mission:", e);
+      setErrorMessage("Could not claim mission reward due to network error.");
+    } finally {
+      setClaimingMission(prev => ({ ...prev, [missionId]: false }));
+    }
+  };
+
+  const handleTriggerMission = async (missionId: string) => {
+    if (!currentTgId) return;
+    setTriggeringMission(prev => ({ ...prev, [missionId]: true }));
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
+      const res = await fetch('/api/mission/trigger', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          userId: currentTgId,
+          missionId: missionId
+        })
+      });
+      const data = await res.json();
+      if (data.error) {
+        setErrorMessage(data.error);
+      } else {
+        playNotificationSound();
+        if (data.profile) {
+          setProfile(data.profile);
+        }
+      }
+    } catch (e) {
+      console.error("Error triggering mission:", e);
+    } finally {
+      setTriggeringMission(prev => ({ ...prev, [missionId]: false }));
+    }
   };
 
   // Perform daily streak claiming with backend
@@ -700,13 +876,69 @@ function GameAppInner() {
     }
   }, [activeTab, currentTgId]);
 
+  // Helper to generate dynamic canonical referral links
+  const getReferralUrl = () => {
+    if (globalSettings.botUsername) {
+      const cleanBot = globalSettings.botUsername.replace('@', '').trim();
+      const cleanApp = (globalSettings.appName || '').trim();
+      if (cleanApp) {
+        return `https://t.me/${cleanBot}/${cleanApp}?startapp=${currentTgId}`;
+      } else {
+        return `https://t.me/${cleanBot}?start=${currentTgId}`;
+      }
+    }
+    return `${window.location.origin}?startapp=${currentTgId}`;
+  };
+
   // Copy Referral link
   const handleCopyReferral = () => {
-    const referralLink = `${window.location.origin}?startapp=${currentTgId}`;
+    const referralLink = getReferralUrl();
     navigator.clipboard.writeText(referralLink);
     setCopiedLink(true);
     playReferralSound();
     setTimeout(() => setCopiedLink(false), 2000);
+  };
+
+  // Save custom Telegram bot referral settings
+  const handleSaveSettings = async () => {
+    setSavingSettings(true);
+    setSettingsSaveSuccess(null);
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify({
+          requestorId: currentTgId,
+          botUsername: settingsBotUsername,
+          appName: settingsAppName
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setGlobalSettings({
+          botUsername: settingsBotUsername,
+          appName: settingsAppName,
+          webUrl: ""
+        });
+        setSettingsSaveSuccess("Settings saved! Future canonical referral links updated.");
+        setTimeout(() => setSettingsSaveSuccess(null), 4000);
+      } else {
+        setSettingsSaveSuccess("Error saving settings: " + (data.error || "Unknown error"));
+        setTimeout(() => setSettingsSaveSuccess(null), 6000);
+      }
+    } catch (e: any) {
+      console.error(e);
+      setSettingsSaveSuccess("Error: " + e.message);
+      setTimeout(() => setSettingsSaveSuccess(null), 6000);
+    } finally {
+      setSavingSettings(false);
+    }
   };
 
   // Click on a weapon directly on the landing home page
@@ -721,7 +953,11 @@ function GameAppInner() {
   };
 
   // Game Lobby: Start Matching Process
-  const handleStartLobby = async (playWithBot: boolean = false) => {
+  const handleStartLobby = async (
+    playWithBot: boolean = false, 
+    mode: 'free' | 'stake' = selectedLobbyMode, 
+    stake: number = selectedLobbyMode === 'stake' ? selectedLobbyStake : 0
+  ) => {
     playMatchmakingPing();
     setIsSearching(true);
     setSelectedMove('');
@@ -739,7 +975,9 @@ function GameAppInner() {
         body: JSON.stringify({
           userId: currentTgId,
           username: currentUsername,
-          playWithBot: playWithBot
+          playWithBot: playWithBot,
+          mode: mode,
+          stake: stake
         })
       });
       const data = await res.json();
@@ -1067,41 +1305,83 @@ function GameAppInner() {
                 </div>
               </div>
 
-              {/* Wallet & Balance overview */}
-              <div className="w-full">
-                {/* TON Balance Card */}
-                <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-5 flex flex-col justify-between">
-                  <div>
-                    <div className="flex justify-between items-start">
-                      <p className="text-[#708499] text-[10px] font-bold uppercase tracking-widest leading-none">TON Balance</p>
-                      {walletAddress ? (
-                        <span className="text-[9px] text-green-400 bg-green-400/10 border border-green-400/20 px-2 py-0.5 rounded-full font-mono">
-                          Connected
-                        </span>
-                      ) : (
-                        <span className="text-[9px] text-[#708499] bg-[#242f3d] border border-[#2b3745] px-2 py-0.5 rounded-full font-mono">
-                          Not Connected
-                        </span>
-                      )}
+              {/* Player Dashboard Card */}
+              <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-5 space-y-4 shadow-lg relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-[#3390ec]/5 rounded-full blur-xl pointer-events-none" />
+                
+                {/* Dashboard Header: User & Rank */}
+                <div className="flex justify-between items-center pb-3 border-b border-[#242f3d]">
+                  <div className="flex items-center space-x-2.5 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-[#3390ec]/10 border border-[#3390ec]/20 flex items-center justify-center text-lg shrink-0">
+                      👤
                     </div>
-                    <div className="flex items-end space-x-1.5 mt-2.5">
-                      <h3 className="text-3xl font-extrabold tracking-tight text-white leading-none">
+                    <div className="min-w-0">
+                      <p className="text-[9px] text-[#708499] uppercase tracking-wider font-bold leading-none">Combatant</p>
+                      <h4 className="text-sm font-bold text-white truncate mt-1">@{currentTgId}</h4>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border flex items-center gap-1 leading-none ${currentRank.color} ${currentRank.bgColor} ${currentRank.borderColor}`}>
+                      <span>{currentRank.badgeEmoji}</span>
+                      <span>{currentRank.name}</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Dashboard Balances: vVIRAL & TON */}
+                <div className="grid grid-cols-2 gap-3">
+                  {/* vVIRAL Balance */}
+                  <div className="bg-[#0e1621]/80 rounded-2xl p-3 border border-[#242f3d]">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-amber-500 block leading-none">vVIRAL Balance</span>
+                    <div className="flex items-baseline space-x-1 mt-2">
+                      <span className="text-xl font-black text-white leading-none">
+                        {profile?.vViral !== undefined ? profile.vViral : 500}
+                      </span>
+                      <span className="text-[9px] font-bold text-amber-500">vVIRAL</span>
+                    </div>
+                    <span className="text-[8px] text-[#708499] block mt-1.5 leading-tight">Game Credits for Stakes</span>
+                  </div>
+
+                  {/* TON Wallet */}
+                  <div className="bg-[#0e1621]/80 rounded-2xl p-3 border border-[#242f3d]">
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-[#3390ec] block leading-none">TON Balance</span>
+                    <div className="flex items-baseline space-x-1 mt-2">
+                      <span className="text-xl font-black text-white leading-none">
                         {balanceLoading ? (
-                           <RefreshCw className="animate-spin w-5 h-5 text-[#3390ec]" />
+                          <RefreshCw className="animate-spin w-3 h-3 text-[#3390ec]" />
                         ) : walletAddress ? (
                           walletBalance
                         ) : (
                           "0.00"
                         )}
-                      </h3>
-                      <span className="text-[#3390ec] text-xs font-bold leading-none mb-0.5">TON</span>
+                      </span>
+                      <span className="text-[9px] font-bold text-[#3390ec]">TON</span>
                     </div>
+                    <span className="text-[8px] text-[#708499] block mt-1.5 leading-tight">
+                      {walletAddress ? "Connected" : "Not Connected"}
+                    </span>
                   </div>
-                  {!walletAddress && (
-                    <div className="mt-3.5 pt-3 border-t border-[#242f3d] flex justify-end">
-                      <p className="text-[10px] text-amber-500 font-medium">Use header connection</p>
-                    </div>
-                  )}
+                </div>
+
+                {/* Dashboard Stats Summary */}
+                <div className="grid grid-cols-3 gap-2 bg-[#242f3d]/35 rounded-2xl p-2.5 text-center border border-[#242f3d]/40">
+                  <div>
+                    <span className="text-[9px] text-[#708499] uppercase block font-bold">Played</span>
+                    <span className="text-xs font-bold text-white mt-0.5 block">{profile?.gamesPlayed || 0}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-emerald-400 uppercase block font-bold">Wins</span>
+                    <span className="text-xs font-bold text-emerald-400 mt-0.5 block">{profile?.wins || 0}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-[#3390ec] uppercase block font-bold">Win Rate</span>
+                    <span className="text-xs font-bold text-white mt-0.5 block">
+                      {profile?.gamesPlayed && profile.gamesPlayed > 0 
+                        ? `${Math.round(((profile.wins || 0) / profile.gamesPlayed) * 100)}%`
+                        : "0%"
+                      }
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -1323,42 +1603,122 @@ function GameAppInner() {
 
               {getArenaState() === 'idle' ? (
                 // LOBBY ENTRY SCREEN
-                <div className="space-y-6 animate-fade-in">
-                  <div className="text-center py-6">
-                    <h3 className="text-xl font-bold text-white">Find or Start a Match</h3>
-                    <p className="text-[#708499] text-xs mt-1">Server resolves the game state atomically</p>
+                <div className="space-y-5 animate-fade-in">
+                  <div className="text-center py-3">
+                    <h3 className="text-lg font-extrabold text-white uppercase tracking-tight">Battle Arena Matchmaking</h3>
+                    <p className="text-[#708499] text-xs mt-0.5">Choose your duel mode and stake</p>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4">
+                  {/* Mode & Stake Selector Card */}
+                  <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-5 space-y-4 shadow-lg">
+                    <div className="flex justify-between items-center pb-2.5 border-b border-[#242f3d]">
+                      <span className="text-xs font-bold text-white uppercase tracking-wider">Duel Mode Selector</span>
+                      <span className="text-[10px] bg-amber-500/10 text-amber-500 border border-amber-500/25 px-2.5 py-0.5 rounded-full font-mono font-bold">
+                        Your Balance: {profile?.vViral !== undefined ? profile.vViral : 500} vVIRAL
+                      </span>
+                    </div>
+
+                    {/* Mode Selector Buttons */}
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <button
+                        onClick={() => { playClickSound(); setSelectedLobbyMode('free'); }}
+                        className={`py-3 px-3 rounded-2xl flex flex-col items-center justify-center border transition-all cursor-pointer ${
+                          selectedLobbyMode === 'free'
+                            ? 'bg-[#3390ec]/15 border-[#3390ec] text-white shadow-sm shadow-[#3390ec]/10'
+                            : 'bg-[#0e1621]/60 border-[#242f3d] text-[#708499] hover:text-white'
+                        }`}
+                      >
+                        <span className="text-lg">🤝</span>
+                        <span className="text-[11px] font-bold mt-1 uppercase tracking-wider">Friendly (Free)</span>
+                        <span className="text-[8px] opacity-75 mt-0.5 text-center leading-none">No risk, +XP progression</span>
+                      </button>
+
+                      <button
+                        onClick={() => { playClickSound(); setSelectedLobbyMode('stake'); }}
+                        className={`py-3 px-3 rounded-2xl flex flex-col items-center justify-center border transition-all cursor-pointer ${
+                          selectedLobbyMode === 'stake'
+                            ? 'bg-amber-500/15 border-amber-500/60 text-white shadow-sm shadow-amber-500/10'
+                            : 'bg-[#0e1621]/60 border-[#242f3d] text-[#708499] hover:text-amber-400'
+                        }`}
+                      >
+                        <span className="text-lg">💎</span>
+                        <span className="text-[11px] font-bold mt-1 uppercase tracking-wider">Stake Match</span>
+                        <span className="text-[8px] opacity-75 mt-0.5 text-center leading-none">Wager vVIRAL credits</span>
+                      </button>
+                    </div>
+
+                    {/* Stake amount selector if 'stake' mode is active */}
+                    {selectedLobbyMode === 'stake' && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        className="space-y-3 pt-2.5 border-t border-[#242f3d] overflow-hidden"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-bold text-[#708499] uppercase">Choose Stake Amount</span>
+                          <span className="text-xs font-black text-amber-500 font-mono bg-amber-500/10 px-2 py-0.5 rounded">
+                            {selectedLobbyStake} vVIRAL
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-5 gap-1.5">
+                          {[50, 100, 250, 500, 1000].map((stakeVal) => (
+                            <button
+                              key={stakeVal}
+                              onClick={() => { playClickSound(); setSelectedLobbyStake(stakeVal); }}
+                              className={`py-1.5 text-xs font-mono font-bold rounded-lg border transition-all cursor-pointer ${
+                                selectedLobbyStake === stakeVal
+                                  ? 'bg-amber-500 text-[#0e1621] border-amber-500 shadow-sm'
+                                  : 'bg-[#0e1621] border-[#242f3d] text-[#708499] hover:text-white'
+                              }`}
+                            >
+                              {stakeVal}
+                            </button>
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+
+                    {/* Insufficient balance warning */}
+                    {selectedLobbyMode === 'stake' && (profile?.vViral !== undefined ? profile.vViral : 500) < selectedLobbyStake && (
+                      <div className="bg-amber-500/10 border border-amber-500/25 p-3 rounded-2xl text-[10.5px] text-amber-500 font-medium">
+                        ⚠️ Insufficient vVIRAL credits. Choose a lower stake amount, or claim daily login bonuses/missions to earn more.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Queue buttons with disabled check */}
+                  <div className="grid grid-cols-1 gap-3.5">
                     {/* Bot match */}
                     <button
+                      disabled={selectedLobbyMode === 'stake' && (profile?.vViral !== undefined ? profile.vViral : 500) < selectedLobbyStake}
                       onClick={() => handleStartLobby(true)}
-                      className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl text-left transition-all flex items-center justify-between cursor-pointer"
+                      className="group bg-[#242f3d] hover:bg-[#3390ec] disabled:bg-[#1e2730] disabled:opacity-40 disabled:cursor-not-allowed border border-[#2b3745] p-5 rounded-2xl text-left transition-all flex items-center justify-between cursor-pointer"
                     >
                       <div className="space-y-1">
-                        <span className="text-white group-hover:text-white font-bold text-base flex items-center gap-1.5">
-                          <Cpu className="w-5 h-5 text-[#3390ec] group-hover:text-white" />
-                          Auto Bot Game
+                        <span className="text-white group-hover:text-white font-bold text-sm flex items-center gap-1.5">
+                          <Cpu className="w-4.5 h-4.5 text-[#3390ec] group-hover:text-white" />
+                          Auto Bot Training Game
                         </span>
-                        <p className="text-[#708499] group-hover:text-white/80 text-xs">Practice immediately. AI opponent resolves randomized moves.</p>
+                        <p className="text-[#708499] group-hover:text-white/80 text-[11px]">Practice or play instantly against the AI Arena Bot.</p>
                       </div>
-                      <ChevronRight className="w-5 h-5 text-[#708499] group-hover:text-white transition" />
+                      <ChevronRight className="w-4.5 h-4.5 text-[#708499] group-hover:text-white transition" />
                     </button>
 
-                    {/* Online PVP match */}
+                    {/* Online PvP match */}
                     <button
+                      disabled={selectedLobbyMode === 'stake' && (profile?.vViral !== undefined ? profile.vViral : 500) < selectedLobbyStake}
                       onClick={() => handleStartLobby(false)}
-                      className="group bg-[#17212b] hover:bg-[#3390ec] border border-[#242f3d] p-6 rounded-2xl text-left transition-all flex items-center justify-between relative overflow-hidden cursor-pointer"
+                      className="group bg-[#17212b] hover:bg-[#3390ec] disabled:bg-[#121922] disabled:opacity-40 disabled:cursor-not-allowed border border-[#242f3d] p-5 rounded-2xl text-left transition-all flex items-center justify-between relative overflow-hidden cursor-pointer"
                     >
                       <div className="absolute right-0 top-0 w-24 h-24 bg-[#3390ec]/10 rounded-full blur-xl pointer-events-none" />
                       <div className="space-y-1 relative z-10">
-                        <span className="text-[#3390ec] group-hover:text-white font-bold text-base flex items-center gap-1.5">
-                          <Gamepad2 className="w-5 h-5 text-[#3390ec] group-hover:text-white" />
-                          Online Multiplayer PvP
+                        <span className="text-[#3390ec] group-hover:text-white font-bold text-sm flex items-center gap-1.5">
+                          <Gamepad2 className="w-4.5 h-4.5 text-[#3390ec] group-hover:text-white" />
+                          Online PvP Duel Queue
                         </span>
-                        <p className="text-[#708499] group-hover:text-white/80 text-xs">Atomically queues you up with another live player.</p>
+                        <p className="text-[#708499] group-hover:text-white/80 text-[11px]">Atomically queues you up with another live player.</p>
                       </div>
-                      <ChevronRight className="w-5 h-5 text-[#3390ec] group-hover:text-white transition animate-pulse" />
+                      <ChevronRight className="w-4.5 h-4.5 text-[#3390ec] group-hover:text-white transition animate-pulse" />
                     </button>
                   </div>
                 </div>
@@ -1413,12 +1773,22 @@ function GameAppInner() {
                             </div>
                           </div>
                           
-                          <div className="pt-4 max-w-xs mx-auto">
+                          <div className="pt-4 max-w-xs mx-auto space-y-3">
                             <button
                               onClick={handleCancelMatchmaking}
                               className="w-full bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
                             >
                               Cancel Matchmaking
+                            </button>
+                            <button
+                              onClick={() => {
+                                handleCancelMatchmaking();
+                                handleStartLobby(true);
+                              }}
+                              className="w-full bg-[#3390ec]/20 hover:bg-[#3390ec] text-[#3390ec] hover:text-white border border-[#3390ec]/30 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-1.5"
+                            >
+                              <Cpu className="w-4 h-4" />
+                              Play with Bot instead 🤖
                             </button>
                           </div>
                         </motion.div>
@@ -1705,12 +2075,32 @@ function GameAppInner() {
                             <p className="text-[#708499] text-xs max-w-sm mx-auto">This battle was cancelled or dissolved because a player left the arena queue or failed to select their weapon.</p>
                           </div>
                           
-                          <div className="pt-4 max-w-xs mx-auto">
+                          <div className="pt-4 max-w-xs mx-auto space-y-3">
                             <button
                               onClick={resetGameLobby}
                               className="w-full bg-[#3390ec] hover:bg-[#2b7ad0] text-white py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
                             >
                               Return to Lobby
+                            </button>
+                            <button
+                              onClick={() => {
+                                resetGameLobby();
+                                handleStartLobby(false);
+                              }}
+                              className="w-full bg-[#242f3d]/60 hover:bg-[#242f3d]/90 text-[#3390ec] border border-[#2b3745] hover:border-[#3390ec]/30 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-1.5"
+                            >
+                              <Gamepad2 className="w-4 h-4" />
+                              Search Another PvP Match
+                            </button>
+                            <button
+                              onClick={() => {
+                                resetGameLobby();
+                                handleStartLobby(true);
+                              }}
+                              className="w-full bg-[#242f3d]/60 hover:bg-[#242f3d]/90 text-amber-400 border border-[#2b3745] hover:border-amber-400/30 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-1.5"
+                            >
+                              <Cpu className="w-4 h-4" />
+                              Quick Play with Bot
                             </button>
                           </div>
                         </motion.div>
@@ -1872,6 +2262,158 @@ function GameAppInner() {
             </motion.div>
           )}
 
+          {/* TAB 7: DAILY MISSIONS */}
+          {activeTab === 'missions' && (
+            <motion.div
+              key="missions"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ duration: 0.15 }}
+              className="space-y-6 select-none"
+            >
+              <div className="text-center py-4 relative flex flex-col items-center">
+                <div className="w-16 h-16 bg-gradient-to-tr from-indigo-500 to-purple-600 rounded-3xl flex items-center justify-center shadow-lg shadow-indigo-500/15 mb-3.5 border border-indigo-500/20">
+                  <Award className="w-8 h-8 text-white" />
+                </div>
+                <h3 className="text-xl font-black text-white uppercase tracking-tight">Daily Missions</h3>
+                <p className="text-xs text-[#708499] mt-1 max-w-[280px]">
+                  Power up your VIRAL Arena standing! Earn extra vVIRAL credits by completing daily challenges.
+                </p>
+              </div>
+
+              {/* Mission Grid list */}
+              <div className="space-y-3.5">
+                {[
+                  {
+                    id: 'first_game',
+                    title: 'First Blood',
+                    description: 'Engage in at least 1 match (PvP or Bot) in the Arena.',
+                    target: 1,
+                    reward: 100,
+                    icon: '⚔️',
+                    getCurrentProgress: () => profile?.gamesPlayed || 0
+                  },
+                  {
+                    id: 'win_3_games',
+                    title: 'Champion Duelist',
+                    description: 'Claim victory in 3 matches in the Arena.',
+                    target: 3,
+                    reward: 300,
+                    icon: '🏆',
+                    getCurrentProgress: () => profile?.wins || 0
+                  },
+                  {
+                    id: 'invite_friend',
+                    title: 'Ecosystem Recruiter',
+                    description: 'Invite 1 new combatant using your referral link.',
+                    target: 1,
+                    reward: 200,
+                    icon: '👥',
+                    getCurrentProgress: () => profile?.referralsCountL1 || 0
+                  },
+                  {
+                    id: 'join_chat',
+                    title: 'Arena Cadet',
+                    description: 'Join the official VIRAL community channel.',
+                    target: 1,
+                    reward: 150,
+                    icon: '📢',
+                    getCurrentProgress: () => (profile?.missions?.['join_chat']?.completed ? 1 : 0),
+                    action: () => handleTriggerMission('join_chat')
+                  }
+                ].map((m) => {
+                  const mState = profile?.missions?.[m.id] || { progress: 0, completed: false, claimed: false };
+                  const currentProg = m.getCurrentProgress();
+                  const finalProg = Math.min(m.target, Math.max(mState.progress, currentProg));
+                  const isCompleted = mState.completed || finalProg >= m.target;
+                  const isClaimed = mState.claimed;
+
+                  return (
+                    <div 
+                      key={m.id}
+                      className={`bg-[#17212b] border rounded-2.5xl p-4.5 space-y-3 transition-all duration-300 relative overflow-hidden ${
+                        isClaimed 
+                          ? 'border-[#242f3d]/60 opacity-60' 
+                          : isCompleted 
+                            ? 'border-emerald-500/30 bg-emerald-500/[0.02]' 
+                            : 'border-[#242f3d] hover:border-[#3390ec]/30'
+                      }`}
+                    >
+                      {/* Top segment */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center space-x-3 min-w-0">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0 ${
+                            isClaimed ? 'bg-[#242f3d]' : isCompleted ? 'bg-emerald-500/10 text-emerald-400' : 'bg-[#242f3d]/80'
+                          }`}>
+                            {m.icon}
+                          </div>
+                          <div className="min-w-0">
+                            <h4 className="text-sm font-bold text-white leading-tight truncate">{m.title}</h4>
+                            <p className="text-[11px] text-[#708499] leading-snug mt-1">{m.description}</p>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="text-xs font-black text-amber-500 block leading-none">+{m.reward}</span>
+                          <span className="text-[8px] text-[#708499] uppercase tracking-wider font-bold block mt-1">vVIRAL</span>
+                        </div>
+                      </div>
+
+                      {/* Progress bar and claiming action */}
+                      <div className="flex items-center justify-between gap-4 pt-1">
+                        <div className="flex-1 space-y-1">
+                          <div className="flex justify-between text-[10px] font-mono">
+                            <span className="text-[#708499]">Progress</span>
+                            <span className={isCompleted ? "text-emerald-400 font-bold" : "text-[#3390ec]"}>
+                              {finalProg} / {m.target}
+                            </span>
+                          </div>
+                          <div className="w-full bg-[#0e1621] rounded-full h-1.5 overflow-hidden border border-[#242f3d]">
+                            <div 
+                              className={`h-full rounded-full transition-all duration-300 ${isCompleted ? 'bg-emerald-500' : 'bg-[#3390ec]'}`}
+                              style={{ width: `${(finalProg / m.target) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="shrink-0">
+                          {isClaimed ? (
+                            <span className="px-3 py-1.5 rounded-xl text-[10px] font-black text-slate-500 bg-[#242f3d] border border-transparent block uppercase tracking-wider">
+                              Claimed
+                            </span>
+                          ) : isCompleted ? (
+                            <button
+                              onClick={() => { playClickSound(); handleClaimMission(m.id); }}
+                              disabled={claimingMission[m.id]}
+                              className="px-4 py-1.5 rounded-xl text-[10px] font-black text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 transition transform active:scale-95 shadow-md shadow-emerald-500/10 cursor-pointer block uppercase tracking-wider animate-pulse"
+                            >
+                              {claimingMission[m.id] ? <RefreshCw className="w-3.5 h-3.5 animate-spin mx-auto" /> : "Claim"}
+                            </button>
+                          ) : m.action ? (
+                            <button
+                              onClick={() => { playClickSound(); m.action(); }}
+                              disabled={triggeringMission[m.id]}
+                              className="px-4 py-1.5 rounded-xl text-[10px] font-black text-[#3390ec] bg-[#3390ec]/10 border border-[#3390ec]/25 hover:bg-[#3390ec]/20 transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
+                            >
+                              {triggeringMission[m.id] ? <RefreshCw className="w-3.5 h-3.5 animate-spin mx-auto" /> : "Join Chat"}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => { playClickSound(); setActiveTab('play'); }}
+                              className="px-4 py-1.5 rounded-xl text-[10px] font-bold text-slate-400 bg-[#242f3d] border border-[#2b3745] hover:border-slate-500 transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
+                            >
+                              Go Play
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          )}
+
           {/* TAB 3: REFERRALS */}
           {activeTab === 'referrals' && (
             <motion.div
@@ -1915,7 +2457,7 @@ function GameAppInner() {
                 <p className="text-[#708499] text-[10px] uppercase mb-1 font-bold">Your Custom Referral Link</p>
                 <div className="flex gap-2 items-center">
                   <div className="flex-1 text-sm text-[#3390ec] truncate font-mono">
-                    {window.location.origin}?startapp={currentTgId}
+                    {getReferralUrl()}
                   </div>
                   <button
                     id="btn_view_referral_qr"
@@ -2162,6 +2704,59 @@ function GameAppInner() {
                 </div>
               </div>
 
+              {/* Profile Referral Program */}
+              <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 space-y-4">
+                <div className="flex items-center justify-between border-b border-[#242f3d] pb-3">
+                  <span className="text-sm font-bold text-white uppercase tracking-wider">Referral Program</span>
+                  <Users className="w-4 h-4 text-[#3390ec]" />
+                </div>
+                <p className="text-xs text-[#708499] leading-relaxed">
+                  Invite other duelists and earn commission rewards on multiple levels of active gameplay stakes!
+                </p>
+
+                {/* Level metrics summary */}
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div className="bg-[#242f3d]/60 border border-[#2b3745] p-3 rounded-2xl flex justify-between items-center">
+                    <div>
+                      <p className="text-[#708499] text-[9px] font-bold uppercase">L1 Direct</p>
+                      <p className="font-mono text-lg font-black text-white mt-1">{profile?.referralsCountL1 || 0}</p>
+                    </div>
+                    <span className="text-[10px] text-amber-500 bg-amber-500/10 border border-amber-500/20 font-bold px-2 py-0.5 rounded-full leading-none shrink-0">10%</span>
+                  </div>
+                  <div className="bg-[#242f3d]/60 border border-[#2b3745] p-3 rounded-2xl flex justify-between items-center">
+                    <div>
+                      <p className="text-[#708499] text-[9px] font-bold uppercase">L2 Indirect</p>
+                      <p className="font-mono text-lg font-black text-white mt-1">{profile?.referralsCountL2 || 0}</p>
+                    </div>
+                    <span className="text-[10px] text-indigo-400 bg-indigo-400/10 border border-indigo-400/20 font-bold px-2 py-0.5 rounded-full leading-none shrink-0">5%</span>
+                  </div>
+                </div>
+
+                {/* Copier link block */}
+                <div className="p-3 bg-[#0e1621] rounded-2xl border border-[#242f3d] mt-2">
+                  <p className="text-[#708499] text-[9px] uppercase font-bold mb-1.5">Your Referral Link</p>
+                  <div className="flex gap-2 items-center">
+                    <div className="flex-1 text-xs text-[#3390ec] truncate font-mono">
+                      {getReferralUrl()}
+                    </div>
+                    <button
+                      id="btn_profile_referral_qr"
+                      onClick={() => { playClickSound(); setShowReferralQrModal(true); }}
+                      className="bg-[#242f3d] border border-[#2b3745] hover:bg-[#2c394a] text-[#3390ec] p-2 rounded-xl transition transform active:scale-95 flex items-center justify-center cursor-pointer"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      id="btn_profile_copy_referral"
+                      onClick={handleCopyReferral}
+                      className="bg-white text-black p-2 rounded-xl hover:bg-slate-200 transition transform active:scale-95 flex items-center justify-center cursor-pointer"
+                    >
+                      {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-600 font-bold" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               {/* Dev Admin panel redirection */}
               {adminModeEnabled && (
                 <button
@@ -2222,6 +2817,57 @@ function GameAppInner() {
                 <div className="bg-[#17212b] p-4 rounded-xl border border-[#242f3d] text-center">
                   <span className="text-[10px] text-[#708499] block uppercase font-bold">Total Match Logs</span>
                   <span className="text-2xl font-mono font-bold text-amber-400 block mt-1">{adminData?.stats?.totalGames || 0}</span>
+                </div>
+              </div>
+
+              {/* Bot Referral Link Customizer */}
+              <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-5 space-y-4">
+                <div className="flex items-center gap-2 border-b border-[#242f3d]/60 pb-2.5">
+                  <Bot className="w-4 h-4 text-[#3390ec]" />
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">Telegram Referral Configuration</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3.5 text-xs">
+                  <div className="space-y-1">
+                    <label className="text-[#708499] font-bold text-[10px] uppercase">Telegram Bot Name</label>
+                    <input
+                      type="text"
+                      value={settingsBotUsername}
+                      onChange={(e) => setSettingsBotUsername(e.target.value)}
+                      placeholder="e.g. RpsRockPaperBot"
+                      className="w-full bg-[#242f3d] border border-[#2b3745] hover:border-[#3390ec]/50 focus:border-[#3390ec] rounded-xl px-3 py-2 text-white text-xs focus:outline-none transition font-medium"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[#708499] font-bold text-[10px] uppercase">Web App name (shortname)</label>
+                    <input
+                      type="text"
+                      value={settingsAppName}
+                      onChange={(e) => setSettingsAppName(e.target.value)}
+                      placeholder="e.g. play"
+                      className="w-full bg-[#242f3d] border border-[#2b3745] hover:border-[#3390ec]/50 focus:border-[#3390ec] rounded-xl px-3 py-2 text-white text-xs focus:outline-none transition font-medium"
+                    />
+                  </div>
+                </div>
+
+                {settingsSaveSuccess && (
+                  <div className="text-emerald-400 text-xs font-semibold bg-emerald-500/10 p-2.5 rounded-xl border border-emerald-500/25 text-center transition">
+                    {settingsSaveSuccess}
+                  </div>
+                )}
+
+                <div className="flex justify-between items-center bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/30">
+                  <span className="text-[9.5px] text-[#708499] leading-tight max-w-[65%]">
+                    This dynamically updates all invite URLs to use the official short Telegram URL. Set blank to default to raw web URLs.
+                  </span>
+                  <button
+                    onClick={handleSaveSettings}
+                    disabled={savingSettings}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold text-white transition cursor-pointer select-none shadow-md ${savingSettings ? 'bg-[#3390ec]/50 cursor-not-allowed' : 'bg-[#3390ec] hover:bg-[#2b7ad0]'}`}
+                  >
+                    {savingSettings ? "Saving..." : "Save Config"}
+                  </button>
                 </div>
               </div>
 
@@ -2361,13 +3007,13 @@ function GameAppInner() {
         </button>
 
 
-        {/* NAV 4: REFERRALS */}
+        {/* NAV 4: MISSIONS */}
         <button
-          onClick={() => { playClickSound(); setActiveTab('referrals'); }}
-          className={`flex flex-col items-center justify-center w-11 h-14 rounded-2xl transition-all ${activeTab === 'referrals' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          onClick={() => { playClickSound(); setActiveTab('missions'); }}
+          className={`flex flex-col items-center justify-center w-11 h-14 rounded-2xl transition-all ${activeTab === 'missions' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
-          <Users className="w-5 h-5 mb-1" />
-          <span className="text-[9px] font-bold">REFERRALS</span>
+          <Award className="w-5 h-5 mb-1" />
+          <span className="text-[9px] font-bold">MISSIONS</span>
         </button>
 
         {/* NAV 5: PROFILE */}
@@ -2661,7 +3307,7 @@ function GameAppInner() {
               {/* QR Image Wrapper */}
               <div className="bg-white p-4 rounded-2xl flex items-center justify-center shadow-inner mx-auto w-[200px] h-[200px]">
                 <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`${window.location.origin}?startapp=${currentTgId}`)}`}
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(getReferralUrl())}`}
                   alt="Referral QR Code"
                   className="w-full h-full object-contain select-none shadow-sm rounded-lg"
                   referrerPolicy="no-referrer"
@@ -2682,7 +3328,7 @@ function GameAppInner() {
                 onClick={handleCopyReferral}
                 className="w-full py-2 px-3 bg-[#242f3d] hover:bg-[#2c394a] rounded-xl flex items-center justify-between text-[11px] text-[#3390ec] font-mono border border-[#2b3745]/35 transition active:scale-[0.98] cursor-pointer"
               >
-                <span className="truncate max-w-[150px]">{window.location.origin}?startapp={currentTgId}</span>
+                <span className="truncate max-w-[150px]">{getReferralUrl()}</span>
                 <span className="font-sans font-bold text-[9px] uppercase text-white tracking-wider flex items-center gap-1 shrink-0 bg-[#3390ec] px-1.5 py-0.5 rounded-sm">
                   {copiedLink ? "COPIED" : "COPY"}
                 </span>

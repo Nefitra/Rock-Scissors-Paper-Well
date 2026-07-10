@@ -1,6 +1,6 @@
 {
-  "name": "Rock Scissors Paper Well",
-  "description": "A classic mini-game for Telegram with persistent lobbies, referral programs, and TON Connect wallet integration.",
+  "name": "VIRAL ARENA",
+  "description": "The official gaming arena inside the VIRAL ecosystem, featuring dual matchmaking modes, rank progressions, and daily missions.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

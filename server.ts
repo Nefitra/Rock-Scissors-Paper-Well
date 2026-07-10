@@ -163,6 +163,16 @@ function verifyTelegramWebAppData(initData: string, botToken: string): { verifie
   }
 }
 
+// Helper to normalize the user identifier for case-insensitive lookup safety (string-based usernames are converted to lowercase)
+function sanitizeUserId(id: string): string {
+  if (!id) return "";
+  const trimmed = String(id).trim();
+  if (/^\d+$/.test(trimmed)) {
+    return trimmed;
+  }
+  return trimmed.toLowerCase();
+}
+
 // Helper to extract the authenticated user identity
 // Enforces cryptographic verification if TELEGRAM_BOT_TOKEN is configured in environment
 // Falls back graciously (with warnings) for external and dev sandbox clients
@@ -175,7 +185,7 @@ function getRequestUser(req: express.Request): { userId: string; username?: stri
       const verification = verifyTelegramWebAppData(initDataHeader, botToken);
       if (verification.verified && verification.user) {
         return {
-          userId: String(verification.user.username || verification.user.id),
+          userId: sanitizeUserId(String(verification.user.username || verification.user.id)),
           username: String(verification.user.first_name || verification.user.username || ""),
           isVerified: true
         };
@@ -190,7 +200,7 @@ function getRequestUser(req: express.Request): { userId: string; username?: stri
         if (userStr) {
           const user = JSON.parse(userStr);
           return {
-            userId: String(user.username || user.id),
+            userId: sanitizeUserId(String(user.username || user.id)),
             username: String(user.first_name || user.username || ""),
             isVerified: false
           };
@@ -205,7 +215,7 @@ function getRequestUser(req: express.Request): { userId: string; username?: stri
   const requestorId = (req.body?.userId || req.body?.telegramId || req.query?.requestorId || "");
   const requestorUsername = (req.body?.username || "");
   return {
-    userId: String(requestorId),
+    userId: sanitizeUserId(String(requestorId)),
     username: String(requestorUsername),
     isVerified: false
   };
@@ -255,10 +265,162 @@ function getWinner(move1: string, move2: string, p1Id: string, p2Id: string): st
   return p2Id;
 }
 
+// Centralized VIRAL ARENA Economy Configuration
+const ECONOMY_CONFIG = {
+  freeMatchWinReward: 20,
+  freeMatchParticipationReward: 5,
+  freeMatchDrawReward: 10,
+  dailyRewardCap: 500,
+  referralReward: 100,
+  referredReward: 50,
+  friendChallengeWinReward: 50,
+  stakePresets: [50, 100, 250, 500, 1000],
+  platformFeePercent: 10, // 10% platform fee on staked matches
+  minBalanceForStaking: 50,
+  welcomeBonus: 500 // Start with 500 vVIRAL to play stake matches immediately
+};
+
+// Reusable Atomic Transaction Ledger Helper
+async function adjustUserVViral(
+  userId: string,
+  amount: number,
+  type: string,
+  source: string,
+  referenceId?: string,
+  idempotencyKey?: string
+): Promise<{ success: boolean; newBalance: number }> {
+  try {
+    const userRef = db.collection('users').doc(userId);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
+      throw new Error("User not found");
+    }
+
+    const userData = userSnap.data() || {};
+    const currentBalance = userData.vViral !== undefined ? userData.vViral : 0;
+
+    // Check idempotency if a key is provided
+    if (idempotencyKey) {
+      const existingTx = await db.collection('transactions')
+        .where('idempotencyKey', '==', idempotencyKey)
+        .get();
+      if (existingTx.docs.length > 0) {
+        return { success: true, newBalance: currentBalance };
+      }
+    }
+
+    const newBalance = Math.max(0, currentBalance + amount);
+
+    // Record immutable ledger entry
+    const txId = db.collection('transactions').doc().id;
+    const txRecord = {
+      id: txId,
+      userId,
+      type, // 'credit' | 'debit'
+      amount,
+      prevBalance: currentBalance,
+      newBalance,
+      source, // e.g. 'welcome_bonus', 'free_duel_win', 'stake_duel_win', 'stake_duel_entry', 'daily_mission', 'referral', etc.
+      referenceId: referenceId || "",
+      timestamp: new Date().toISOString(),
+      status: 'completed',
+      idempotencyKey: idempotencyKey || ""
+    };
+
+    await db.collection('transactions').doc(txId).set(txRecord);
+
+    // Update player profile
+    await userRef.update({
+      vViral: newBalance
+    });
+
+    return { success: true, newBalance };
+  } catch (err: any) {
+    console.error(`Error adjusting vVIRAL balance for user ${userId}:`, err);
+    throw err;
+  }
+}
+
+// Daily Mission progress helper
+const MISSION_CONFIGS: Record<string, { maxProgress: number; reward: number; title: string; desc: string }> = {
+  play_1_duel: { maxProgress: 1, reward: 50, title: "Play 1 Duel", desc: "Complete 1 match in any arena mode" },
+  play_3_duels: { maxProgress: 3, reward: 100, title: "Play 3 Duels", desc: "Complete 3 matches in any arena mode" },
+  win_1_duel: { maxProgress: 1, reward: 50, title: "Win 1 Duel", desc: "Defeat any opponent in the arena" },
+  win_3_duels: { maxProgress: 3, reward: 150, title: "Win 3 Duels", desc: "Settle 3 victories in the arena" },
+  challenge_friend: { maxProgress: 1, reward: 50, title: "Challenge a Friend", desc: "Initiate or accept a Friend Duel" },
+  share_result: { maxProgress: 1, reward: 50, title: "Share Duel Result", desc: "Broadcast your match results to Telegram" },
+  visit_viral: { maxProgress: 1, reward: 30, title: "Visit VIRAL App", desc: "Explore the VIRAL ecosystem interface" },
+  join_community: { maxProgress: 1, reward: 30, title: "Join VIRAL Community", desc: "Join our official chat group" }
+};
+
+async function updateMissionProgress(userId: string, missionId: string, increment: number) {
+  try {
+    const userRef = db.collection('users').doc(userId);
+    const snap = await userRef.get();
+    if (!snap.exists) return;
+    const userData = snap.data() || {};
+    const missions = userData.missions || {};
+
+    const config = MISSION_CONFIGS[missionId];
+    if (!config) return;
+
+    const mProgress = missions[missionId] || { progress: 0, completed: false, claimed: false };
+    if (mProgress.claimed) return; // Already claimed, bypass
+
+    const newProgress = Math.min(config.maxProgress, (mProgress.progress || 0) + increment);
+    const completed = newProgress >= config.maxProgress;
+
+    missions[missionId] = {
+      progress: newProgress,
+      completed,
+      claimed: mProgress.claimed || false,
+      lastUpdated: new Date().toISOString()
+    };
+
+    await userRef.update({ missions });
+  } catch (err) {
+    console.error(`Error updating mission progress for user ${userId}:`, err);
+  }
+}
+
+// Boot-time user migration to the vVIRAL ecosystem
+async function runUserMigration() {
+  try {
+    console.log("Running user migration to vVIRAL ecosystem...");
+    const usersSnap = await db.collection('users').get();
+    let migratedCount = 0;
+
+    for (const d of usersSnap.docs) {
+      const data = d.data() || {};
+      if (data.vViral === undefined) {
+        const oldBalance = data.points !== undefined ? data.points : (data.balance !== undefined ? data.balance : ECONOMY_CONFIG.welcomeBonus);
+        const updates: any = {
+          vViral: oldBalance
+        };
+        if (!data.missions) {
+          updates.missions = {};
+        }
+        await db.collection('users').doc(d.id).update(updates);
+        migratedCount++;
+      }
+    }
+
+    console.log(`Migration completed successfully! Migrated ${migratedCount} users.`);
+    await db.collection('reports').doc('migration_report').set({
+      timestamp: new Date().toISOString(),
+      migratedCount,
+      status: 'success'
+    });
+  } catch (error) {
+    console.error("Migration error:", error);
+  }
+}
+setTimeout(runUserMigration, 2000);
+
 // REST APIs
 // 1. Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: "ok", service: "Rock Paper Scissors Well Server" });
+  res.json({ status: "ok", service: "VIRAL ARENA Server", power: "Powered by VIRAL ARENA" });
 });
 
 // 2. User Sync & Registration (including referrers tracking L1 & L2)
@@ -267,7 +429,7 @@ app.post('/api/user/sync', async (req, res) => {
     const verifiedUser = getRequestUser(req);
     const { telegramId, username, walletAddress, referredBy } = req.body;
 
-    let targetTgId = telegramId;
+    let targetTgId = telegramId ? sanitizeUserId(telegramId) : "";
     let targetUsername = username;
 
     if (verifiedUser.userId) {
@@ -281,21 +443,59 @@ app.post('/api/user/sync', async (req, res) => {
       return res.status(400).json({ error: "telegramId is required" });
     }
 
-    const userId = targetTgId; // Use telegramId as document ID for simple direct mapping
+    const userId = targetTgId; // Use normalized telegramId as document ID for simple direct mapping
     const userRef = db.collection('users').doc(userId);
     const userSnap = await userRef.get();
+
+    const cleanReferredBy = referredBy ? sanitizeUserId(referredBy) : "";
 
     if (userSnap.exists) {
       // User already exists, update wallet address if changed
       const currentData = userSnap.data() || {};
       let updated = false;
       const upData: any = {};
+      
+      // Retroactive referral check if user doesn't have referredBy set yet
+      if (!currentData.referredBy && cleanReferredBy && cleanReferredBy !== userId) {
+        const referrerRef = db.collection('users').doc(cleanReferredBy);
+        const referrerSnap = await referrerRef.get();
+        if (referrerSnap.exists) {
+          upData.referredBy = cleanReferredBy;
+          updated = true;
+          
+          const referrerData = referrerSnap.data() || {};
+          
+          // Update Level 1 (direct) referral count
+          const newL1Count = (referrerData.referralsCountL1 || 0) + 1;
+          await referrerRef.update({ referralsCountL1: newL1Count });
+
+          // Update Level 2 (indirect) referral count for grand referrer if exists
+          if (referrerData.referredBy) {
+            const grandRef = db.collection('users').doc(referrerData.referredBy);
+            const grandSnap = await grandRef.get();
+            if (grandSnap.exists) {
+              const grandData = grandSnap.data() || {};
+              const newL2Count = (grandData.referralsCountL2 || 0) + 1;
+              await grandRef.update({ referralsCountL2: newL2Count });
+            }
+          }
+        }
+      }
+
       if (walletAddress && currentData.walletAddress !== walletAddress) {
         upData.walletAddress = walletAddress;
         updated = true;
       }
       if (username && currentData.username !== username) {
         upData.username = username;
+        updated = true;
+      }
+      if (currentData.vViral === undefined) {
+        upData.vViral = ECONOMY_CONFIG.welcomeBonus;
+        updated = true;
+      }
+      if (!currentData.missions) {
+        upData.missions = {};
         updated = true;
       }
       if (updated) {
@@ -306,12 +506,12 @@ app.post('/api/user/sync', async (req, res) => {
 
     // New user signup
     let finalReferredBy = "";
-    if (referredBy && referredBy !== userId) {
+    if (cleanReferredBy && cleanReferredBy !== userId) {
       // Check if referrer exists
-      const referrerRef = db.collection('users').doc(referredBy);
+      const referrerRef = db.collection('users').doc(cleanReferredBy);
       const referrerSnap = await referrerRef.get();
       if (referrerSnap.exists) {
-        finalReferredBy = referredBy;
+        finalReferredBy = cleanReferredBy;
         const referrerData = referrerSnap.data() || {};
         
         // Update direct L1 count
@@ -343,11 +543,24 @@ app.post('/api/user/sync', async (req, res) => {
       referralsCountL2: 0,
       streak: 0,
       xp: 0,
+      vViral: ECONOMY_CONFIG.welcomeBonus,
+      missions: {},
       lastLoginDate: "",
       createdAt: new Date().toISOString()
     };
 
     await userRef.set(newProfile);
+
+    // Record welcome bonus transaction in ledger
+    await adjustUserVViral(
+      targetTgId,
+      ECONOMY_CONFIG.welcomeBonus,
+      'credit',
+      'welcome_bonus',
+      'welcome',
+      `welcome_${targetTgId}`
+    );
+
     res.json({ profile: newProfile });
   } catch (error: any) {
     console.error("Sync error:", error);
@@ -358,24 +571,31 @@ app.post('/api/user/sync', async (req, res) => {
 // 3. User statistics read
 app.get('/api/user/:userId', async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = sanitizeUserId(req.params.userId);
     const userSnap = await db.collection('users').doc(userId).get();
     if (!userSnap.exists) {
       return res.status(404).json({ error: "User not found" });
     }
-    res.json({ profile: userSnap.data() });
+    const userData = userSnap.data() || {};
+    if (userData.vViral === undefined) {
+      userData.vViral = ECONOMY_CONFIG.welcomeBonus;
+    }
+    if (!userData.missions) {
+      userData.missions = {};
+    }
+    res.json({ profile: userData });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// 3.1 Claim Daily Login Streak reward
+// 3.1 Claim Daily Login Streak reward (XP + vVIRAL 7-day loop)
 app.post('/api/user/claim-daily', async (req, res) => {
   try {
     const verifiedUser = getRequestUser(req);
     const { telegramId, clientDateString } = req.body;
 
-    let targetTgId = telegramId;
+    let targetTgId = telegramId ? sanitizeUserId(telegramId) : "";
     if (verifiedUser.userId) {
       targetTgId = verifiedUser.userId;
     }
@@ -413,7 +633,11 @@ app.post('/api/user/claim-daily', async (req, res) => {
       currentStreak = 1;
     }
 
-    // Reward!
+    // Determine vVIRAL reward based on 7-day sequence loop
+    const dayIndex = ((currentStreak - 1) % 7) + 1; // 1 to 7
+    const SEQUENCE_REWARDS = [50, 100, 150, 200, 250, 300, 500];
+    const vViralReward = SEQUENCE_REWARDS[dayIndex - 1] || 50;
+
     // We award +100 XP as the experience boost.
     // Plus a dynamic streak multiplier bonus! (e.g. +10 XP per day of streak up to +50 XP)
     const streakBonus = Math.min(5, currentStreak) * 10;
@@ -430,13 +654,28 @@ app.post('/api/user/claim-daily', async (req, res) => {
 
     await userRef.update(updates);
 
+    // Credit vVIRAL balance and record transaction ledger
+    const balanceResult = await adjustUserVViral(
+      targetTgId,
+      vViralReward,
+      'credit',
+      'daily_check_in',
+      `day_${dayIndex}`,
+      `idempotency_${targetTgId}_checkin_${todayStr}`
+    );
+
+    // Increment mission progress for daily check in
+    await updateMissionProgress(targetTgId, 'visit_viral', 1);
+
     res.json({
       success: true,
       streak: currentStreak,
       xp: newXp,
+      vViral: balanceResult.newBalance,
       lastLoginDate: todayStr,
       awardedXp: totalAwardedXp,
-      message: `Successfully claimed! Daily streak: ${currentStreak} days. +${totalAwardedXp} Arena XP granted!`
+      awardedVViral: vViralReward,
+      message: `Successfully claimed! Day ${dayIndex} reward: +${vViralReward} vVIRAL & +${totalAwardedXp} XP granted!`
     });
   } catch (error: any) {
     console.error("Daily claim error:", error);
@@ -444,7 +683,7 @@ app.post('/api/user/claim-daily', async (req, res) => {
   }
 });
 
-// 3a. Global Leaderboard top 10
+// 3a. Global Leaderboard top 10 (returns extended metrics)
 app.get('/api/leaderboard', async (req, res) => {
   try {
     const usersSnap = await db.collection('users').get();
@@ -457,12 +696,14 @@ app.get('/api/leaderboard', async (req, res) => {
           username: data.username || `User_${data.telegramId}`,
           wins: data.wins || 0,
           losses: data.losses || 0,
-          gamesPlayed: data.gamesPlayed || 0
+          gamesPlayed: data.gamesPlayed || 0,
+          vViral: data.vViral !== undefined ? data.vViral : 500,
+          streak: data.streak || 0
         });
       }
     });
 
-    // Sort by wins dec, then gamesPlayed desc
+    // Sort by wins desc, then gamesPlayed desc
     usersList.sort((a, b) => {
       if (b.wins !== a.wins) return b.wins - a.wins;
       return b.gamesPlayed - a.gamesPlayed;
@@ -506,12 +747,29 @@ app.post('/api/user/reward-wins', async (req, res) => {
     const updatedWins = (currentData.wins || 0) + (amount || 5);
     const newClaimed = [...claimedRewards, challengeId];
 
+    // Award bonus incentive of +10 vVIRAL per window level achievement!
+    const vViralBonus = (amount || 5) * 10;
+
     await userRef.update({
       wins: updatedWins,
       claimedRewards: newClaimed
     });
 
-    const finalProfile = { ...currentData, wins: updatedWins, claimedRewards: newClaimed };
+    const balanceResult = await adjustUserVViral(
+      targetTgId,
+      vViralBonus,
+      'credit',
+      'multi_window_achievement',
+      challengeId,
+      `idempotency_${targetTgId}_win_${challengeId}`
+    );
+
+    const finalProfile = { 
+      ...currentData, 
+      wins: updatedWins, 
+      vViral: balanceResult.newBalance,
+      claimedRewards: newClaimed 
+    };
     res.json({ success: true, profile: finalProfile });
   } catch (error: any) {
     console.error("Reward wins error:", error);
@@ -519,11 +777,101 @@ app.post('/api/user/reward-wins', async (req, res) => {
   }
 });
 
-// 4. Join matchmaking / Find Game
+// 3c. Daily Missions Claim endpoint
+app.post('/api/mission/claim', async (req, res) => {
+  try {
+    const verifiedUser = getRequestUser(req);
+    const { userId, missionId } = req.body;
+    let targetUserId = userId || verifiedUser.userId;
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const userRef = db.collection('users').doc(targetUserId);
+    const snap = await userRef.get();
+    if (!snap.exists) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userData = snap.data() || {};
+    const missions = userData.missions || {};
+    const mProgress = missions[missionId];
+
+    if (!mProgress || !mProgress.completed) {
+      return res.status(400).json({ error: "Mission is not completed or not found" });
+    }
+
+    if (mProgress.claimed) {
+      return res.status(400).json({ error: "Mission reward already claimed" });
+    }
+
+    const config = MISSION_CONFIGS[missionId];
+    if (!config) {
+      return res.status(400).json({ error: "Invalid mission configuration" });
+    }
+
+    // Update status to claimed
+    missions[missionId] = {
+      ...mProgress,
+      claimed: true
+    };
+
+    await userRef.update({ missions });
+
+    // Credit reward
+    const result = await adjustUserVViral(
+      targetUserId,
+      config.reward,
+      'credit',
+      `mission_${missionId}`,
+      missionId,
+      `idempotency_${targetUserId}_claim_${missionId}`
+    );
+
+    // Complete "Complete Daily Check-In" mission itself on claiming any mission or checkin
+    await updateMissionProgress(targetUserId, 'visit_viral', 1);
+
+    res.json({
+      success: true,
+      vViral: result.newBalance,
+      reward: config.reward,
+      missions
+    });
+  } catch (error: any) {
+    console.error("Claim mission error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 3d. Dynamic Mission Progress trigger (clicks, shares)
+app.post('/api/mission/trigger', async (req, res) => {
+  try {
+    const verifiedUser = getRequestUser(req);
+    const { userId, missionId } = req.body;
+    let targetUserId = userId || verifiedUser.userId;
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    if (!['visit_viral', 'join_community', 'share_result'].includes(missionId)) {
+      return res.status(400).json({ error: "Invalid dynamic mission" });
+    }
+
+    await updateMissionProgress(targetUserId, missionId, 1);
+    
+    const userRef = db.collection('users').doc(targetUserId);
+    const snap = await userRef.get();
+    res.json({ success: true, profile: snap.data() });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4. Join matchmaking / Find Game (Supports free & staked duels securely)
 app.post('/api/matchmaking/join', async (req, res) => {
   try {
     const verifiedUser = getRequestUser(req);
-    const { userId, username, playWithBot } = req.body;
+    const { userId, username, playWithBot, mode, stake } = req.body;
 
     let targetUserId = userId;
     let targetUsername = username;
@@ -539,10 +887,34 @@ app.post('/api/matchmaking/join', async (req, res) => {
       return res.status(400).json({ error: "userId is required" });
     }
 
+    const targetMode = mode || "free";
+    const targetStake = typeof stake === 'number' ? Math.max(0, stake) : 0;
+
+    // Validate stake preset if mode is 'stake'
+    if (targetMode === 'stake') {
+      if (!ECONOMY_CONFIG.stakePresets.includes(targetStake)) {
+        return res.status(400).json({ error: `Invalid stake amount. Allowed presets: ${ECONOMY_CONFIG.stakePresets.join(', ')} vVIRAL` });
+      }
+    }
+
+    // Read player document to check vVIRAL balance and wallet status
     let targetWallet: string | null = null;
     const targetUserSnap = await db.collection('users').doc(targetUserId).get();
-    if (targetUserSnap.exists) {
-      targetWallet = targetUserSnap.data()?.walletAddress || null;
+    if (!targetUserSnap.exists) {
+      return res.status(404).json({ error: "User profile not found. Please sync first." });
+    }
+
+    const userData = targetUserSnap.data() || {};
+    targetWallet = userData.walletAddress || null;
+
+    // Check balance for stake modes
+    if (targetMode === 'stake' && targetStake > 0) {
+      const currentBalance = userData.vViral !== undefined ? userData.vViral : 0;
+      if (currentBalance < targetStake) {
+        return res.status(400).json({ 
+          error: `Insufficient balance! You need at least ${targetStake} vVIRAL, but only have ${currentBalance} vVIRAL.` 
+        });
+      }
     }
 
     // Always clean up any existing uncompleted games created by this same user to avoid phantom matches
@@ -551,31 +923,50 @@ app.post('/api/matchmaking/join', async (req, res) => {
         .where('player1Id', '==', targetUserId)
         .where('status', 'in', ['searching', 'waiting', 'matched', 'countdown', 'move_selection', 'resolving'])
         .get();
-      if (existingWaiting.docs.length > 0) {
-        const updatePromises = existingWaiting.docs.map(doc => 
-          db.collection('games').doc(doc.id).update({
-            status: 'canceled',
-            updatedAt: new Date().toISOString()
-          })
-        );
-        await Promise.all(updatePromises);
+      for (const doc of existingWaiting.docs) {
+        const gd = doc.data() || {};
+        // If it was a stake game, refund the player immediately!
+        if (gd.status === 'searching' && gd.mode === 'stake' && gd.stake > 0) {
+          await adjustUserVViral(
+            targetUserId, 
+            gd.stake, 
+            'credit', 
+            'stake_duel_refund', 
+            doc.id, 
+            `refund_cleanup_${doc.id}_${targetUserId}`
+          );
+        }
+        await db.collection('games').doc(doc.id).update({
+          status: 'canceled',
+          updatedAt: new Date().toISOString()
+        });
       }
       
       const existingWaiting2 = await db.collection('games')
         .where('player2Id', '==', targetUserId)
         .where('status', 'in', ['searching', 'waiting', 'matched', 'countdown', 'move_selection', 'resolving'])
         .get();
-      if (existingWaiting2.docs.length > 0) {
-        const updatePromises2 = existingWaiting2.docs.map(doc => 
-          db.collection('games').doc(doc.id).update({
-            status: 'canceled',
-            updatedAt: new Date().toISOString()
-          })
-        );
-        await Promise.all(updatePromises2);
+      for (const doc of existingWaiting2.docs) {
+        await db.collection('games').doc(doc.id).update({
+          status: 'canceled',
+          updatedAt: new Date().toISOString()
+        });
       }
     } catch (cleanupErr) {
       console.error("Error cleaning up previous games:", cleanupErr);
+    }
+
+    // Deduct stake if playing stake mode
+    if (targetMode === 'stake' && targetStake > 0) {
+      const deductKey = `join_deduct_${targetUserId}_${Date.now()}`;
+      await adjustUserVViral(
+        targetUserId,
+        -targetStake,
+        'debit',
+        'stake_duel_entry',
+        'matchmaking_join',
+        deductKey
+      );
     }
 
     if (playWithBot) {
@@ -591,6 +982,8 @@ app.post('/api/matchmaking/join', async (req, res) => {
         player2Move: "",
         winnerId: "",
         status: "matched",
+        mode: targetMode,
+        stake: targetStake,
         matchedAt: new Date().toISOString(),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -611,6 +1004,13 @@ app.post('/api/matchmaking/join', async (req, res) => {
       
       // Prevent self matching on telegramId
       if (gData.player1Id === targetUserId) {
+        continue;
+      }
+
+      // Match free with free, and stakes with matching stakes
+      const opponentMode = gData.mode || "free";
+      const opponentStake = gData.stake || 0;
+      if (opponentMode !== targetMode || opponentStake !== targetStake) {
         continue;
       }
 
@@ -636,18 +1036,42 @@ app.post('/api/matchmaking/join', async (req, res) => {
     }
 
     if (foundGame) {
-      // Match them! Set matchedAt and transition to 'matched'
-      const gameRef = db.collection('games').doc(foundGame.id);
-      const updatedGame = {
-        player2Id: targetUserId,
-        player2Username: targetUsername || "Player 2",
-        status: "matched",
-        matchedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      await gameRef.update(updatedGame);
-      const fullGame = { ...foundGame, ...updatedGame };
-      return res.json({ game: sanitizeGameForUser(fullGame, targetUserId) });
+      try {
+        const { runTransaction } = await import('firebase/firestore');
+        const gameRefReal = doc(firestoreInstance, 'games', foundGame.id);
+        const matchResult = await runTransaction(firestoreInstance, async (transaction) => {
+          const freshSnap = await transaction.get(gameRefReal);
+          if (!freshSnap.exists()) {
+            throw new Error("game_not_found");
+          }
+          const freshData = freshSnap.data() || {};
+          const currentStatus = freshData.status;
+          const currentPlayer2Id = freshData.player2Id;
+          
+          if ((currentStatus !== 'searching' && currentStatus !== 'waiting') || currentPlayer2Id !== 'waiting') {
+            throw new Error("already_matched");
+          }
+          
+          const updatedFields = {
+            player2Id: targetUserId,
+            player2Username: targetUsername || "Player 2",
+            status: "matched",
+            matchedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          
+          transaction.update(gameRefReal, updatedFields);
+          return { ...freshData, ...updatedFields };
+        });
+        
+        return res.json({ game: sanitizeGameForUser(matchResult, targetUserId) });
+      } catch (transactionError: any) {
+        if (transactionError.message === 'already_matched') {
+          console.log(`Race condition avoided: game ${foundGame.id} was already matched.`);
+        } else {
+          console.error("Matchmaking transaction error:", transactionError);
+        }
+      }
     }
 
     // No existing waiting game, create a brand new lobby
@@ -662,6 +1086,8 @@ app.post('/api/matchmaking/join', async (req, res) => {
       player2Move: "",
       winnerId: "",
       status: "searching",
+      mode: targetMode,
+      stake: targetStake,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -692,6 +1118,19 @@ app.post('/api/matchmaking/cancel', async (req, res) => {
     const gData = snap.data() || {};
     if (gData.player1Id !== targetUserId && gData.player2Id !== targetUserId) {
       return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    // Refund stake if canceling a real pending search
+    if (gData.status === 'searching' && gData.mode === 'stake' && gData.stake > 0) {
+      const refundTarget = gData.player1Id;
+      await adjustUserVViral(
+        refundTarget, 
+        gData.stake, 
+        'credit', 
+        'stake_duel_refund', 
+        gameId, 
+        `refund_cancel_${gameId}_${refundTarget}`
+      );
     }
 
     await gameRef.update({
@@ -735,6 +1174,17 @@ app.post('/api/game/leave', async (req, res) => {
     const opponentId = amPlayer1 ? gData.player2Id : gData.player1Id;
 
     if (opponentId === 'bot' || opponentId === 'waiting') {
+      // If host cancels a staked search game or forfeits a bot
+      if (gData.status === 'searching' && gData.mode === 'stake' && gData.stake > 0) {
+        await adjustUserVViral(
+          targetUserId,
+          gData.stake,
+          'credit',
+          'stake_duel_refund',
+          gameId,
+          `refund_botleave_${gameId}_${targetUserId}`
+        );
+      }
       await gameRef.update({
         status: "canceled",
         updatedAt: new Date().toISOString()
@@ -751,6 +1201,9 @@ app.post('/api/game/leave', async (req, res) => {
     };
     await gameRef.update(updatedFields);
 
+    const isStaked = gData.mode === 'stake' && gData.stake > 0;
+    const stakeAmount = gData.stake || 0;
+
     const p1Ref = db.collection('users').doc(gData.player1Id);
     const p2Ref = db.collection('users').doc(gData.player2Id);
     const [p1Snap, p2Snap] = await Promise.all([p1Ref.get(), p2Ref.get()]);
@@ -766,6 +1219,26 @@ app.post('/api/game/leave', async (req, res) => {
         losses: won ? (d1.losses || 0) : (d1.losses || 0) + 1,
         xp: (d1.xp || 0) + (won ? 100 : 50)
       }));
+
+      // Adjust currency for winner and loser
+      if (won) {
+        if (isStaked) {
+          const winPool = Math.floor(stakeAmount * (2 - ECONOMY_CONFIG.platformFeePercent / 100));
+          await adjustUserVViral(gData.player1Id, winPool, 'credit', 'stake_duel_win', gameId, `win_forfeited_${gameId}_${gData.player1Id}`);
+        } else {
+          // Free win
+          await adjustUserVViral(gData.player1Id, ECONOMY_CONFIG.freeMatchWinReward, 'credit', 'free_duel_win', gameId, `win_free_${gameId}_${gData.player1Id}`);
+        }
+        await updateMissionProgress(gData.player1Id, 'win_1_duel', 1);
+        await updateMissionProgress(gData.player1Id, 'win_3_duels', 1);
+      } else {
+        // Loser (forfeiter) gets no refunds on staked mode
+        if (!isStaked) {
+          await adjustUserVViral(gData.player1Id, ECONOMY_CONFIG.freeMatchParticipationReward, 'credit', 'free_duel_loss', gameId, `loss_free_${gameId}_${gData.player1Id}`);
+        }
+      }
+      await updateMissionProgress(gData.player1Id, 'play_1_duel', 1);
+      await updateMissionProgress(gData.player1Id, 'play_3_duels', 1);
     }
 
     if (p2Snap.exists) {
@@ -777,6 +1250,26 @@ app.post('/api/game/leave', async (req, res) => {
         losses: won ? (d2.losses || 0) : (d2.losses || 0) + 1,
         xp: (d2.xp || 0) + (won ? 100 : 50)
       }));
+
+      // Adjust currency for winner and loser
+      if (won) {
+        if (isStaked) {
+          const winPool = Math.floor(stakeAmount * (2 - ECONOMY_CONFIG.platformFeePercent / 100));
+          await adjustUserVViral(gData.player2Id, winPool, 'credit', 'stake_duel_win', gameId, `win_forfeited_${gameId}_${gData.player2Id}`);
+        } else {
+          // Free win
+          await adjustUserVViral(gData.player2Id, ECONOMY_CONFIG.freeMatchWinReward, 'credit', 'free_duel_win', gameId, `win_free_${gameId}_${gData.player2Id}`);
+        }
+        await updateMissionProgress(gData.player2Id, 'win_1_duel', 1);
+        await updateMissionProgress(gData.player2Id, 'win_3_duels', 1);
+      } else {
+        // Loser (forfeiter) gets no refunds on staked mode
+        if (!isStaked) {
+          await adjustUserVViral(gData.player2Id, ECONOMY_CONFIG.freeMatchParticipationReward, 'credit', 'free_duel_loss', gameId, `loss_free_${gameId}_${gData.player2Id}`);
+        }
+      }
+      await updateMissionProgress(gData.player2Id, 'play_1_duel', 1);
+      await updateMissionProgress(gData.player2Id, 'play_3_duels', 1);
     }
 
     if (updatePromises.length > 0) {
@@ -867,6 +1360,9 @@ app.post('/api/game/move', async (req, res) => {
       updatePlay.status = "completed";
       updatePlay.updatedAt = new Date().toISOString();
 
+      const isStaked = gameData.mode === 'stake' && gameData.stake > 0;
+      const stakeAmount = gameData.stake || 0;
+
       // Update player profile statistics concurrently to reduce database/network roundtrip latency
       const p1Ref = db.collection('users').doc(gameData.player1Id);
       const p2Ref = gameData.player2Id !== "bot" ? db.collection('users').doc(gameData.player2Id) : null;
@@ -878,12 +1374,12 @@ app.post('/api/game/move', async (req, res) => {
 
       const updatePromises: Promise<any>[] = [];
 
+      // Calculate Player 1 Reward updates
       if (p1Snap && p1Snap.exists) {
         const d1 = p1Snap.data() || {};
         const p1Wins = winnerId === gameData.player1Id ? (d1.wins || 0) + 1 : (d1.wins || 0);
         const p1Losses = (winnerId !== gameData.player1Id && winnerId !== "draw") ? (d1.losses || 0) + 1 : (d1.losses || 0);
         
-        // Reward match participation XP (+50 Base XP + 50 Win bonus XP) to make level progression active
         const xpReward = (winnerId === gameData.player1Id) ? 100 : 50;
         const currentXp = d1.xp || 0;
         
@@ -893,8 +1389,34 @@ app.post('/api/game/move', async (req, res) => {
           losses: p1Losses,
           xp: currentXp + xpReward
         }));
+
+        // Economy adjustment for player 1
+        if (winnerId === "draw") {
+          if (isStaked) {
+            await adjustUserVViral(gameData.player1Id, stakeAmount, 'credit', 'stake_duel_refund', gameId, `refund_draw_${gameId}_p1`);
+          } else {
+            await adjustUserVViral(gameData.player1Id, ECONOMY_CONFIG.freeMatchDrawReward, 'credit', 'free_duel_draw', gameId, `draw_free_${gameId}_p1`);
+          }
+        } else if (winnerId === gameData.player1Id) {
+          if (isStaked) {
+            const winPool = Math.floor(stakeAmount * (2 - ECONOMY_CONFIG.platformFeePercent / 100));
+            await adjustUserVViral(gameData.player1Id, winPool, 'credit', 'stake_duel_win', gameId, `win_stake_${gameId}_p1`);
+          } else {
+            await adjustUserVViral(gameData.player1Id, ECONOMY_CONFIG.freeMatchWinReward, 'credit', 'free_duel_win', gameId, `win_free_${gameId}_p1`);
+          }
+          await updateMissionProgress(gameData.player1Id, 'win_1_duel', 1);
+          await updateMissionProgress(gameData.player1Id, 'win_3_duels', 1);
+        } else {
+          // Player 1 lost
+          if (!isStaked) {
+            await adjustUserVViral(gameData.player1Id, ECONOMY_CONFIG.freeMatchParticipationReward, 'credit', 'free_duel_loss', gameId, `loss_free_${gameId}_p1`);
+          }
+        }
+        await updateMissionProgress(gameData.player1Id, 'play_1_duel', 1);
+        await updateMissionProgress(gameData.player1Id, 'play_3_duels', 1);
       }
 
+      // Calculate Player 2 Reward updates (if human)
       if (p2Snap && p2Snap.exists && p2Ref) {
         const d2 = p2Snap.data() || {};
         const p2Wins = winnerId === gameData.player2Id ? (d2.wins || 0) + 1 : (d2.wins || 0);
@@ -909,6 +1431,31 @@ app.post('/api/game/move', async (req, res) => {
           losses: p2Losses,
           xp: currentXp + xpReward
         }));
+
+        // Economy adjustment for player 2
+        if (winnerId === "draw") {
+          if (isStaked) {
+            await adjustUserVViral(gameData.player2Id, stakeAmount, 'credit', 'stake_duel_refund', gameId, `refund_draw_${gameId}_p2`);
+          } else {
+            await adjustUserVViral(gameData.player2Id, ECONOMY_CONFIG.freeMatchDrawReward, 'credit', 'free_duel_draw', gameId, `draw_free_${gameId}_p2`);
+          }
+        } else if (winnerId === gameData.player2Id) {
+          if (isStaked) {
+            const winPool = Math.floor(stakeAmount * (2 - ECONOMY_CONFIG.platformFeePercent / 100));
+            await adjustUserVViral(gameData.player2Id, winPool, 'credit', 'stake_duel_win', gameId, `win_stake_${gameId}_p2`);
+          } else {
+            await adjustUserVViral(gameData.player2Id, ECONOMY_CONFIG.freeMatchWinReward, 'credit', 'free_duel_win', gameId, `win_free_${gameId}_p2`);
+          }
+          await updateMissionProgress(gameData.player2Id, 'win_1_duel', 1);
+          await updateMissionProgress(gameData.player2Id, 'win_3_duels', 1);
+        } else {
+          // Player 2 lost
+          if (!isStaked) {
+            await adjustUserVViral(gameData.player2Id, ECONOMY_CONFIG.freeMatchParticipationReward, 'credit', 'free_duel_loss', gameId, `loss_free_${gameId}_p2`);
+          }
+        }
+        await updateMissionProgress(gameData.player2Id, 'play_1_duel', 1);
+        await updateMissionProgress(gameData.player2Id, 'play_3_duels', 1);
       }
 
       if (updatePromises.length > 0) {
@@ -1036,6 +1583,187 @@ app.get('/api/admin/metrics', async (req, res) => {
   }
 });
 
+// GET global settings
+app.get('/api/settings', async (req, res) => {
+  try {
+    const settingsDocName = 'global_settings';
+    const settingsRef = db.collection('settings').doc(settingsDocName);
+    const snap = await settingsRef.get();
+    if (snap.exists) {
+      res.json(snap.data());
+    } else {
+      // Default configurations
+      res.json({
+        botUsername: "RpsRockPaperBot",
+        appName: "play",
+        webUrl: ""
+      });
+    }
+  } catch (error: any) {
+    console.error("Error retrieving settings:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST global settings (restricted to approved admins)
+app.post('/api/settings', async (req, res) => {
+  try {
+    const verifiedUser = getRequestUser(req);
+    const requestorId = verifiedUser.userId || req.body.requestorId;
+    if (!requestorId) {
+      return res.status(403).json({ error: "Access Denied. Unauthorized." });
+    }
+    const idToCheck = String(requestorId).toLowerCase();
+    if (!ADMIN_TELEGRAM_IDS.includes(idToCheck)) {
+      return res.status(403).json({ error: "Access Denied. Admins only." });
+    }
+
+    const { botUsername, appName, webUrl } = req.body;
+    const settingsDocName = 'global_settings';
+    await db.collection('settings').doc(settingsDocName).set({
+      botUsername: botUsername || "",
+      appName: appName || "",
+      webUrl: webUrl || ""
+    });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("Error saving settings:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Background Telegram Bot Polling Worker
+async function startTelegramBot() {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    console.log("No TELEGRAM_BOT_TOKEN found in environment. Telegram Bot Poller is inactive.");
+    return;
+  }
+  console.log("Telegram Bot Token is present! Starting Long-Polling Bot...");
+
+  let offset = 0;
+  
+  // Poller loop
+  while (true) {
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${token}/getUpdates?offset=${offset}&timeout=15`);
+      if (!response.ok) {
+        // Wait 10 seconds before retrying to avoid spamming on error
+        await new Promise(resolve => setTimeout(resolve, 10000));
+        continue;
+      }
+
+      const data = await response.json();
+      if (data && data.ok && data.result && data.result.length > 0) {
+        for (const update of data.result) {
+          offset = update.update_id + 1;
+          const message = update.message;
+          if (!message || !message.text) continue;
+
+          const text = message.text.trim();
+          const chatId = message.chat.id;
+          const user = message.from;
+          const username = user?.username || `user_${user?.id}`;
+          const tgId = String(user?.id);
+
+          // Command parser
+          if (text.startsWith('/')) {
+            const command = text.split(' ')[0].toLowerCase();
+            let replyText = "";
+
+            if (command === '/start' || command === '/help') {
+              replyText = `⚔️ *WELCOME TO VIRAL ARENA* ⚔️\n\n` +
+                          `The official Rock-Paper-Scissors-Well Duel game of the *VIRAL Ecosystem*!\n\n` +
+                          `🎮 *Play directly on your smartphone:* [Launch VIRAL Arena App](https://t.me/play)\n\n` +
+                          `🛡️ *Commands available inside this bot:*\n` +
+                          `• /start - Launch instructions\n` +
+                          `• /balance - View your current vVIRAL balance and rank\n` +
+                          `• /leaderboard - View the Top 10 Arena Champions\n` +
+                          `• /missions - View active daily mission milestones\n` +
+                          `• /challenge - Create a custom invitation for a friend\n\n` +
+                          `_Powered by VIRAL Ecosystem_`;
+            } else if (command === '/balance') {
+              const uSnap = await db.collection('users').doc(tgId).get();
+              if (uSnap.exists) {
+                const ud = uSnap.data() || {};
+                const balance = ud.vViral !== undefined ? ud.vViral : 500;
+                const wins = ud.wins || 0;
+                const streak = ud.streak || 0;
+                replyText = `👤 *Player:* @${username}\n` +
+                            `💰 *vVIRAL Balance:* ${balance} vVIRAL\n` +
+                            `🏆 *Total Wins:* ${wins}\n` +
+                            `🔥 *Check-In Streak:* ${streak} days`;
+              } else {
+                replyText = `⚠️ *Account not found!*\n\nPlease click [Launch VIRAL Arena App](https://t.me/play) to initialize your profile and receive a *+500 vVIRAL Welcome Reward*!`;
+              }
+            } else if (command === '/leaderboard') {
+              const usersSnap = await db.collection('users').get();
+              const list: any[] = [];
+              usersSnap.forEach((d) => {
+                const data = d.data() || {};
+                if (data.telegramId) {
+                  list.push({
+                    username: data.username || `User_${data.telegramId}`,
+                    wins: data.wins || 0,
+                    vViral: data.vViral !== undefined ? data.vViral : 500
+                  });
+                }
+              });
+
+              list.sort((a, b) => b.wins - a.wins);
+              const top5 = list.slice(0, 5);
+
+              replyText = `🏆 *VIRAL ARENA TOP CHAMPIONS* 🏆\n\n`;
+              top5.forEach((player, idx) => {
+                replyText += `${idx + 1}. *@${player.username}* - ${player.wins} Wins | ${player.vViral} vVIRAL\n`;
+              });
+            } else if (command === '/missions') {
+              const uSnap = await db.collection('users').doc(tgId).get();
+              replyText = `🎯 *DAILY MISSION TARGETS* 🎯\n\n`;
+              
+              const userMissions = uSnap.exists ? (uSnap.data()?.missions || {}) : {};
+
+              Object.entries(MISSION_CONFIGS).forEach(([mId, config]) => {
+                const userProg = userMissions[mId] || { progress: 0, completed: false, claimed: false };
+                const statusEmoji = userProg.claimed ? "✅" : (userProg.completed ? "🎁" : "⏳");
+                replyText += `${statusEmoji} *${config.title}*\n` +
+                             `├ _${config.desc}_\n` +
+                             `└ Progress: [${userProg.progress}/${config.maxProgress}] | Reward: *+${config.reward} vVIRAL*\n\n`;
+              });
+            } else if (command === '/challenge') {
+              replyText = `🤝 *CHALLENGE A FRIEND* 🤝\n\n` +
+                          `Invite your friends to dual in the VIRAL ARENA!\n\n` +
+                          `Forward this link to challenge them:\n` +
+                          `👉 \`https://t.me/play?startapp=${tgId}\`\n\n` +
+                          `_Both of you will receive referral match achievements!_`;
+            } else {
+              replyText = `❓ *Unknown Command!*\n\nUse /start to see available options.`;
+            }
+
+            // Send telegram reply
+            await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: chatId,
+                text: replyText,
+                parse_mode: "Markdown"
+              })
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Telegram long-poll error:", err);
+      // Wait 10 seconds before retrying on crash
+      await new Promise(resolve => setTimeout(resolve, 10000));
+    }
+
+    // Small delay to prevent tight infinite loop CPU spikes
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
 // Configure Vite integration inside main async bootstrapper
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
@@ -1051,6 +1779,9 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Launch background Telegram Bot poller if token configured
+  startTelegramBot();
 
   // Binds to 0.0.0.0:3000
   app.listen(PORT, '0.0.0.0', () => {

@@ -1,8 +1,8 @@
 {
   "entities": {
     "User": {
-      "title": "User Profile",
-      "description": "Represents a player in the Rock, Scissors, Paper, Well game.",
+      "title": "VIRAL Player Profile",
+      "description": "Represents a player in the VIRAL ARENA game ecosystem.",
       "type": "object",
       "properties": {
         "telegramId": { "type": "string" },
@@ -14,15 +14,24 @@
         "losses": { "type": "integer" },
         "referralsCountL1": { "type": "integer" },
         "referralsCountL2": { "type": "integer" },
+        "vViral": { "type": "integer", "description": "Internal vVIRAL reward balance." },
+        "streak": { "type": "integer" },
+        "xp": { "type": "integer" },
+        "lastLoginDate": { "type": "string" },
+        "missions": {
+          "type": "object",
+          "description": "Active and completed daily missions progress status."
+        },
         "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["telegramId", "username", "gamesPlayed", "wins", "losses"]
+      "required": ["telegramId", "username", "gamesPlayed", "wins", "losses", "vViral"]
     },
     "Game": {
-      "title": "PvP Game",
-      "description": "Represents an online PvP match or a match against the system bot.",
+      "title": "VIRAL Arena Match Session",
+      "description": "Represents an online free or staked duel in the VIRAL ARENA.",
       "type": "object",
       "properties": {
+        "id": { "type": "string" },
         "player1Id": { "type": "string" },
         "player1Username": { "type": "string" },
         "player2Id": { "type": "string" },
@@ -31,20 +40,44 @@
         "player2Move": { "type": "string" },
         "winnerId": { "type": "string" },
         "status": { "type": "string" },
+        "mode": { "type": "string", "description": "'free' | 'stake' | 'friend' | 'community'" },
+        "stake": { "type": "integer", "description": "The amount of vVIRAL staked." },
+        "forfeitedBy": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["player1Id", "player1Username", "player2Id", "player2Username", "player1Move", "player2Move", "winnerId", "status"]
+    },
+    "Transaction": {
+      "title": "vVIRAL Ledger Transaction",
+      "description": "Immutable ledger record for audit compliance.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "type": { "type": "string", "description": "'credit' | 'debit'" },
+        "amount": { "type": "integer" },
+        "prevBalance": { "type": "integer" },
+        "newBalance": { "type": "integer" },
+        "source": { "type": "string" },
+        "referenceId": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "idempotencyKey": { "type": "string" }
+      }
     }
   },
   "firestore": {
     "/users/{userId}": {
       "schema": "User",
-      "description": "User records for TMA."
+      "description": "User profiles and wallet/vVIRAL balance."
     },
     "/games/{gameId}": {
       "schema": "Game",
-      "description": "All active and completed matches."
+      "description": "VIRAL Duel matching sessions."
+    },
+    "/transactions/{txId}": {
+      "schema": "Transaction",
+      "description": "Ledger entries tracking internal economy flows."
     }
   }
 }
