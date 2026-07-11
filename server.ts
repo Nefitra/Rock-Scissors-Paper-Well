@@ -13,7 +13,8 @@ import {
   updateDoc, 
   query, 
   where, 
-  limit 
+  limit,
+  memoryLocalCache
 } from 'firebase/firestore';
 import crypto from 'crypto';
 
@@ -34,7 +35,8 @@ const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 
 const firebaseApp = initializeApp(firebaseConfig);
 const firestoreInstance = initializeFirestore(firebaseApp, {
-  experimentalForceLongPolling: true
+  experimentalForceLongPolling: true,
+  localCache: memoryLocalCache()
 }, firebaseConfig.firestoreDatabaseId);
 
 // Simple compatibility shim so we do not have to rewrite all DB queries across the codebase:
