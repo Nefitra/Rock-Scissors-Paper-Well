@@ -622,6 +622,20 @@ function GameAppInner() {
   };
 
   const handleCreateDepositIntent = async () => {
+    if (!wallet || !walletAddress) {
+      setDepositVerifyError("Please connect your wallet first.");
+      return;
+    }
+    const targetChainId = tonConfig?.network === 'mainnet' ? "-239" : "-3";
+    if (wallet.account.chain !== targetChainId) {
+      if (tonConfig?.network === 'mainnet') {
+        setDepositVerifyError("Please switch your wallet to TON Mainnet.");
+      } else {
+        setDepositVerifyError("Please switch your wallet to TON Testnet.");
+      }
+      return;
+    }
+
     setDepositLoading(true);
     setDepositVerifyError(null);
     try {
@@ -633,11 +647,20 @@ function GameAppInner() {
       const res = await fetch('/api/ton/deposit/intent', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ amount: parseFloat(depositAmount) })
+        body: JSON.stringify({ 
+          amount: parseFloat(depositAmount),
+          walletAddress: walletAddress
+        })
       });
       const data = await res.json();
       if (data.error) {
         setDepositVerifyError(data.error);
+      } else if (data.success && data.depositId) {
+        setDepositPendingId(data.depositId);
+        setDepositAmountNano(data.amountNano);
+        setDepositMessage(data.payload);
+        setDepositTreasuryAddress(data.treasuryAddress);
+        setDepositPendingStatus('awaiting_payment');
       } else if (data.intent) {
         setDepositPendingId(data.intent.id);
         setDepositAmountNano(data.intent.amountNano);
@@ -665,6 +688,7 @@ function GameAppInner() {
         method: 'POST',
         headers,
         body: JSON.stringify({
+          depositId: depositPendingId,
           intentId: depositPendingId,
           simulateOnChain: simulateOnChain
         })
@@ -672,7 +696,11 @@ function GameAppInner() {
       const data = await res.json();
       if (data.error) {
         setDepositVerifyError(data.error);
-      } else if (data.status === 'completed') {
+      } else if (data.success && data.status === 'confirmed') {
+        setDepositPendingStatus('completed');
+        playRewardXPSound();
+        syncProfile();
+      } else if (data.status === 'completed' || data.status === 'confirmed') {
         setDepositPendingStatus('completed');
         playRewardXPSound();
         syncProfile();
@@ -687,6 +715,20 @@ function GameAppInner() {
   };
 
   const handleRequestWithdrawal = async () => {
+    if (!wallet || !walletAddress) {
+      setWithdrawError("Please connect your wallet first.");
+      return;
+    }
+    const targetChainId = tonConfig?.network === 'mainnet' ? "-239" : "-3";
+    if (wallet.account.chain !== targetChainId) {
+      if (tonConfig?.network === 'mainnet') {
+        setWithdrawError("Please switch your wallet to TON Mainnet.");
+      } else {
+        setWithdrawError("Please switch your wallet to TON Testnet.");
+      }
+      return;
+    }
+
     setWithdrawLoading(true);
     setWithdrawError(null);
     setWithdrawSuccess(null);
@@ -4701,6 +4743,15 @@ function GameAppInner() {
                       onClick={async () => {
                         playClickSound();
                         setDepositVerifyError(null);
+                        const targetChainId = tonConfig?.network === 'mainnet' ? "-239" : "-3";
+                        if (!wallet || wallet.account.chain !== targetChainId) {
+                          if (tonConfig?.network === 'mainnet') {
+                            setDepositVerifyError("Please switch your wallet to TON Mainnet.");
+                          } else {
+                            setDepositVerifyError("Please switch your wallet to TON Testnet.");
+                          }
+                          return;
+                        }
                         setDepositLoading(true);
                         try {
                           await tonConnectUI.sendTransaction({

@@ -992,9 +992,15 @@ function getOrCreateTonAccount(userData: any, userId: string) {
   };
 }
 
+function getTonCenterUrl(path: string): string {
+  const host = TON_CONFIG.network === 'mainnet' ? 'toncenter.com' : 'testnet.toncenter.com';
+  return `https://${host}${path}`;
+}
+
 async function getOnChainBalance(address: string): Promise<number> {
   try {
-    const res = await fetch(`https://testnet.toncenter.com/api/v2/getAddressInformation?address=${address}`);
+    const url = getTonCenterUrl(`/api/v2/getAddressInformation?address=${address}`);
+    const res = await fetch(url);
     const data = await res.json();
     if (data.ok && data.result) {
       return Number(data.result.balance || 0);
@@ -1657,11 +1663,27 @@ async function runReconciliation() {
 
 // Network guard middleware helper
 function checkTonNetwork(req: any, res: any, next: any) {
-  if (TON_CONFIG.network !== 'testnet') {
-    return res.status(403).json({ error: "Only TON Testnet is authorized in this deployment phase." });
+  const net = TON_CONFIG.network;
+  if (net !== 'mainnet' && net !== 'testnet') {
+    return res.status(500).json({ error: "TON network configuration error. Invalid or missing TON_NETWORK variable." });
   }
   next();
 }
+
+// Diagnostic endpoint for TON Configuration
+app.get('/api/ton/config', (req, res) => {
+  const isMainnet = TON_CONFIG.network === 'mainnet';
+  res.json({
+    network: TON_CONFIG.network,
+    chainId: isMainnet ? "-239" : "-3",
+    enabled: true,
+    pauseDeposits: TON_CONFIG.pauseDeposits,
+    pauseGames: TON_CONFIG.pauseGames,
+    pauseWithdrawals: TON_CONFIG.pauseWithdrawals,
+    treasuryConfigured: !!process.env.TON_TREASURY_ADDRESS,
+    hotWalletConfigured: !!process.env.TON_HOT_WALLET_ADDRESS
+  });
+});
 
 // 1. Create Deposit Intent
 app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
@@ -1781,7 +1803,7 @@ app.post('/api/ton/deposit/verify', checkTonNetwork, async (req, res) => {
     let detectedHash = "";
 
     try {
-      const url = `https://testnet.toncenter.com/api/v2/getTransactions?address=${TON_CONFIG.treasuryAddress}&limit=20`;
+      const url = getTonCenterUrl(`/api/v2/getTransactions?address=${TON_CONFIG.treasuryAddress}&limit=20`);
       const tonRes = await fetch(url);
       const tonData = await tonRes.json();
       if (tonData.ok && Array.isArray(tonData.result)) {
@@ -1805,6 +1827,9 @@ app.post('/api/ton/deposit/verify', checkTonNetwork, async (req, res) => {
     }
 
     if (!foundOnChain && simulateOnChain) {
+      if (TON_CONFIG.network === 'mainnet' || process.env.NODE_ENV === 'production') {
+        return res.status(400).json({ error: "Simulation and development helpers are disabled in production Mainnet." });
+      }
       foundOnChain = true;
       detectedHash = crypto.createHash('sha256').update(`sim_${depositId}`).digest('hex');
     }
