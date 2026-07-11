@@ -261,7 +261,7 @@ function GameAppInner() {
   
   // Real or Simulated final credentials (all string ids are normalized case insensitively via sanitizeUserId)
   const rawTgId = isInsideTMA 
-    ? ((window as any).Telegram?.WebApp?.initDataUnsafe?.user?.username || (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || simulatedTgId) 
+    ? (((window as any).Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString()) || (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.username || simulatedTgId) 
     : simulatedTgId;
   const currentTgId = sanitizeUserId(rawTgId);
 
@@ -533,7 +533,7 @@ function GameAppInner() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    let code = params.get('startapp') || params.get('tgWebAppStartParam') || params.get('ref') || (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
+    let code = params.get('startapp') || params.get('tgWebAppStartParam') || params.get('route') || params.get('ref') || (window as any).Telegram?.WebApp?.initDataUnsafe?.start_param || '';
     if (code) {
       const normalizedCode = code.toLowerCase().trim();
       if (normalizedCode === 'arena') {
@@ -953,12 +953,7 @@ function GameAppInner() {
   const getReferralUrl = () => {
     if (globalSettings.botUsername) {
       const cleanBot = globalSettings.botUsername.replace('@', '').trim();
-      const cleanApp = (globalSettings.appName || '').trim();
-      if (cleanApp) {
-        return `https://t.me/${cleanBot}/${cleanApp}?startapp=${currentTgId}`;
-      } else {
-        return `https://t.me/${cleanBot}?start=${currentTgId}`;
-      }
+      return `https://t.me/${cleanBot}?startapp=${currentTgId}`;
     }
     return `${window.location.origin}?startapp=${currentTgId}`;
   };
@@ -1517,7 +1512,7 @@ function GameAppInner() {
                     </div>
                     <div className="min-w-0">
                       <p className="text-[9px] text-[#708499] uppercase tracking-wider font-bold leading-none">Combatant</p>
-                      <h4 className="text-sm font-bold text-white truncate mt-1">@{currentTgId}</h4>
+                      <h4 className="text-sm font-bold text-white truncate mt-1">@{currentUsername || currentTgId}</h4>
                     </div>
                   </div>
                   <div className="text-right">
@@ -2722,7 +2717,7 @@ function GameAppInner() {
                   </div>
                   <div>
                     <p className="font-bold text-base leading-tight text-white flex items-center gap-1.5 break-all">
-                      <span>@{currentTgId}</span>
+                      <span>@{currentUsername || currentTgId}</span>
                       {profile?.streak && profile.streak > 0 && (
                         <span 
                           className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#3390ec]/15 text-[#3390ec] border border-[#3390ec]/20 inline-flex items-center gap-1 animate-pulse"

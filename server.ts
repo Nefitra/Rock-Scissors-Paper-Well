@@ -185,8 +185,8 @@ function getRequestUser(req: express.Request): { userId: string; username?: stri
       const verification = verifyTelegramWebAppData(initDataHeader, botToken);
       if (verification.verified && verification.user) {
         return {
-          userId: sanitizeUserId(String(verification.user.username || verification.user.id)),
-          username: String(verification.user.first_name || verification.user.username || ""),
+          userId: sanitizeUserId(String(verification.user.id)),
+          username: String(verification.user.username || verification.user.first_name || ""),
           isVerified: true
         };
       } else {
@@ -200,8 +200,8 @@ function getRequestUser(req: express.Request): { userId: string; username?: stri
         if (userStr) {
           const user = JSON.parse(userStr);
           return {
-            userId: sanitizeUserId(String(user.username || user.id)),
-            username: String(user.first_name || user.username || ""),
+            userId: sanitizeUserId(String(user.id)),
+            username: String(user.username || user.first_name || ""),
             isVerified: false
           };
         }
@@ -219,6 +219,41 @@ function getRequestUser(req: express.Request): { userId: string; username?: stri
     username: String(requestorUsername),
     isVerified: false
   };
+}
+
+function getLaunchButton(text: string, startappParam: string, isPrivate: boolean) {
+  if (isPrivate) {
+    return {
+      text,
+      web_app: {
+        url: `https://rock-scissors-paper-well-52536426129.us-west1.run.app?startapp=${startappParam}`
+      }
+    };
+  } else {
+    return {
+      text,
+      url: `https://t.me/CyberDuellitebot?startapp=${startappParam}`
+    };
+  }
+}
+
+async function sendProfileNotFound(chatId: any, isPrivate: boolean) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const text = `⚠️ *VIRAL Arena profile not found.*\n\nOpen the game once to create your profile and receive the one-time *+500 vVIRAL* welcome reward.`;
+  const button = getLaunchButton("⚔️ OPEN VIRAL ARENA", "arena", isPrivate);
+
+  await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text: text,
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [[button]]
+      }
+    })
+  });
 }
 
 // Masks opponent move from client until game is completed to prevent cheating
@@ -490,7 +525,23 @@ app.post('/api/user/sync', async (req, res) => {
         upData.username = username;
         updated = true;
       }
-      if (currentData.vViral === undefined) {
+      if (!currentData.welcomeRewardClaimed) {
+        try {
+          await adjustUserVViral(
+            targetTgId,
+            ECONOMY_CONFIG.welcomeBonus,
+            'credit',
+            'welcome_bonus',
+            'welcome',
+            `welcome_${targetTgId}`
+          );
+        } catch (e) {
+          // ignore error if already credited or failed
+        }
+        upData.welcomeRewardClaimed = true;
+        upData.vViral = (currentData.vViral !== undefined ? currentData.vViral : 0) + ECONOMY_CONFIG.welcomeBonus;
+        updated = true;
+      } else if (currentData.vViral === undefined) {
         upData.vViral = ECONOMY_CONFIG.welcomeBonus;
         updated = true;
       }
@@ -544,6 +595,7 @@ app.post('/api/user/sync', async (req, res) => {
       streak: 0,
       xp: 0,
       vViral: ECONOMY_CONFIG.welcomeBonus,
+      welcomeRewardClaimed: true,
       missions: {},
       lastLoginDate: "",
       createdAt: new Date().toISOString()
@@ -981,7 +1033,7 @@ app.post('/api/matchmaking/join', async (req, res) => {
               reply_markup: {
                 inline_keyboard: [
                   [
-                    { "text": "⚔️ LAUNCH ARENA", "url": `https://t.me/${botToken ? 'CyberDuellitebot' : 'play'}/play?startapp=arena` }
+                    { "text": "⚔️ LAUNCH ARENA", "url": "https://t.me/CyberDuellitebot?startapp=arena" }
                   ]
                 ]
               }
@@ -2131,12 +2183,10 @@ async function handleTelegramUpdate(update: any) {
 
         // Edit group message to announce active match
         if (cq.message) {
-          const fStake = checkStake > 0 ? `${checkStake} vVIRAL` : "Free Match";
-          const editMsgText = `⚔️ *DUEL MATCHED!*\n\n` +
-                              `👤 *Host:* @${gd.player1Username || 'user'}\n` +
-                              `👤 *Opponent:* @${cqUsername}\n` +
-                              `💰 *Stake:* ${fStake}\n` +
-                              `⚡ *Status:* Match is live! Launch the Arena to play your moves!`;
+          const editMsgText = `⚔️ *DUEL ACCEPTED*\n\n` +
+                              `@${gd.player1Username || 'user'}\n` +
+                              `VS\n` +
+                              `@${cqUsername}`;
 
           await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
             method: 'POST',
@@ -2149,7 +2199,7 @@ async function handleTelegramUpdate(update: any) {
               reply_markup: {
                 inline_keyboard: [
                   [
-                    { "text": "⚔️ LAUNCH ARENA", "url": `https://t.me/CyberDuellitebot/play?startapp=arena` }
+                    { "text": "⚔️ ENTER BATTLE", "url": `https://t.me/CyberDuellitebot?startapp=duel_${challengeId}` }
                   ]
                 ]
               }
@@ -2183,13 +2233,9 @@ async function handleTelegramUpdate(update: any) {
 
   const text = message.text.trim();
   const chatId = message.chat.id;
+  const chatType = message.chat.type;
+  const isPrivateChat = chatType === 'private';
   const user = message.from;
-  if (!user) return;
-
-  const username = user.username || `user_${user.id}`;
-  const tgId = String(user.id);
-
-  console.log(`[Telegram Message] Chat ID: ${chatId}, User ID: ${tgId}, Username: @${username}, Text: "${text}"`);
 
   // Command parser
   if (text.startsWith('/')) {
@@ -2201,6 +2247,24 @@ async function handleTelegramUpdate(update: any) {
 
     // 11. Structured logging for parsed command
     console.log(`TELEGRAM_COMMAND_PARSED\ncommand: ${command}`);
+
+    // Detect if anonymous/invalid personal account (on personal commands)
+    const personalCommands = ['/balance', '/myrank', '/missions', '/duel', '/challenge'];
+    const isAnonymous = !user || !user.id || String(user.id) === "1087968824" || user.username?.toLowerCase() === "groupanonymousbot" || !!message.sender_chat;
+
+    if (isAnonymous && personalCommands.includes(command)) {
+      const replyText = `⚠️ *Personal account required*\n\nPlease send this command from your personal Telegram account, not anonymously or on behalf of the group.`;
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: replyText,
+          parse_mode: "Markdown"
+        })
+      });
+      return;
+    }
 
     // EXPLICIT BYPASS HANDLERS FOR PING AND ARENA - NO FIRESTORE AND NO RESTRICTIONS
     if (command === '/ping' || command === '/arena') {
@@ -2232,7 +2296,7 @@ async function handleTelegramUpdate(update: any) {
               reply_markup: {
                 inline_keyboard: [
                   [
-                    { "text": "⚔️ PLAY VIRAL ARENA", "url": "https://t.me/CyberDuellitebot/play?startapp=arena" }
+                    getLaunchButton("⚔️ PLAY VIRAL ARENA", "arena", isPrivateChat)
                   ]
                 ]
               }
@@ -2251,6 +2315,13 @@ async function handleTelegramUpdate(update: any) {
       return;
     }
 
+    if (!user) return;
+
+    const username = user.username || `user_${user.id}`;
+    const tgId = String(user.id);
+
+    console.log(`[Telegram Message] Chat ID: ${chatId}, User ID: ${tgId}, Username: @${username}, Text: "${text}"`);
+
     // Implement absolute anti-spam (3 second command cooldown)
     const now = Date.now();
     const lastTime = userCooldowns.get(tgId) || 0;
@@ -2261,7 +2332,6 @@ async function handleTelegramUpdate(update: any) {
     userCooldowns.set(tgId, now);
 
     // Check group access restrictions (Requirement 10)
-    const chatType = message.chat.type;
     const isGroup = chatType === 'group' || chatType === 'supergroup';
     const chatUsername = message.chat.username || "";
 
@@ -2296,7 +2366,6 @@ async function handleTelegramUpdate(update: any) {
       }
     }
 
-    const isPrivateChat = chatType === 'private';
     const isAuthorizedChat = isPrivateChat || isOfficialGroup;
 
     const isAdminUser = ADMIN_TELEGRAM_IDS.includes(String(tgId)) || ADMIN_TELEGRAM_IDS.includes(username.toLowerCase());
@@ -2389,12 +2458,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                { 
-                  "text": "⚔️ OPEN VIRAL ARENA", 
-                  "web_app": { 
-                    "url": `https://t.me/CyberDuellitebot/play?startapp=${startParam || 'arena'}` 
-                  } 
-                }
+                getLaunchButton("⚔️ OPEN VIRAL ARENA", startParam || 'arena', isPrivateChat)
               ]
             ]
           }
@@ -2419,7 +2483,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                { "text": "⚔️ PLAY VIRAL ARENA", "url": "https://t.me/CyberDuellitebot/play?startapp=arena" }
+                getLaunchButton("⚔️ PLAY VIRAL ARENA", "arena", isPrivateChat)
               ]
             ]
           }
@@ -2466,7 +2530,7 @@ async function handleTelegramUpdate(update: any) {
             reply_markup: {
               inline_keyboard: [
                 [
-                  { "text": "👤 OPEN PROFILE", "url": "https://t.me/CyberDuellitebot/play?startapp=profile" }
+                  getLaunchButton("👤 OPEN PROFILE", "profile", isPrivateChat)
                 ]
               ]
             }
@@ -2474,29 +2538,17 @@ async function handleTelegramUpdate(update: any) {
         });
         return;
       } else {
-        replyText = `⚠️ *Account not found!*\n\nPlease open VIRAL Arena first to initialize your profile and start duelling!`;
-        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: replyText,
-            parse_mode: "Markdown",
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { "text": "⚔️ OPEN VIRAL ARENA", "url": "https://t.me/CyberDuellitebot/play?startapp=arena" }
-                ]
-              ]
-            }
-          })
-        });
+        await sendProfileNotFound(chatId, isPrivateChat);
         return;
       }
     } 
     else if (command === '/balance') {
       const uSnap = await db.collection('users').doc(tgId).get();
-      const balance = uSnap.exists ? (uSnap.data()?.vViral !== undefined ? uSnap.data()?.vViral : 500) : 0;
+      if (!uSnap.exists) {
+        await sendProfileNotFound(chatId, isPrivateChat);
+        return;
+      }
+      const balance = uSnap.data()?.vViral !== undefined ? uSnap.data()?.vViral : 500;
       replyText = `💎 *vVIRAL BALANCE*\n\nYour balance:\n\n*${balance.toLocaleString()} vVIRAL*`;
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
@@ -2508,7 +2560,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                { "text": "⚔️ Earn more in VIRAL Arena", "url": "https://t.me/CyberDuellitebot/play?startapp=arena" }
+                getLaunchButton("⚔️ Earn more in VIRAL Arena", "arena", isPrivateChat)
               ]
             ]
           }
@@ -2557,7 +2609,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                { "text": "🏆 FULL LEADERBOARD", "url": "https://t.me/CyberDuellitebot/play?startapp=leaderboard" }
+                getLaunchButton("🏆 FULL LEADERBOARD", "leaderboard", isPrivateChat)
               ]
             ]
           }
@@ -2577,7 +2629,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                { "text": "OPEN MISSIONS", "url": "https://t.me/CyberDuellitebot/play?startapp=missions" }
+                getLaunchButton("OPEN MISSIONS", "missions", isPrivateChat)
               ]
             ]
           }
@@ -2628,16 +2680,7 @@ async function handleTelegramUpdate(update: any) {
       // Check user profile exists
       const uSnap = await db.collection('users').doc(tgId).get();
       if (!uSnap.exists) {
-        replyText = `⚠️ *Account not found!* Please open [Launch VIRAL Arena App](https://t.me/CyberDuellitebot/play?startapp=arena) once to initialize your profile before creating a duel.`;
-        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: replyText,
-            parse_mode: "Markdown"
-          })
-        });
+        await sendProfileNotFound(chatId, isPrivateChat);
         return;
       }
 
@@ -2735,16 +2778,7 @@ async function handleTelegramUpdate(update: any) {
       // Check user profile exists
       const uSnap = await db.collection('users').doc(tgId).get();
       if (!uSnap.exists) {
-        replyText = `⚠️ *Account not found!* Please open [Launch VIRAL Arena App](https://t.me/CyberDuellitebot/play?startapp=arena) once to initialize your profile before creating a challenge.`;
-        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: replyText,
-            parse_mode: "Markdown"
-          })
-        });
+        await sendProfileNotFound(chatId, isPrivateChat);
         return;
       }
 
@@ -2781,7 +2815,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                { "text": "📨 SHARE CHALLENGE", "url": `https://t.me/CyberDuellitebot/play?startapp=duel_${gameId}` }
+                { "text": "📨 SHARE CHALLENGE", "url": `https://t.me/CyberDuellitebot?startapp=duel_${gameId}` }
               ]
             ]
           }
@@ -2923,7 +2957,7 @@ async function startTelegramBot() {
           type: "web_app",
           text: "⚔️ PLAY ARENA",
           web_app: {
-            url: "https://t.me/CyberDuellitebot/play?startapp=arena"
+            url: "https://rock-scissors-paper-well-52536426129.us-west1.run.app?startapp=arena"
           }
         }
       })
