@@ -14,7 +14,8 @@ import {
   query, 
   where, 
   limit,
-  memoryLocalCache
+  memoryLocalCache,
+  runTransaction
 } from 'firebase/firestore';
 import crypto from 'crypto';
 
@@ -411,7 +412,6 @@ const DUEL_CONFIG = {
 async function reserveUserStake(userId: string, stake: number, challengeId: string, idempotencyKey: string) {
   if (stake <= 0) return { success: true };
   const userRefReal = doc(firestoreInstance, 'users', userId);
-  const { runTransaction } = await import('firebase/firestore');
   return await runTransaction(firestoreInstance, async (transaction) => {
     const uSnap = await transaction.get(userRefReal);
     if (!uSnap.exists()) {
@@ -463,7 +463,6 @@ async function reserveUserStake(userId: string, stake: number, challengeId: stri
 async function releaseUserStake(userId: string, stake: number, challengeId: string, idempotencyKey: string) {
   if (stake <= 0) return { success: true };
   const userRefReal = doc(firestoreInstance, 'users', userId);
-  const { runTransaction } = await import('firebase/firestore');
   return await runTransaction(firestoreInstance, async (transaction) => {
     const uSnap = await transaction.get(userRefReal);
     if (!uSnap.exists()) {
@@ -518,7 +517,6 @@ async function settleChallengeReservations(challengeId: string, winnerId: string
 
   if (stake <= 0) return;
 
-  const { runTransaction } = await import('firebase/firestore');
   const p1RefReal = doc(firestoreInstance, 'users', player1Id);
   const p2RefReal = doc(firestoreInstance, 'users', player2Id);
 
@@ -1139,7 +1137,6 @@ app.post('/api/mission/claim', async (req, res) => {
     console.log(`[MISSION_DEFINITION_FOUND] Definition: ${JSON.stringify(config)}`);
 
     const userRefReal = doc(firestoreInstance, 'users', targetUserId);
-    const { runTransaction } = await import('firebase/firestore');
 
     const result = await runTransaction(firestoreInstance, async (transaction) => {
       const userSnap = await transaction.get(userRefReal);
@@ -1701,7 +1698,6 @@ app.post('/api/matchmaking/join', async (req, res) => {
 
       try {
         console.log(`[MATCHMAKING_TRANSACTION_STARTED] Pairing ${targetUserId} and ${opponentId}`);
-        const { runTransaction } = await import('firebase/firestore');
         const selfQueueRefReal = doc(firestoreInstance, 'matchmakingQueue', targetUserId);
         const oppQueueRefReal = doc(firestoreInstance, 'matchmakingQueue', opponentId);
         
@@ -2937,7 +2933,6 @@ async function handleTelegramUpdate(update: any) {
         }
 
         // Atomic transaction to mark as cancelled
-        const { runTransaction } = await import('firebase/firestore');
         const chalRefReal = doc(firestoreInstance, 'challenges', challengeId);
         await runTransaction(firestoreInstance, async (transaction) => {
           const freshSnap = await transaction.get(chalRefReal);
@@ -3141,7 +3136,6 @@ async function handleTelegramUpdate(update: any) {
 
           // Run transaction to transition the challenge status and assign the match ID
           const chalRefReal = doc(firestoreInstance, 'challenges', challengeId);
-          const { runTransaction } = await import('firebase/firestore');
 
           const txResult = await runTransaction(firestoreInstance, async (transaction) => {
             const freshSnap = await transaction.get(chalRefReal);
@@ -4303,7 +4297,6 @@ async function startTelegramBot() {
         const isExpired = chalData.expiresAt && new Date(chalData.expiresAt).getTime() < Date.now();
         if (isExpired) {
           try {
-            const { runTransaction } = await import('firebase/firestore');
             const chalRefReal = doc(firestoreInstance, 'challenges', chDoc.id);
             await runTransaction(firestoreInstance, async (transaction) => {
               const freshSnap = await transaction.get(chalRefReal);
