@@ -637,14 +637,10 @@ async function adjustUserVViral(
 
 // Daily Mission progress helper
 const MISSION_CONFIGS: Record<string, { maxProgress: number; reward: number; title: string; desc: string }> = {
-  play_1_duel: { maxProgress: 1, reward: 50, title: "Play 1 Duel", desc: "Complete 1 match in any arena mode" },
-  play_3_duels: { maxProgress: 3, reward: 100, title: "Play 3 Duels", desc: "Complete 3 matches in any arena mode" },
-  win_1_duel: { maxProgress: 1, reward: 50, title: "Win 1 Duel", desc: "Defeat any opponent in the arena" },
-  win_3_duels: { maxProgress: 3, reward: 150, title: "Win 3 Duels", desc: "Settle 3 victories in the arena" },
-  challenge_friend: { maxProgress: 1, reward: 50, title: "Challenge a Friend", desc: "Initiate or accept a Friend Duel" },
-  share_result: { maxProgress: 1, reward: 50, title: "Share Duel Result", desc: "Broadcast your match results to Telegram" },
-  visit_viral: { maxProgress: 1, reward: 30, title: "Visit VIRAL App", desc: "Explore the VIRAL ecosystem interface" },
-  join_community: { maxProgress: 1, reward: 30, title: "Join VIRAL Community", desc: "Join our official chat group" }
+  first_blood: { maxProgress: 1, reward: 100, title: "First Blood", desc: "Engage in at least 1 match (PvP or Bot) in the Arena." },
+  win_3_games: { maxProgress: 3, reward: 300, title: "Champion Duelist", desc: "Claim victory in 3 matches in the Arena." },
+  invite_friend: { maxProgress: 1, reward: 200, title: "Ecosystem Recruiter", desc: "Invite 1 new combatant using your referral link." },
+  join_chat: { maxProgress: 1, reward: 150, title: "Arena Cadet", desc: "Join the official VIRAL community channel." }
 };
 
 async function updateMissionProgress(userId: string, missionId: string, increment: number) {
@@ -655,23 +651,41 @@ async function updateMissionProgress(userId: string, missionId: string, incremen
     const userData = snap.data() || {};
     const missions = userData.missions || {};
 
-    const config = MISSION_CONFIGS[missionId];
-    if (!config) return;
+    // Map old mission IDs to new canonical ones dynamically
+    const mappedIds = [missionId];
+    if (missionId === 'play_1_duel' || missionId === 'play_3_duels' || missionId === 'play_1_game') {
+      mappedIds.push('first_blood');
+    }
+    if (missionId === 'win_1_duel' || missionId === 'win_3_duels' || missionId === 'win_3_games') {
+      mappedIds.push('win_3_games');
+    }
+    if (missionId === 'join_community' || missionId === 'join_chat') {
+      mappedIds.push('join_chat');
+    }
 
-    const mProgress = missions[missionId] || { progress: 0, completed: false, claimed: false };
-    if (mProgress.claimed) return; // Already claimed, bypass
+    let modified = false;
+    for (const id of mappedIds) {
+      const config = MISSION_CONFIGS[id];
+      if (!config) continue;
 
-    const newProgress = Math.min(config.maxProgress, (mProgress.progress || 0) + increment);
-    const completed = newProgress >= config.maxProgress;
+      const mProgress = missions[id] || { progress: 0, completed: false, claimed: false };
+      if (mProgress.claimed) continue; // Already claimed, bypass
 
-    missions[missionId] = {
-      progress: newProgress,
-      completed,
-      claimed: mProgress.claimed || false,
-      lastUpdated: new Date().toISOString()
-    };
+      const newProgress = Math.min(config.maxProgress, (mProgress.progress || 0) + increment);
+      const completed = newProgress >= config.maxProgress;
 
-    await userRef.update({ missions });
+      missions[id] = {
+        progress: newProgress,
+        completed,
+        claimed: mProgress.claimed || false,
+        lastUpdated: new Date().toISOString()
+      };
+      modified = true;
+    }
+
+    if (modified) {
+      await userRef.update({ missions });
+    }
   } catch (err) {
     console.error(`Error updating mission progress for user ${userId}:`, err);
   }
@@ -1095,67 +1109,206 @@ app.post('/api/user/reward-wins', async (req, res) => {
 
 // 3c. Daily Missions Claim endpoint
 app.post('/api/mission/claim', async (req, res) => {
+  let targetUserId = "";
+  let missionId = "";
   try {
-    const verifiedUser = getRequestUser(req);
-    const { userId, missionId } = req.body;
-    let targetUserId = userId || verifiedUser.userId;
+    let verifiedUser;
+    try {
+      verifiedUser = getValidatedTelegramUser(req);
+    } catch (authErr: any) {
+      console.warn(`[MISSION_CLAIM_ERROR] Unauthorized: ${authErr.message}`);
+      return res.status(401).json({ error: authErr.message || "Unauthorized" });
+    }
+
+    const { userId, missionId: bodyMissionId } = req.body;
+    targetUserId = userId || verifiedUser.userId;
+    missionId = bodyMissionId;
+
     if (!targetUserId) {
+      console.warn("[MISSION_CLAIM_ERROR] Missing userId");
       return res.status(400).json({ error: "userId is required" });
     }
 
-    const userRef = db.collection('users').doc(targetUserId);
-    const snap = await userRef.get();
-    if (!snap.exists) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    const userData = snap.data() || {};
-    const missions = userData.missions || {};
-    const mProgress = missions[missionId];
-
-    if (!mProgress || !mProgress.completed) {
-      return res.status(400).json({ error: "Mission is not completed or not found" });
-    }
-
-    if (mProgress.claimed) {
-      return res.status(400).json({ error: "Mission reward already claimed" });
-    }
+    console.log(`[MISSION_CLAIM_REQUEST] User: ${targetUserId}, Mission: ${missionId}`);
 
     const config = MISSION_CONFIGS[missionId];
     if (!config) {
-      return res.status(400).json({ error: "Invalid mission configuration" });
+      console.warn(`[MISSION_CLAIM_ERROR] Config not found for mission: ${missionId}`);
+      return res.status(400).json({ error: "Mission unavailable" });
     }
+    console.log(`[MISSION_DEFINITION_FOUND] Definition: ${JSON.stringify(config)}`);
 
-    // Update status to claimed
-    missions[missionId] = {
-      ...mProgress,
-      claimed: true
-    };
+    const userRefReal = doc(firestoreInstance, 'users', targetUserId);
+    const { runTransaction } = await import('firebase/firestore');
 
-    await userRef.update({ missions });
+    const result = await runTransaction(firestoreInstance, async (transaction) => {
+      const userSnap = await transaction.get(userRefReal);
+      if (!userSnap.exists()) {
+        throw new Error("user_not_found");
+      }
 
-    // Credit reward
-    const result = await adjustUserVViral(
-      targetUserId,
-      config.reward,
-      'credit',
-      `mission_${missionId}`,
-      missionId,
-      `idempotency_${targetUserId}_claim_${missionId}`
-    );
+      const userData = userSnap.data() || {};
+      const missions = userData.missions || {};
+      const mProgress = missions[missionId] || { progress: 0, completed: false, claimed: false };
 
-    // Complete "Complete Daily Check-In" mission itself on claiming any mission or checkin
-    await updateMissionProgress(targetUserId, 'visit_viral', 1);
+      if (mProgress.claimed) {
+        throw new Error("already_claimed");
+      }
+
+      // Calculate progress server-side using both recorded progress and authoritative user stats
+      let calculatedProgress = mProgress.progress || 0;
+      if (missionId === 'first_blood') {
+        calculatedProgress = Math.max(calculatedProgress, userData.gamesPlayed || 0);
+      } else if (missionId === 'win_3_games') {
+        calculatedProgress = Math.max(calculatedProgress, userData.wins || 0);
+      } else if (missionId === 'invite_friend') {
+        calculatedProgress = Math.max(calculatedProgress, userData.referralsCountL1 || 0);
+      } else if (missionId === 'join_chat') {
+        calculatedProgress = Math.max(calculatedProgress, mProgress.progress || 0);
+      }
+
+      const isCompleted = calculatedProgress >= config.maxProgress;
+      console.log(`[MISSION_PROGRESS_EVALUATED] User: ${targetUserId}, Mission: ${missionId}, Stored Progress: ${mProgress.progress}, Stats Progress: ${calculatedProgress}, Completed: ${isCompleted}`);
+
+      if (!isCompleted) {
+        throw new Error(`incomplete_${calculatedProgress}_${config.maxProgress}`);
+      }
+
+      // Mark as completed and claimed
+      missions[missionId] = {
+        progress: Math.max(calculatedProgress, config.maxProgress),
+        completed: true,
+        claimed: true,
+        lastUpdated: new Date().toISOString()
+      };
+
+      const currentBalance = userData.vViral !== undefined ? userData.vViral : 0;
+      const newBalance = currentBalance + config.reward;
+
+      // Update user document atomically
+      transaction.update(userRefReal, {
+        vViral: newBalance,
+        missions
+      });
+
+      // Write unique ledger entry to prevent double-claiming
+      const txId = `claim_${targetUserId}_${missionId}`;
+      const txRefReal = doc(firestoreInstance, 'transactions', txId);
+      transaction.set(txRefReal, {
+        id: txId,
+        userId: targetUserId,
+        amount: config.reward,
+        type: 'credit',
+        source: 'mission_reward',
+        referenceId: missionId,
+        idempotencyKey: `idempotency_${targetUserId}_claim_${missionId}`,
+        createdAt: new Date().toISOString()
+      });
+
+      console.log(`[MISSION_REWARD_CREDITED] User: ${targetUserId} successfully claimed ${missionId}. Reward: ${config.reward}. New Balance: ${newBalance}`);
+
+      return {
+        newBalance,
+        missions
+      };
+    });
 
     res.json({
       success: true,
       vViral: result.newBalance,
       reward: config.reward,
-      missions
+      missions: result.missions
     });
+
   } catch (error: any) {
-    console.error("Claim mission error:", error);
-    res.status(500).json({ error: error.message });
+    if (error.message === "user_not_found") {
+      console.error(`[MISSION_CLAIM_ERROR] User profile not found for ${targetUserId}`);
+      return res.status(404).json({ error: "User profile not found" });
+    }
+    if (error.message === "already_claimed") {
+      console.warn(`[MISSION_ALREADY_CLAIMED] User: ${targetUserId}, Mission: ${missionId} already claimed`);
+      return res.status(400).json({ error: "Mission reward already claimed" });
+    }
+    if (error.message.startsWith("incomplete_")) {
+      const parts = error.message.split("_");
+      console.warn(`[MISSION_CLAIM_ERROR] Mission ${missionId} incomplete for user ${targetUserId}: ${parts[1]}/${parts[2]}`);
+      return res.status(400).json({ error: "Mission is not completed or not found", details: `Progress: ${parts[1]} / ${parts[2]}` });
+    }
+    console.error(`[MISSION_CLAIM_ERROR] Claim failed for ${targetUserId} on ${missionId}:`, error);
+    res.status(500).json({ error: error.message || "Claim failed" });
+  }
+});
+
+// 3cc. Telegram Community Chat membership verification endpoint
+app.post('/api/missions/verify-community-membership', async (req, res) => {
+  let targetUserId = "";
+  try {
+    let verifiedUser;
+    try {
+      verifiedUser = getValidatedTelegramUser(req);
+    } catch (authErr: any) {
+      console.warn(`[COMMUNITY_VERIFY_ERROR] Unauthorized: ${authErr.message}`);
+      return res.status(401).json({ error: authErr.message || "Unauthorized" });
+    }
+
+    targetUserId = verifiedUser.userId;
+    console.log(`[COMMUNITY_VERIFY_REQUEST] User: ${targetUserId} requesting community verification.`);
+
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
+      console.error("[COMMUNITY_VERIFY_ERROR] Bot token not configured");
+      return res.status(500).json({ error: "Bot token not configured on server" });
+    }
+
+    const rawChatId = process.env.VIRAL_COMMUNITY_CHAT_ID || "-1002237071649";
+    const chatId = rawChatId.startsWith('-') ? Number(rawChatId) : rawChatId;
+
+    const telegramUrl = `https://api.telegram.org/bot${botToken}/getChatMember`;
+    const tgRes = await fetch(telegramUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        user_id: Number(targetUserId)
+      })
+    });
+
+    const tgData: any = await tgRes.json();
+    console.log(`[COMMUNITY_CHAT_MEMBER_RESULT] Telegram API response for user ${targetUserId}:`, JSON.stringify(tgData));
+
+    if (!tgData.ok) {
+      console.error(`[COMMUNITY_VERIFY_ERROR] Telegram API returned error:`, tgData.description);
+      return res.status(400).json({ error: "Membership verification failed. Please ensure you have joined the channel.", details: tgData.description });
+    }
+
+    const status = tgData.result?.status;
+    const validStatuses = ['member', 'administrator', 'creator', 'restricted'];
+
+    if (validStatuses.includes(status)) {
+      await updateMissionProgress(targetUserId, 'join_chat', 1);
+
+      const userRef = db.collection('users').doc(targetUserId);
+      const snap = await userRef.get();
+      const userData = snap.data() || {};
+
+      console.log(`[COMMUNITY_MISSION_COMPLETED] User: ${targetUserId} verified successfully. Status: ${status}`);
+
+      return res.json({
+        success: true,
+        status,
+        missions: userData.missions || {}
+      });
+    } else {
+      console.warn(`[COMMUNITY_VERIFY_ERROR] User: ${targetUserId} is not in community chat. Status: ${status}`);
+      return res.status(400).json({
+        error: "Membership not detected yet",
+        details: "Join @VIRAL_App_Community, return to VIRAL Arena and tap Verify Membership."
+      });
+    }
+
+  } catch (error: any) {
+    console.error("[COMMUNITY_VERIFY_ERROR] Chat verification exception:", error);
+    res.status(500).json({ error: error.message || "Verification failed" });
   }
 });
 
@@ -1187,25 +1340,27 @@ app.post('/api/mission/trigger', async (req, res) => {
 let failedTransactionsCount = 0;
 
 // Helper to get verified Telegram user id & username or reject with error
-function getValidatedTelegramUser(req: express.Request): { userId: string; username: string } {
+function getValidatedTelegramUser(req: express.Request): { userId: string; username: string; identitySource: string; telegramAuthValidated: boolean } {
   const initDataHeader = req.headers['x-telegram-init-data'];
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
   if (botToken && initDataHeader && typeof initDataHeader === 'string') {
     const verification = verifyTelegramWebAppData(initDataHeader, botToken);
-    if (verification.verified && verification.user) {
+    if (verification && verification.verified && verification.user) {
       return {
         userId: sanitizeUserId(String(verification.user.id)),
-        username: String(verification.user.username || verification.user.first_name || `User_${verification.user.id}`)
+        username: String(verification.user.username || verification.user.first_name || `User_${verification.user.id}`),
+        identitySource: "telegram",
+        telegramAuthValidated: true
       };
     } else {
       console.warn("[MATCHMAKING_WARNING] Telegram cryptographic verification failed.");
-      if (process.env.NODE_ENV === 'production') {
-        throw new Error("unauthorized_invalid_telegram_signature");
+      if (process.env.NODE_ENV === 'production' || !!process.env.K_REVISION) {
+        throw new Error("⚠️ Telegram session required\n\nPlease reopen VIRAL Arena through @CyberDuellitebot.");
       }
     }
-  } else if (process.env.NODE_ENV === 'production') {
-    throw new Error("unauthorized_missing_init_data");
+  } else if (process.env.NODE_ENV === 'production' || !!process.env.K_REVISION) {
+    throw new Error("⚠️ Telegram session required\n\nPlease reopen VIRAL Arena through @CyberDuellitebot.");
   }
 
   // Falls back graciously ONLY for development, testing, or sandbox environments
@@ -1215,7 +1370,9 @@ function getValidatedTelegramUser(req: express.Request): { userId: string; usern
   }
   return {
     userId: fallbackUser.userId,
-    username: fallbackUser.username || `User_${fallbackUser.userId}`
+    username: fallbackUser.username || `User_${fallbackUser.userId}`,
+    identitySource: "dev_fallback",
+    telegramAuthValidated: false
   };
 }
 
@@ -1229,15 +1386,27 @@ app.post('/api/matchmaking/join', async (req, res) => {
       validatedUser = getValidatedTelegramUser(req);
     } catch (authErr: any) {
       console.warn("[MATCHMAKING_ERROR] Matchmaking Join Unauthorized:", authErr.message);
-      return res.status(401).json({ error: "Invalid or missing Telegram authentication. Join matchmaking rejected." });
+      return res.status(401).json({ error: authErr.message || "Invalid or missing Telegram authentication. Join matchmaking rejected." });
     }
 
     targetUserId = validatedUser.userId;
     const targetUsername = validatedUser.username;
 
+    // Log the validated Telegram identity
+    const sessionId = req.headers['x-session-id'] || 'no-session';
+    console.log(`[MATCHMAKING_IDENTITY_VALIDATED] {
+      "telegramUserId": "${targetUserId}",
+      "profileDocumentId": "${targetUserId}",
+      "username": "${targetUsername}",
+      "sessionId": "${sessionId}",
+      "identitySource": "${validatedUser.identitySource}",
+      "telegramAuthValidated": ${validatedUser.telegramAuthValidated},
+      "queueDocumentId": "${targetUserId}"
+    }`);
+
     const { playWithBot, mode, stake, challengeId } = req.body;
 
-    console.log(`[MATCHMAKING_JOIN_REQUEST] User: ${targetUserId} (${targetUsername}), Mode: ${mode}, Stake: ${stake}, Bot: ${playWithBot}, Inst: ${process.env.K_REVISION || 'local_dev'}, Timestamp: ${new Date().toISOString()}`);
+    console.log(`[MATCHMAKING_JOIN] User: ${targetUserId} (${targetUsername}), Mode: ${mode}, Stake: ${stake}, Bot: ${playWithBot}, Inst: ${process.env.K_REVISION || 'local_dev'}, Timestamp: ${new Date().toISOString()}`);
 
     // Direct Challenge Acceptance Flow (Preserved as-is but with secure user identification)
     if (challengeId) {
@@ -1542,6 +1711,10 @@ app.post('/api/matchmaking/join', async (req, res) => {
           if (!oppSnap.exists()) {
             throw new Error("opponent_queue_not_found");
           }
+
+          if (opponentId === targetUserId) {
+            throw new Error("playerA_equals_playerB_self_match");
+          }
           const oppData = oppSnap.data() || {};
           if (oppData.status !== 'waiting') {
             throw new Error("opponent_no_longer_waiting");
@@ -1624,9 +1797,9 @@ app.post('/api/matchmaking/join', async (req, res) => {
           return gameObj;
         });
 
-        console.log(`[MATCHMAKING_TRANSACTION_COMMITTED] User: ${targetUserId} & Opponent: ${opponentId} matched successfully in Game: ${matchResult.id}`);
-        console.log(`[MATCH_CREATED] MatchId: ${matchResult.id}, Player1: ${opponentId}, Player2: ${targetUserId}, Mode: ${targetMode}, Stake: ${targetStake}`);
-        console.log(`[MATCHMAKING_CLIENT_NOTIFIED] User: ${targetUserId}, MatchId: ${matchResult.id}`);
+        console.log(`[MATCHMAKING_OPPONENT_FOUND] User: ${targetUserId} matched with Opponent: ${opponentId}`);
+        console.log(`[MATCHMAKING_MATCH_CREATED] MatchId: ${matchResult.id}, Player 1: ${opponentId}, Player 2: ${targetUserId}, Mode: ${targetMode}, Stake: ${targetStake}`);
+        console.log(`[MATCHMAKING_MATCH_NOTIFIED] Notified MatchId: ${matchResult.id} to User: ${targetUserId}`);
 
         return res.json({ 
           success: true, 
@@ -1773,8 +1946,8 @@ app.get('/api/matchmaking/status', async (req, res) => {
     let validatedUser;
     try {
       validatedUser = getValidatedTelegramUser(req);
-    } catch (authErr) {
-      return res.status(401).json({ error: "Unauthorized. Valid Telegram login required." });
+    } catch (authErr: any) {
+      return res.status(401).json({ error: authErr.message || "Unauthorized. Valid Telegram login required." });
     }
 
     targetUserId = validatedUser.userId;
@@ -1825,15 +1998,34 @@ app.get('/api/matchmaking/status', async (req, res) => {
       }
     }
 
-    res.json({
-      status,
-      queueEntryId: qData.queueEntryId,
-      matchId: qData.matchId,
-      createdAt: qData.createdAt,
-      expiresAt: qData.expiresAt,
+    // Map cancelled status appropriately
+    let displayStatus = status;
+    if (status === 'canceled' || status === 'cancelled') {
+      displayStatus = 'cancelled';
+    }
+
+    const userRef = db.collection('users').doc(targetUserId);
+    const userSnap = await userRef.get();
+    const userData = userSnap.exists ? userSnap.data() : {};
+    const isAdmin = userData?.role === 'admin' || userData?.isAdmin === true || userData?.email === 'beskerboris@gmail.com';
+
+    const responsePayload: any = {
+      status: displayStatus,
+      matchId: qData.matchId || null,
       opponent,
       game
-    });
+    };
+
+    if (isAdmin) {
+      responsePayload.diagnostics = {
+        telegramUserId: targetUserId,
+        queueEntryId: qData.queueEntryId || null,
+        matchId: qData.matchId || null,
+        serverRevision: process.env.K_REVISION || 'local_dev'
+      };
+    }
+
+    res.json(responsePayload);
 
   } catch (error: any) {
     console.error(`[MATCHMAKING_ERROR] Status fetch error for user ${targetUserId}:`, error);

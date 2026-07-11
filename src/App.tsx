@@ -867,6 +867,51 @@ function GameAppInner() {
   // Mission claiming states and helpers
   const [claimingMission, setClaimingMission] = useState<Record<string, boolean>>({});
   const [triggeringMission, setTriggeringMission] = useState<Record<string, boolean>>({});
+  const [hasClickedJoinChat, setHasClickedJoinChat] = useState<boolean>(() => localStorage.getItem('has_clicked_join_chat') === 'true');
+  const [verifyingMembership, setVerifyingMembership] = useState<boolean>(false);
+
+  const handleVerifyMembership = async () => {
+    if (!currentTgId) return;
+    setVerifyingMembership(true);
+    try {
+      const headers: any = { 'Content-Type': 'application/json' };
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+
+      const res = await fetch('/api/missions/verify-community-membership', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ userId: currentTgId })
+      });
+      const data = await res.json();
+      if (data.error) {
+        setErrorMessage(data.error);
+      } else {
+        playNotificationSound();
+        confetti({
+          particleCount: 50,
+          spread: 40,
+          origin: { y: 0.8 }
+        });
+        setProfile(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            missions: data.missions
+          };
+        });
+        setStreakClaimSuccess("Membership verified successfully! Arena Cadet mission completed.");
+        setTimeout(() => setStreakClaimSuccess(null), 4000);
+      }
+    } catch (e) {
+      console.error("Error verifying membership:", e);
+      setErrorMessage("Could not verify membership due to network error.");
+    } finally {
+      setVerifyingMembership(false);
+    }
+  };
 
   const handleClaimMission = async (missionId: string) => {
     if (!currentTgId) return;
@@ -2822,7 +2867,7 @@ function GameAppInner() {
               <div className="space-y-3.5">
                 {[
                   {
-                    id: 'first_game',
+                    id: 'first_blood',
                     title: 'First Blood',
                     description: 'Engage in at least 1 match (PvP or Bot) in the Arena.',
                     target: 1,
@@ -2856,7 +2901,20 @@ function GameAppInner() {
                     reward: 150,
                     icon: '📢',
                     getCurrentProgress: () => (profile?.missions?.['join_chat']?.completed ? 1 : 0),
-                    action: () => handleTriggerMission('join_chat')
+                    action: () => {
+                      if (hasClickedJoinChat) {
+                        handleVerifyMembership();
+                      } else {
+                        // Open Link
+                        if ((window as any).Telegram?.WebApp?.openTelegramLink) {
+                          (window as any).Telegram.WebApp.openTelegramLink('https://t.me/VIRAL_App_Community');
+                        } else {
+                          window.open('https://t.me/VIRAL_App_Community', '_blank');
+                        }
+                        setHasClickedJoinChat(true);
+                        localStorage.setItem('has_clicked_join_chat', 'true');
+                      }
+                    }
                   }
                 ].map((m) => {
                   const mState = profile?.missions?.[m.id] || { progress: 0, completed: false, claimed: false };
@@ -2912,7 +2970,7 @@ function GameAppInner() {
                           </div>
                         </div>
 
-                        <div className="shrink-0">
+                        <div className="shrink-0 flex flex-col items-end gap-1">
                           {isClaimed ? (
                             <span className="px-3 py-1.5 rounded-xl text-[10px] font-black text-slate-500 bg-[#242f3d] border border-transparent block uppercase tracking-wider">
                               Claimed
@@ -2925,14 +2983,40 @@ function GameAppInner() {
                             >
                               {claimingMission[m.id] ? <RefreshCw className="w-3.5 h-3.5 animate-spin mx-auto" /> : "Claim"}
                             </button>
-                          ) : m.action ? (
-                            <button
-                              onClick={() => { playClickSound(); m.action(); }}
-                              disabled={triggeringMission[m.id]}
-                              className="px-4 py-1.5 rounded-xl text-[10px] font-black text-[#3390ec] bg-[#3390ec]/10 border border-[#3390ec]/25 hover:bg-[#3390ec]/20 transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
-                            >
-                              {triggeringMission[m.id] ? <RefreshCw className="w-3.5 h-3.5 animate-spin mx-auto" /> : "Join Chat"}
-                            </button>
+                          ) : m.id === 'join_chat' ? (
+                            <div className="flex flex-col items-center gap-1.5">
+                              {hasClickedJoinChat ? (
+                                <>
+                                  <button
+                                    onClick={() => { playClickSound(); m.action(); }}
+                                    disabled={verifyingMembership}
+                                    className="px-3 py-1.5 rounded-xl text-[10px] font-black text-white bg-[#3390ec] hover:bg-[#2883e0] transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
+                                  >
+                                    {verifyingMembership ? <RefreshCw className="w-3.5 h-3.5 animate-spin mx-auto" /> : "Verify Membership"}
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      playClickSound();
+                                      if ((window as any).Telegram?.WebApp?.openTelegramLink) {
+                                        (window as any).Telegram.WebApp.openTelegramLink('https://t.me/VIRAL_App_Community');
+                                      } else {
+                                        window.open('https://t.me/VIRAL_App_Community', '_blank');
+                                      }
+                                    }}
+                                    className="text-[9px] text-[#3390ec] underline font-bold"
+                                  >
+                                    Re-join group
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => { playClickSound(); m.action(); }}
+                                  className="px-4 py-1.5 rounded-xl text-[10px] font-black text-[#3390ec] bg-[#3390ec]/10 border border-[#3390ec]/25 hover:bg-[#3390ec]/20 transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
+                                >
+                                  Join Chat
+                                </button>
+                              )}
+                            </div>
                           ) : (
                             <button
                               onClick={() => { playClickSound(); setActiveTab('play'); }}
