@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+import { detectLanguage, getTranslation, languageNames } from './lib/i18n';
 import confetti from 'canvas-confetti';
 import { 
   playClickSound, 
@@ -168,6 +169,176 @@ const RANKS: RankConfig[] = [
   }
 ];
 
+const getLocalizedRankName = (name: string, lang: string) => {
+  const mapping: Record<string, Record<string, string>> = {
+    "Bronze Novice": {
+      "en": "Bronze Novice",
+      "zh-CN": "青铜新手",
+      "es": "Novato de Bronce",
+      "ru": "Бронзовый новичок",
+      "de": "Bronze-Novize",
+      "fr": "Novice de Bronze",
+      "pt": "Novato de Bronze",
+      "ja": "ブロンズの初心者",
+      "hi": "कांस्य नौसिखिया",
+      "tr": "Bronz Çaylak",
+      "id": "Pemula Perunggu",
+      "ar": "مبتدئ برونزي"
+    },
+    "Silver Gladiator": {
+      "en": "Silver Gladiator",
+      "zh-CN": "白银角斗士",
+      "es": "Gladiador de Plata",
+      "ru": "Серебряный гладиатор",
+      "de": "Silber-Gladiator",
+      "fr": "Gladiateur d'Argent",
+      "pt": "Gladiador de Prata",
+      "ja": "シルバーグラディエーター",
+      "hi": "रजत योद्धा",
+      "tr": "Gümüş Gladyatör",
+      "id": "Gladiator Perak",
+      "ar": "المبارز الفضي"
+    },
+    "Gold Elite": {
+      "en": "Gold Elite",
+      "zh-CN": "黄金精英",
+      "es": "Élite de Oro",
+      "ru": "Золотая элита",
+      "de": "Gold-Elite",
+      "fr": "Élite d'Or",
+      "pt": "Elite de Ouro",
+      "ja": "ゴールドエリート",
+      "hi": "स्वर्ण विशिष्ट",
+      "tr": "Altın Elit",
+      "id": "Elite Emas",
+      "ar": "النخبة الذهبية"
+    },
+    "Platinum Legend": {
+      "en": "Platinum Legend",
+      "zh-CN": "白金传奇",
+      "es": "Leyenda de Platino",
+      "ru": "Платиновая легенда",
+      "de": "Platin-Legende",
+      "fr": "Légende de Platine",
+      "pt": "Lenda de Platina",
+      "ja": "プラチナレジェンド",
+      "hi": "प्लेटिनम किंवदंती",
+      "tr": "Platin Efsane",
+      "id": "Legenda Platinum",
+      "ar": "الأسطورة البلاتينية"
+    },
+    "RSPW Grand Master": {
+      "en": "RSPW Grand Master",
+      "zh-CN": "RSPW 大师",
+      "es": "Gran Maestro RSPW",
+      "ru": "Гранд-мастер RSPW",
+      "de": "RSPW-Großmeister",
+      "fr": "Grand Maître RSPW",
+      "pt": "Grão-Mestre RSPW",
+      "ja": "RSPWグランドマスター",
+      "hi": "RSPW ग्रैंड मास्टर",
+      "tr": "RSPW Büyük Ustası",
+      "id": "Grand Master RSPW",
+      "ar": "الأستاذ الكبير لـ RSPW"
+    }
+  };
+  return mapping[name]?.[lang] || name;
+};
+
+const getLocalizedRankDesc = (desc: string, lang: string) => {
+  const mapping: Record<string, Record<string, string>> = {
+    "Beginner taking their first arena steps": {
+      "en": "Beginner taking their first arena steps",
+      "zh-CN": "迈出竞技场第一步的新手",
+      "es": "Principiante dando sus primeros pasos en la arena",
+      "ru": "Новичок, делающий первые шаги на арене",
+      "de": "Anfänger, der seine ersten Schritte in der Arena macht",
+      "fr": "Débutant faisant ses premiers pas dans l'arène",
+      "pt": "Iniciante dando seus primeiros passos na arena",
+      "ja": "アリーナへの第一歩を踏み出す初心者",
+      "hi": "एरीना में अपना पहला कदम रखने वाला नौसिखिया",
+      "tr": "Arenada ilk adımlarını atan yeni başlayan",
+      "id": "Pemula yang mengambil langkah pertama di arena",
+      "ar": "مبتدئ يخطو خطواته الأولى في الساحة"
+    },
+    "Experienced combatant with proven skill": {
+      "en": "Experienced combatant with proven skill",
+      "zh-CN": "拥有丰富战斗经验和实力证明的战士",
+      "es": "Combatiente experimentado con habilidad probada",
+      "ru": "Опытный боец с проверенными навыками",
+      "de": "Erfahrener Kämpfer mit bewiesener Stärke",
+      "fr": "Combattant expérimenté aux compétences prouvées",
+      "pt": "Combatente experiente com habilidade comprovada",
+      "ja": "実績のある実力派ファイター",
+      "hi": "प्रमाणित कौशल के साथ अनुभवी योद्धा",
+      "tr": "Kanıtlanmış becerilere sahip deneyimli savaşçı",
+      "id": "Pejuang berpengalaman dengan keterampilan terbukti",
+      "ar": "مقاتل ذو خبرة ومهارات مثبتة"
+    },
+    "Master tactician of rock-paper-scissors": {
+      "en": "Master tactician of rock-paper-scissors",
+      "zh-CN": "剪刀石头布大师级战术家",
+      "es": "Maestro táctico de piedra, papel o tijera",
+      "ru": "Мастер тактики в камень-ножницы-бумага",
+      "de": "Meister-Taktiker von Schere, Stein, Papier",
+      "fr": "Maître tacticien de pierre-feuille-ciseaux",
+      "pt": "Mestre tático de pedra, papel e tesoura",
+      "ja": "ジャンケンの戦術マスター",
+      "hi": "रॉक-पेपर-कैंची का मास्टर रणनीतिकार",
+      "tr": "Taş-kağıt-makas taktik ustası",
+      "id": "Taktisi ulung batu-kertas-gunting",
+      "ar": "قائد تكتيكي بارع في حجر-ورقة-مقص"
+    },
+    "Renowned grandmaster dominating the scene": {
+      "en": "Renowned grandmaster dominating the scene",
+      "zh-CN": "称霸全场的著名大宗师",
+      "es": "Gran maestro de renombre dominando la escena",
+      "ru": "Знаменитый гроссмейстер, доминирующий на арене",
+      "de": "Renommierter Großmeister, der die Arena dominiert",
+      "fr": "Grand maître de renom dominant la scène",
+      "pt": "Grão-mestre renomado dominando a cena",
+      "ja": "アリーナを支配する著名なグランドマスター",
+      "hi": "पूरी दुनिया पर राज करने वाला प्रसिद्ध ग्रैंडमास्टर",
+      "tr": "Ortalığı kasıp kavuran ünlü büyük usta",
+      "id": "Grand master terkenal yang mendominasi arena",
+      "ar": "أستاذ كبير مشهور يسيطر على الساحة"
+    },
+    "A godlike champion tier of supreme reflexes": {
+      "en": "A godlike champion tier of supreme reflexes",
+      "zh-CN": "拥有至高反射神经的半神级冠军殿堂",
+      "es": "Nivel de campeón divino con reflejos supremos",
+      "ru": "Божественный чемпион с превосходными рефлексами",
+      "de": "Göttergleiche Champion-Stufe mit extremen Reflexen",
+      "fr": "Champion divin aux réflexes suprêmes",
+      "pt": "Campeão supremo com reflexos divinos",
+      "ja": "至高の反射神経を持つ神のごときチャンピオン",
+      "hi": "सर्वोच्च सजगता वाला दिव्य चैंपियन स्तर",
+      "tr": "Üstün reflekslere sahip yarı tanrı şampiyon seviyesi",
+      "id": "Tingkat juara seperti dewa dengan refleks tertinggi",
+      "ar": "رتبة بطل أسطوري ذو ردود أفعال خارقة"
+    }
+  };
+  return mapping[desc]?.[lang] || desc;
+};
+
+const getBeatsText = (weapon1: string, weapon2: string, lang: string) => {
+  const translations: Record<string, string> = {
+    'en': `${weapon1} beats ${weapon2}`,
+    'zh-CN': `${weapon1} 击败 ${weapon2}`,
+    'es': `${weapon1} vence a ${weapon2}`,
+    'ru': `${weapon1} побеждает ${weapon2}`,
+    'de': `${weapon1} schlägt ${weapon2}`,
+    'fr': `${weapon1} bat ${weapon2}`,
+    'pt': `${weapon1} vence ${weapon2}`,
+    'ja': `${weapon1} は ${weapon2} に勝つ`,
+    'hi': `${weapon1}, ${weapon2} को हराता है`,
+    'tr': `${weapon1}, ${weapon2} silahını yener`,
+    'id': `${weapon1} mengalahkan ${weapon2}`,
+    'ar': `${weapon1} يهزم ${weapon2}`
+  };
+  return translations[lang] || `${weapon1} beats ${weapon2}`;
+};
+
 const getPlayerRank = (wins: number): RankConfig => {
   let matchedRank = RANKS[0];
   for (const rank of RANKS) {
@@ -240,6 +411,18 @@ const sanitizeUserId = (id: string): string => {
 function GameAppInner() {
   const walletAddress = useTonAddress();
   const wallet = useTonWallet();
+
+  const [currentLanguage, setCurrentLanguage] = useState<string>(() => detectLanguage());
+  
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const isRtl = currentLanguage === 'ar';
+      document.documentElement.dir = isRtl ? 'rtl' : 'ltr';
+      document.documentElement.lang = currentLanguage;
+    }
+  }, [currentLanguage]);
+
+  const t = (key: string, params?: Record<string, any>) => getTranslation(currentLanguage, key, params);
   
   // Tabs: 'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows' | 'missions'
   const [activeTab, setActiveTab ] = useState<'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows' | 'missions'>('home');
@@ -617,7 +800,8 @@ function GameAppInner() {
           telegramId: currentTgId,
           username: currentUsername,
           walletAddress: walletAddress || null,
-          referredBy: code || null
+          referredBy: code || null,
+          lang: currentLanguage
         })
       });
       const data = await response.json();
@@ -803,10 +987,10 @@ function GameAppInner() {
     }
   };
 
-  // Re-sync on TG login change or Wallet connection change
+  // Re-sync on TG login change, Wallet connection, or Language preference change
   useEffect(() => {
     syncProfile();
-  }, [currentTgId, currentUsername, walletAddress]);
+  }, [currentTgId, currentUsername, walletAddress, currentLanguage]);
 
   // Fetch Wallet Balance dynamically using official TON RPC/Center APIs
   useEffect(() => {
@@ -1472,15 +1656,15 @@ function GameAppInner() {
                 
                 <div>
                   <h2 className="text-xl font-bold text-white">Rock • Scissors • Paper • Well</h2>
-                  <p className="text-[#708499] text-xs mt-1">Ready for real online PvP showdowns on TON?</p>
+                  <p className="text-[#708499] text-xs mt-1">{t('home.subtitle')}</p>
                 </div>
 
                 <div className="grid grid-cols-4 gap-2 w-full pt-2">
                   {[
-                    { id: 'rock', emoji: '👊', label: 'Rock' },
-                    { id: 'scissors', emoji: '✂️', label: 'Scissors' },
-                    { id: 'paper', emoji: '📄', label: 'Paper' },
-                    { id: 'well', emoji: '🕳️', label: 'Well' }
+                    { id: 'rock', emoji: '👊', label: t('play.rock') },
+                    { id: 'scissors', emoji: '✂️', label: t('play.scissors') },
+                    { id: 'paper', emoji: '📄', label: t('play.paper') },
+                    { id: 'well', emoji: '🕳️', label: currentLanguage === 'zh-CN' ? '井' : currentLanguage === 'es' ? 'Pozo' : currentLanguage === 'ru' ? 'Колодец' : currentLanguage === 'de' ? 'Brunnen' : currentLanguage === 'fr' ? 'Puits' : currentLanguage === 'pt' ? 'Poço' : currentLanguage === 'ja' ? '井' : currentLanguage === 'hi' ? 'कुआँ' : currentLanguage === 'tr' ? 'Kuyu' : currentLanguage === 'id' ? 'Sumur' : currentLanguage === 'ar' ? 'البئر' : 'Well' }
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -1511,14 +1695,14 @@ function GameAppInner() {
                       👤
                     </div>
                     <div className="min-w-0">
-                      <p className="text-[9px] text-[#708499] uppercase tracking-wider font-bold leading-none">Combatant</p>
+                      <p className="text-[9px] text-[#708499] uppercase tracking-wider font-bold leading-none">{t('profile.title').split(' ')[0]}</p>
                       <h4 className="text-sm font-bold text-white truncate mt-1">@{currentUsername || currentTgId}</h4>
                     </div>
                   </div>
                   <div className="text-right">
                     <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border flex items-center gap-1 leading-none ${currentRank.color} ${currentRank.bgColor} ${currentRank.borderColor}`}>
                       <span>{currentRank.badgeEmoji}</span>
-                      <span>{currentRank.name}</span>
+                      <span>{getLocalizedRankName(currentRank.name, currentLanguage)}</span>
                     </span>
                   </div>
                 </div>
@@ -1527,19 +1711,19 @@ function GameAppInner() {
                 <div className="grid grid-cols-2 gap-3">
                   {/* vVIRAL Balance */}
                   <div className="bg-[#0e1621]/80 rounded-2xl p-3 border border-[#242f3d]">
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-amber-500 block leading-none">vVIRAL Balance</span>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-amber-500 block leading-none">vVIRAL {t('home.balance')}</span>
                     <div className="flex items-baseline space-x-1 mt-2">
                       <span className="text-xl font-black text-white leading-none">
                         {profile?.vViral !== undefined ? profile.vViral : 500}
                       </span>
                       <span className="text-[9px] font-bold text-amber-500">vVIRAL</span>
                     </div>
-                    <span className="text-[8px] text-[#708499] block mt-1.5 leading-tight">Game Credits for Stakes</span>
+                    <span className="text-[8px] text-[#708499] block mt-1.5 leading-tight">vVIRAL Game Credits</span>
                   </div>
 
                   {/* TON Wallet */}
                   <div className="bg-[#0e1621]/80 rounded-2xl p-3 border border-[#242f3d]">
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-[#3390ec] block leading-none">TON Balance</span>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-[#3390ec] block leading-none">TON {t('home.balance')}</span>
                     <div className="flex items-baseline space-x-1 mt-2">
                       <span className="text-xl font-black text-white leading-none">
                         {balanceLoading ? (
@@ -1553,7 +1737,7 @@ function GameAppInner() {
                       <span className="text-[9px] font-bold text-[#3390ec]">TON</span>
                     </div>
                     <span className="text-[8px] text-[#708499] block mt-1.5 leading-tight">
-                      {walletAddress ? "Connected" : "Not Connected"}
+                      {walletAddress ? t('profile.tonAddress').split(' ')[0] : t('profile.disconnected')}
                     </span>
                   </div>
                 </div>
@@ -1561,15 +1745,15 @@ function GameAppInner() {
                 {/* Dashboard Stats Summary */}
                 <div className="grid grid-cols-3 gap-2 bg-[#242f3d]/35 rounded-2xl p-2.5 text-center border border-[#242f3d]/40">
                   <div>
-                    <span className="text-[9px] text-[#708499] uppercase block font-bold">Played</span>
+                    <span className="text-[9px] text-[#708499] uppercase block font-bold">{t('profile.played')}</span>
                     <span className="text-xs font-bold text-white mt-0.5 block">{profile?.gamesPlayed || 0}</span>
                   </div>
                   <div>
-                    <span className="text-[9px] text-emerald-400 uppercase block font-bold">Wins</span>
+                    <span className="text-[9px] text-emerald-400 uppercase block font-bold">{t('profile.won')}</span>
                     <span className="text-xs font-bold text-emerald-400 mt-0.5 block">{profile?.wins || 0}</span>
                   </div>
                   <div>
-                    <span className="text-[9px] text-[#3390ec] uppercase block font-bold">Win Rate</span>
+                    <span className="text-[9px] text-[#3390ec] uppercase block font-bold">{t('profile.rate')}</span>
                     <span className="text-xs font-bold text-white mt-0.5 block">
                       {profile?.gamesPlayed && profile.gamesPlayed > 0 
                         ? `${Math.round(((profile.wins || 0) / profile.gamesPlayed) * 100)}%`
@@ -1586,13 +1770,13 @@ function GameAppInner() {
                   <div className="flex items-center space-x-2">
                     <span className="text-xl">🔥</span>
                     <div>
-                      <h4 className="text-sm font-bold text-white uppercase tracking-wider">Daily Login Streak</h4>
-                      <p className="text-[#708499] text-[10px]">Claim your daily experience bonus</p>
+                      <h4 className="text-sm font-bold text-white uppercase tracking-wider">{t('home.streak')}</h4>
+                      <p className="text-[#708499] text-[10px]">{currentLanguage === 'zh-CN' ? '领取您的每日经验奖励' : currentLanguage === 'es' ? 'Reclama tu bonificación de experiencia diaria' : currentLanguage === 'ru' ? 'Получите свой ежедневный бонус опыта' : currentLanguage === 'de' ? 'Fordere deinen täglichen Erfahrungsbonus an' : currentLanguage === 'fr' ? 'Réclamez votre bonus d\'expérience quotidien' : currentLanguage === 'pt' ? 'Resgate seu bônus diário de experiência' : currentLanguage === 'ja' ? '毎日の経験値ボーナスを獲得しよう' : currentLanguage === 'hi' ? 'अपने दैनिक अनुभव बोनस का दावा करें' : currentLanguage === 'tr' ? 'Günlük deneyim bonusunu talep et' : currentLanguage === 'id' ? 'Klaim bonus pengalaman harian Anda' : currentLanguage === 'ar' ? 'طالب بمكافأة الخبرة اليومية' : 'Claim your daily experience bonus'}</p>
                     </div>
                   </div>
                   <div className="text-right">
                     <span className="text-[11px] font-mono font-bold bg-[#3390ec]/10 text-[#3390ec] px-2.5 py-0.5 rounded-full border border-[#3390ec]/20 animate-pulse">
-                      {profile?.streak ? `${profile.streak} Day Streak` : '0 Day Streak'}
+                      {profile?.streak ? t('home.streakDays', { days: profile.streak }) : t('home.streakDays', { days: 0 })}
                     </span>
                   </div>
                 </div>
@@ -1629,7 +1813,7 @@ function GameAppInner() {
                           {isCompleted ? "🔥" : `+${dayXpBonus}`}
                         </div>
                         <span className={`text-[8px] font-mono scale-90 ${isCompleted ? 'text-amber-500 font-bold' : 'text-[#708499]'}`}>
-                          {isCompleted ? "Done" : `${dayXpBonus} XP`}
+                          {isCompleted ? (currentLanguage === 'zh-CN' ? '已领' : currentLanguage === 'es' ? 'Listo' : currentLanguage === 'ru' ? 'Ок' : currentLanguage === 'de' ? 'Erledigt' : currentLanguage === 'fr' ? 'Fait' : currentLanguage === 'pt' ? 'Feito' : currentLanguage === 'ja' ? '完了' : currentLanguage === 'hi' ? 'पूर्ण' : currentLanguage === 'tr' ? 'Bitti' : currentLanguage === 'id' ? 'Selesai' : currentLanguage === 'ar' ? 'تم' : 'Done') : `${dayXpBonus} XP`}
                         </span>
                       </div>
                     );
@@ -1641,10 +1825,10 @@ function GameAppInner() {
                   {profile?.lastLoginDate === new Date().toLocaleDateString('sv-SE') ? (
                     <div className="bg-[#242f3d]/50 border border-[#2b3745] rounded-2xl p-3 text-center space-y-1">
                       <p className="text-xs font-semibold text-emerald-400 flex items-center justify-center gap-1.5">
-                        <span>✅</span> Daily Bonus Claimed Today
+                        <span>✅</span> {t('home.rewardClaimed')}
                       </p>
                       <p className="text-[#708499] text-[10px]">
-                        Return inside the next 24 hours to keep your streak burning!
+                        {currentLanguage === 'zh-CN' ? '在接下来的24小时内返回以保持连续登录！' : currentLanguage === 'es' ? '¡Regresa en las próximas 24 horas para mantener tu racha!' : currentLanguage === 'ru' ? 'Вернитесь в течение 24 часов, чтобы сохранить серию!' : currentLanguage === 'de' ? 'Kehre in den nächsten 24 Stunden zurück, um deine Serie aufrechtzuerhalten!' : currentLanguage === 'fr' ? 'Revenez dans les prochaines 24 heures pour conserver votre série !' : currentLanguage === 'pt' ? 'Volte nas próximas 24 horas para manter sua sequência!' : currentLanguage === 'ja' ? '連続記録を維持するために、次の24時間以内に戻ってきてください！' : currentLanguage === 'hi' ? 'अपनी स्ट्रीक बनाए रखने के लिए अगले 24 घंटों में वापस आएं!' : currentLanguage === 'tr' ? 'Serini devam ettirmek için önümüzdeki 24 saat içinde geri dön!' : currentLanguage === 'id' ? 'Kembali dalam 24 jam ke depan untuk menjaga beruntun Anda!' : currentLanguage === 'ar' ? 'عد خلال الـ 24 ساعة القادمة للحفاظ على سلسلة تسجيل الدخول!' : 'Return inside the next 24 hours to keep your streak burning!'}
                       </p>
                     </div>
                   ) : (
@@ -1658,7 +1842,7 @@ function GameAppInner() {
                       ) : (
                         <>
                           <span>⚡</span>
-                          <span>CLAIM TODAY'S REWARD</span>
+                          <span>{t('home.claimReward').toUpperCase()}</span>
                           <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-mono">
                             +{100 + (Math.min(7, (profile?.streak || 0) + 1) * 10)} XP
                           </span>
@@ -1678,7 +1862,7 @@ function GameAppInner() {
                         <div className="flex items-center space-x-2.5 min-w-0">
                           <span className="text-2xl animate-bounce shrink-0">{badgeInfo.emoji}</span>
                           <div className="min-w-0">
-                            <span className="text-[10px] text-[#708499] uppercase tracking-wider font-bold block">Active Streak Badge</span>
+                            <span className="text-[10px] text-[#708499] uppercase tracking-wider font-bold block">{currentLanguage === 'zh-CN' ? '连续登录徽章' : currentLanguage === 'es' ? 'Insignia de racha activa' : currentLanguage === 'ru' ? 'Активный значок серии' : currentLanguage === 'de' ? 'Aktives Serien-Abzeichen' : currentLanguage === 'fr' ? 'Badge de série actif' : currentLanguage === 'pt' ? 'Emblema de sequência ativa' : currentLanguage === 'ja' ? 'アクティブな連続バッジ' : currentLanguage === 'hi' ? 'सक्रिय स्ट्रीक बैज' : currentLanguage === 'tr' ? 'Aktif Seri Rozeti' : currentLanguage === 'id' ? 'Lencana Beruntun Aktif' : currentLanguage === 'ar' ? 'شارة السلسلة النشطة' : 'Active Streak Badge'}</span>
                             <span className="text-xs text-white font-bold block truncate">{badgeInfo.name}</span>
                           </div>
                         </div>
@@ -1692,7 +1876,7 @@ function GameAppInner() {
                   })()
                 ) : (
                   <div className="text-center text-[10px] text-[#708499]">
-                    ℹ️ Maintain consecutive daily logins to unlock premium cosmetic badges.
+                    ℹ️ {currentLanguage === 'zh-CN' ? '保持连续每日登录以解锁高级装饰徽章。' : currentLanguage === 'es' ? 'Mantén inicios de sesión diarios consecutivos para desbloquear insignias cosméticas premium.' : currentLanguage === 'ru' ? 'Заходите каждый день подряд, чтобы разблокировать косметические значки.' : currentLanguage === 'de' ? 'Melde dich täglich an, um kosmetische Abzeichen freizuschalten.' : currentLanguage === 'fr' ? 'Connectez-vous tous les jours de suite pour débloquer des badges cosmétiques premium.' : currentLanguage === 'pt' ? 'Mantenha logins diários consecutivos para desbloquear emblemas cosméticos premium.' : currentLanguage === 'ja' ? '毎日の連続ログインを維持して、プレミアム装飾バッジをアンロックしよう。' : currentLanguage === 'hi' ? 'प्रीमियम कॉस्मेटिक बैज अनलॉक करने के लिए लगातार दैनिक लॉगिन बनाए रखें।' : currentLanguage === 'tr' ? 'Premium kozmetik rozetlerin kilidini açmak için her gün giriş yap.' : currentLanguage === 'id' ? 'Pertahankan login harian berturut-turut untuk membuka lencana kosmetik premium.' : currentLanguage === 'ar' ? 'حافظ على تسجيل الدخول اليومي المتتالي لفتح الشارات التجميلية المميزة.' : 'Maintain consecutive daily logins to unlock premium cosmetic badges.'}
                   </div>
                 )}
 
@@ -1714,7 +1898,7 @@ function GameAppInner() {
                 <div className="border-t border-[#242f3d] pt-3.5 space-y-2">
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-slate-300 font-bold flex items-center gap-1">
-                      <span>🔰</span> Level {Math.floor((profile?.xp || 0) / 1000) + 1} Arena Combatant
+                      <span>🔰</span> {t('referrals.level', { num: Math.floor((profile?.xp || 0) / 1000) + 1 })} {t('profile.title').split(' ')[0]}
                     </span>
                     <span className="text-[#3390ec] font-mono font-bold">
                       {(profile?.xp || 0) % 1000} / 1000 XP
@@ -1736,7 +1920,7 @@ function GameAppInner() {
                   className="w-full h-14 bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold rounded-2xl transition duration-150 transform hover:scale-[1.01] active:scale-95 shadow-lg shadow-[#3390ec]/20 flex items-center justify-center gap-2.5 relative group overflow-hidden"
                 >
                   <Gamepad2 className="w-5 h-5" />
-                  <span>PLAY NOW (PVP/BOT)</span>
+                  <span>{t('home.playNow').toUpperCase()}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
                 
@@ -1745,25 +1929,25 @@ function GameAppInner() {
                   className="w-full h-12 bg-[#242f3d] hover:bg-[#2b3745] border border-[#2b3745] text-slate-200 font-semibold rounded-2xl transition flex items-center justify-center gap-2"
                 >
                   <Users className="w-4 h-4 text-[#3390ec]" />
-                  <span>Referrals & Invite Links</span>
+                  <span>{t('referrals.title')}</span>
                 </button>
               </div>
 
               {/* Rules Summary card */}
               <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-4 space-y-3">
-                <span className="text-xs font-bold text-white block border-b border-[#242f3d] pb-1.5">Game Invariants & Logic</span>
+                <span className="text-xs font-bold text-white block border-b border-[#242f3d] pb-1.5">{t('home.rules')}</span>
                 <div className="grid grid-cols-2 gap-2 text-[11px] text-[#708499] font-medium">
                   <div className="bg-[#242f3d] p-2 rounded-xl">
-                    <span className="text-[#3390ec]">👊 Rock</span> beats ✂️ Scissors
+                    {getBeatsText('👊 ' + t('play.rock'), '✂️ ' + t('play.scissors'), currentLanguage)}
                   </div>
                   <div className="bg-[#242f3d] p-2 rounded-xl">
-                    <span className="text-[#3390ec]">✂️ Scissors</span> beats 📄 Paper
+                    {getBeatsText('✂️ ' + t('play.scissors'), '📄 ' + t('play.paper'), currentLanguage)}
                   </div>
                   <div className="bg-[#242f3d] p-2 rounded-xl">
-                    <span className="text-[#3390ec]">📄 Paper</span> beats 👊 Rock & 🕳️ Well
+                    {getBeatsText('📄 ' + t('play.paper'), '👊 ' + t('play.rock'), currentLanguage)}
                   </div>
                   <div className="bg-[#242f3d] p-2 rounded-xl">
-                    <span className="text-[#3390ec]">🕳️ Well</span> beats 👊 Rock & ✂️ Scissors
+                    {getBeatsText('🕳️ ' + (currentLanguage === 'zh-CN' ? '井' : currentLanguage === 'es' ? 'Pozo' : currentLanguage === 'ru' ? 'Колодец' : currentLanguage === 'de' ? 'Brunnen' : currentLanguage === 'fr' ? 'Puits' : currentLanguage === 'pt' ? 'Poço' : currentLanguage === 'ja' ? '井' : currentLanguage === 'hi' ? 'कुआँ' : currentLanguage === 'tr' ? 'Kuyu' : currentLanguage === 'id' ? 'Sumur' : currentLanguage === 'ar' ? 'البئر' : 'Well'), '👊 ' + t('play.rock'), currentLanguage)}
                   </div>
                 </div>
               </div>
@@ -2820,25 +3004,21 @@ function GameAppInner() {
               {/* Stats overview */}
               <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 space-y-4">
                 <div className="flex items-center justify-between border-b border-[#242f3d] pb-3">
-                  <span className="text-sm font-bold text-white uppercase tracking-wider">Gameplay Statistics</span>
+                  <span className="text-sm font-bold text-white uppercase tracking-wider">{t('profile.stats')}</span>
                   <Trophy className="w-4 h-4 text-amber-500" />
                 </div>
 
-                <div className="grid grid-cols-4 gap-2 text-center">
+                <div className="grid grid-cols-3 gap-2 text-center">
                   <div className="bg-[#242f3d] p-2.5 rounded-xl border border-[#2b3745]">
-                    <span className="text-[10px] text-[#708499] block font-semibold">Played</span>
+                    <span className="text-[10px] text-[#708499] block font-semibold">{t('profile.played')}</span>
                     <span className="text-sm font-bold block text-white mt-0.5">{profile?.gamesPlayed || 0}</span>
                   </div>
                   <div className="bg-[#242f3d] p-2.5 rounded-xl border border-[#2b3745] border-b-emerald-500/30">
-                    <span className="text-[10px] text-[#708499] block font-semibold">Wins</span>
+                    <span className="text-[10px] text-[#708499] block font-semibold">{t('profile.won')}</span>
                     <span className="text-sm font-bold block text-emerald-400 mt-0.5">{profile?.wins || 0}</span>
                   </div>
-                  <div className="bg-[#242f3d] p-2.5 rounded-xl border border-[#2b3745] border-b-red-500/30">
-                    <span className="text-[10px] text-[#708499] block font-semibold">Losses</span>
-                    <span className="text-sm font-bold block text-red-400 mt-0.5">{profile?.losses || 0}</span>
-                  </div>
                   <div className="bg-[#242f3d] p-2.5 rounded-xl border border-[#2b3745] border-b-[#3390ec]/30">
-                    <span className="text-[10px] text-[#708499] block font-semibold">Rate</span>
+                    <span className="text-[10px] text-[#708499] block font-semibold">{t('profile.rate')}</span>
                     <span className="text-sm font-bold block text-[#3390ec] mt-0.5">
                       {profile && profile.gamesPlayed > 0 
                         ? `${Math.round((profile.wins / profile.gamesPlayed) * 100)}%`
@@ -2852,7 +3032,7 @@ function GameAppInner() {
               {/* Game Preferences Card */}
               <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 space-y-4">
                 <div className="flex items-center justify-between border-b border-[#242f3d] pb-3">
-                  <span className="text-sm font-bold text-white uppercase tracking-wider">Game Settings</span>
+                  <span className="text-sm font-bold text-white uppercase tracking-wider">{t('profile.settings')}</span>
                   <Volume2 className="w-4 h-4 text-[#3390ec]" />
                 </div>
                 <div className="flex items-center justify-between bg-[#242f3d] p-3.5 rounded-2xl border border-[#2b3745]">
@@ -2861,8 +3041,8 @@ function GameAppInner() {
                       {soundsMuted ? <VolumeX className="w-5 h-5 text-red-400" /> : <Volume2 className="w-5 h-5 text-green-400" />}
                     </div>
                     <div>
-                      <p className="font-bold text-xs text-white">Sound Effects</p>
-                      <p className="text-[9.5px] text-[#708499] leading-tight mt-0.5">Satisfying clicks, win chimes & alert sweeps</p>
+                      <p className="font-bold text-xs text-white">{t('profile.sounds')}</p>
+                      <p className="text-[9.5px] text-[#708499] leading-tight mt-0.5">{t('profile.soundsDesc')}</p>
                     </div>
                   </div>
                   <button
@@ -2874,6 +3054,37 @@ function GameAppInner() {
                       className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${soundsMuted ? 'translate-x-0' : 'translate-x-5'}`}
                     />
                   </button>
+                </div>
+
+                {/* Language Selector inside Settings (as required by prompt) */}
+                <div className="bg-[#242f3d] p-3.5 rounded-2xl border border-[#2b3745] space-y-3">
+                  <div className="flex items-center space-x-3">
+                    <div className="w-9 h-9 rounded-xl bg-[#17212b] flex items-center justify-center shrink-0">
+                      <span className="text-sm font-bold text-slate-300">A</span>
+                    </div>
+                    <div>
+                      <p className="font-bold text-xs text-white">{t('profile.language')}</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.entries(languageNames).map(([code, name]) => (
+                      <button
+                        key={code}
+                        onClick={() => {
+                          playClickSound();
+                          setCurrentLanguage(code);
+                          localStorage.setItem('rspw_lang', code);
+                        }}
+                        className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all text-center ${
+                          currentLanguage === code
+                            ? 'bg-[#3390ec] border-[#3390ec] text-white shadow-md'
+                            : 'bg-[#17212b] border-[#2b3745] text-slate-300 hover:text-white hover:border-[#3390ec]/50'
+                        }`}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -3239,48 +3450,48 @@ function GameAppInner() {
         {/* NAV 1: HOME */}
         <button
           onClick={() => { playClickSound(); setActiveTab('home'); }}
-          className={`flex flex-col items-center justify-center w-11 h-14 rounded-2xl transition-all ${activeTab === 'home' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'home' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Home className="w-5 h-5 mb-1" />
-          <span className="text-[9px] font-bold">HOME</span>
+          <span className="text-[11px] font-bold tracking-wider">{t('nav.home')}</span>
         </button>
 
         {/* NAV 2: PLAY */}
         <button
           onClick={() => { playClickSound(); setActiveTab('play'); }}
-          className={`flex flex-col items-center justify-center w-11 h-14 rounded-2xl transition-all ${activeTab === 'play' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'play' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Gamepad2 className="w-5 h-5 mb-1" />
-          <span className="text-[9px] font-bold">PLAY</span>
+          <span className="text-[11px] font-bold tracking-wider">{t('nav.play')}</span>
         </button>
 
         {/* NAV 3: LEADERBOARD */}
         <button
           id="btn_nav_leaderboard"
           onClick={() => { playClickSound(); setActiveTab('leaderboard'); }}
-          className={`flex flex-col items-center justify-center w-11 h-14 rounded-2xl transition-all ${activeTab === 'leaderboard' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'leaderboard' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Trophy className="w-5 h-5 mb-1" />
-          <span className="text-[9px] font-bold">BOARD</span>
+          <span className="text-[11px] font-bold tracking-wider">{t('nav.board')}</span>
         </button>
 
 
         {/* NAV 4: MISSIONS */}
         <button
           onClick={() => { playClickSound(); setActiveTab('missions'); }}
-          className={`flex flex-col items-center justify-center w-11 h-14 rounded-2xl transition-all ${activeTab === 'missions' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'missions' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Award className="w-5 h-5 mb-1" />
-          <span className="text-[9px] font-bold">MISSIONS</span>
+          <span className="text-[11px] font-bold tracking-wider">{t('nav.missions')}</span>
         </button>
 
         {/* NAV 5: PROFILE */}
         <button
           onClick={() => { playClickSound(); setActiveTab('profile'); }}
-          className={`flex flex-col items-center justify-center w-11 h-14 rounded-2xl transition-all ${activeTab === 'profile' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'profile' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <User className="w-5 h-5 mb-1" />
-          <span className="text-[9px] font-bold">PROFILE</span>
+          <span className="text-[11px] font-bold tracking-wider">{t('nav.profile')}</span>
         </button>
 
       </footer>

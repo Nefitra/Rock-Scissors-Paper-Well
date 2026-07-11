@@ -131,6 +131,87 @@ async function testConnection() {
 }
 testConnection();
 
+// Load locales for bot i18n
+const locales: Record<string, any> = {};
+const localesDir = path.join(process.cwd(), 'locales');
+if (fs.existsSync(localesDir)) {
+  const files = fs.readdirSync(localesDir);
+  for (const file of files) {
+    if (file.endsWith('.json')) {
+      const lang = file.replace('.json', '');
+      try {
+        locales[lang] = JSON.parse(fs.readFileSync(path.join(localesDir, file), 'utf-8'));
+      } catch (err) {
+        console.error(`Failed to parse locale ${file}:`, err);
+      }
+    }
+  }
+}
+
+function tBot(lang: string, key: string, params: Record<string, any> = {}): string {
+  const targetLang = locales[lang] ? lang : 'en';
+  const dictionary = locales[targetLang] || locales['en'] || {};
+  
+  const parts = key.split('.');
+  let value: any = dictionary;
+  for (const part of parts) {
+    if (value && typeof value === 'object' && part in value) {
+      value = value[part];
+    } else {
+      value = undefined;
+      break;
+    }
+  }
+  
+  // Fallback to English if value is missing
+  if (value === undefined && targetLang !== 'en') {
+    const enDict = locales['en'] || {};
+    let enValue: any = enDict;
+    for (const part of parts) {
+      if (enValue && typeof enValue === 'object' && part in enValue) {
+        enValue = enValue[part];
+      } else {
+        enValue = undefined;
+        break;
+      }
+    }
+    value = enValue;
+  }
+  
+  if (value === undefined) {
+    return key;
+  }
+  
+  let result = String(value);
+  for (const [k, v] of Object.entries(params)) {
+    result = result.replace(new RegExp(`{${k}}`, 'g'), String(v));
+  }
+  return result;
+}
+
+async function detectUserLanguage(tgId: string, telegramLangCode?: string): Promise<string> {
+  try {
+    const uSnap = await db.collection('users').doc(tgId).get();
+    if (uSnap.exists) {
+      const ud = uSnap.data() || {};
+      if (ud.lang) return ud.lang;
+      if (ud.language) return ud.language;
+    }
+  } catch (err) {
+    console.error("Failed to fetch user lang from DB:", err);
+  }
+  
+  if (telegramLangCode) {
+    const supported = ['zh-CN', 'fr', 'ja', 'pt', 'hi', 'tr', 'id', 'ru', 'ar', 'de', 'es', 'en'];
+    let code = telegramLangCode.toLowerCase();
+    if (code.startsWith('zh')) return 'zh-CN';
+    const found = supported.find(s => s.toLowerCase() === code || s.toLowerCase().startsWith(code));
+    if (found) return found;
+  }
+  
+  return 'en';
+}
+
 // Admin Telegram IDs (user can edit these or we auto-include Besker/Boris and other testers)
 const ADMIN_TELEGRAM_IDS = ["beskerboris", "admin", "123456789", "711279376", "525364261"];
 
@@ -237,10 +318,10 @@ function getLaunchButton(text: string, startappParam: string, isPrivate: boolean
   }
 }
 
-async function sendProfileNotFound(chatId: any, isPrivate: boolean) {
+async function sendProfileNotFound(chatId: any, isPrivate: boolean, userLang: string = 'en', username: string = '') {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  const text = `⚠️ *VIRAL Arena profile not found.*\n\nOpen the game once to create your profile and receive the one-time *+500 vVIRAL* welcome reward.`;
-  const button = getLaunchButton("⚔️ OPEN VIRAL ARENA", "arena", isPrivate);
+  const text = tBot(userLang, 'bot.profileNotFound', { username: username || 'User' });
+  const button = getLaunchButton(tBot(userLang, 'home.playNow').toUpperCase(), "arena", isPrivate);
 
   await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
     method: 'POST',
@@ -638,7 +719,7 @@ app.get('/api/health', (req, res) => {
 app.post('/api/user/sync', async (req, res) => {
   try {
     const verifiedUser = getRequestUser(req);
-    const { telegramId, username, walletAddress, referredBy } = req.body;
+    const { telegramId, username, walletAddress, referredBy, lang } = req.body;
 
     let targetTgId = telegramId ? sanitizeUserId(telegramId) : "";
     let targetUsername = username;
@@ -699,6 +780,10 @@ app.post('/api/user/sync', async (req, res) => {
       }
       if (username && currentData.username !== username) {
         upData.username = username;
+        updated = true;
+      }
+      if (lang && currentData.lang !== lang) {
+        upData.lang = lang;
         updated = true;
       }
       if (!currentData.welcomeRewardClaimed) {
@@ -774,6 +859,7 @@ app.post('/api/user/sync', async (req, res) => {
       welcomeRewardClaimed: true,
       missions: {},
       lastLoginDate: "",
+      lang: lang || "en",
       createdAt: new Date().toISOString()
     };
 
@@ -2895,6 +2981,7 @@ async function handleTelegramUpdate(update: any) {
 
     const username = user.username || `user_${user.id}`;
     const tgId = String(user.id);
+    const userLang = await detectUserLanguage(tgId, user.language_code);
 
     console.log(`[Telegram Message] Chat ID: ${chatId}, User ID: ${tgId}, Username: @${username}, Text: "${text}"`);
 
@@ -3020,9 +3107,7 @@ async function handleTelegramUpdate(update: any) {
       const args = text.split(' ').slice(1);
       const startParam = args.length > 0 ? args[0] : "";
       
-      replyText = `🟣 *Welcome to VIRAL Arena*\n\n` +
-                  `*Play, challenge other community members and earn vVIRAL.*\n\n` +
-                  `_Launch the game directly inside Telegram below:_`;
+      replyText = tBot(userLang, 'bot.welcome');
 
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
@@ -3034,7 +3119,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                getLaunchButton("⚔️ OPEN VIRAL ARENA", startParam || 'arena', isPrivateChat)
+                getLaunchButton(tBot(userLang, 'home.playNow').toUpperCase(), startParam || 'arena', isPrivateChat)
               ]
             ]
           }
@@ -3045,9 +3130,9 @@ async function handleTelegramUpdate(update: any) {
     // 7. Implement /arena
     else if (command === '/arena') {
       replyText = `⚔️ *VIRAL ARENA*\n\n` +
-                  `*Challenge another member, win battles and earn vVIRAL.*\n\n` +
-                  `🪨 *Rock* · 📄 *Paper* · ✂️ *Scissors* · 🕳 *Well*\n\n` +
-                  `_Click below to enter the Arena directly in Telegram!_`;
+                  `*${tBot(userLang, 'bot.welcome').split('\n\n')[1] || 'Play, challenge other community members and earn vVIRAL.'}*\n\n` +
+                  `👊 *${tBot(userLang, 'play.rock')}* · 📄 *${tBot(userLang, 'play.paper')}* · ✂️ *${tBot(userLang, 'play.scissors')}* · 🕳 *${userLang === 'zh-CN' ? '井' : userLang === 'es' ? 'Pozo' : userLang === 'ru' ? 'Колодец' : userLang === 'de' ? 'Brunnen' : userLang === 'fr' ? 'Puits' : userLang === 'pt' ? 'Poço' : userLang === 'ja' ? '井' : userLang === 'hi' ? 'कुआँ' : userLang === 'tr' ? 'Kuyu' : userLang === 'id' ? 'Sumur' : userLang === 'ar' ? 'البئر' : 'Well'}*\n\n` +
+                  `_${tBot(userLang, 'home.subtitle')}_`;
 
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
@@ -3059,7 +3144,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                getLaunchButton("⚔️ PLAY VIRAL ARENA", "arena", isPrivateChat)
+                getLaunchButton(tBot(userLang, 'home.playNow').toUpperCase(), "arena", isPrivateChat)
               ]
             ]
           }
@@ -3068,12 +3153,7 @@ async function handleTelegramUpdate(update: any) {
       return;
     } 
     else if (command === '/help') {
-      replyText = `🟣 *VIRAL ARENA COMMANDS*\n\n` +
-                  `⚔️ /arena — Open game\n` +
-                  `🔥 /duel — Challenge community\n` +
-                  `🏆 /top — Rankings\n` +
-                  `👤 /myrank — Your profile\n` +
-                  `🎯 /missions — Daily rewards`;
+      replyText = tBot(userLang, 'bot.help');
     } 
     else if (command === '/myrank') {
       const uSnap = await db.collection('users').doc(tgId).get();
@@ -3086,15 +3166,7 @@ async function handleTelegramUpdate(update: any) {
         const winRate = gamesPlayed > 0 ? Math.round((wins / gamesPlayed) * 100) : 0;
         const rankName = getPlayerRankLocal(wins);
 
-        replyText = `🟣 *YOUR VIRAL PROFILE*\n\n` +
-                    `Rank:\n` +
-                    `*${rankName}*\n\n` +
-                    `Balance:\n` +
-                    `*${balance.toLocaleString()} vVIRAL*\n\n` +
-                    `Wins:\n` +
-                    `*${wins}*\n\n` +
-                    `Win Rate:\n` +
-                    `*${winRate}%*`;
+        replyText = tBot(userLang, 'bot.rankReply', { username, rank: rankName, wins, rate: winRate });
 
         await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: 'POST',
@@ -3106,7 +3178,7 @@ async function handleTelegramUpdate(update: any) {
             reply_markup: {
               inline_keyboard: [
                 [
-                  getLaunchButton("👤 OPEN PROFILE", "profile", isPrivateChat)
+                  getLaunchButton(tBot(userLang, 'profile.title').toUpperCase(), "profile", isPrivateChat)
                 ]
               ]
             }
@@ -3114,18 +3186,18 @@ async function handleTelegramUpdate(update: any) {
         });
         return;
       } else {
-        await sendProfileNotFound(chatId, isPrivateChat);
+        await sendProfileNotFound(chatId, isPrivateChat, userLang, username);
         return;
       }
     } 
     else if (command === '/balance') {
       const uSnap = await db.collection('users').doc(tgId).get();
       if (!uSnap.exists) {
-        await sendProfileNotFound(chatId, isPrivateChat);
+        await sendProfileNotFound(chatId, isPrivateChat, userLang, username);
         return;
       }
       const balance = uSnap.data()?.vViral !== undefined ? uSnap.data()?.vViral : 500;
-      replyText = `💎 *vVIRAL BALANCE*\n\nYour balance:\n\n*${balance.toLocaleString()} vVIRAL*`;
+      replyText = tBot(userLang, 'bot.balanceReply', { username, vViral: balance.toLocaleString(), reserved: "0" });
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3136,7 +3208,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                getLaunchButton("⚔️ Earn more in VIRAL Arena", "arena", isPrivateChat)
+                getLaunchButton(tBot(userLang, 'home.playNow'), "arena", isPrivateChat)
               ]
             ]
           }
@@ -3161,18 +3233,20 @@ async function handleTelegramUpdate(update: any) {
         list.sort((a, b) => b.wins - a.wins);
         const activeList = list.filter(p => p.wins > 0);
 
+        const title = tBot(userLang, 'leaderboard.title').toUpperCase();
         if (activeList.length === 0) {
-          replyText = `🏆 *VIRAL ARENA TOP PLAYERS*\n\nThe Arena season is just beginning.`;
+          replyText = `🏆 *${title}*\n\n${userLang === 'zh-CN' ? '竞技场赛季刚刚开始。' : userLang === 'es' ? 'La temporada de la Arena acaba de comenzar.' : userLang === 'ru' ? 'Сезон Арены только начинается.' : 'The Arena season is just beginning.'}`;
         } else {
-          replyText = `🏆 *VIRAL ARENA TOP PLAYERS*\n\n`;
+          replyText = `🏆 *${title}*\n\n`;
           const top3 = activeList.slice(0, 3);
           top3.forEach((player, idx) => {
             const medal = idx === 0 ? "🥇" : (idx === 1 ? "🥈" : "🥉");
-            replyText += `${medal} *@${player.username}* — ${player.wins} wins\n`;
+            replyText += `${medal} *@${player.username}* — ${player.wins} ${tBot(userLang, 'leaderboard.wins').toLowerCase()}\n`;
           });
         }
       } catch (err) {
-        replyText = `🏆 *VIRAL ARENA TOP PLAYERS*\n\nThe Arena season is just beginning.`;
+        const title = tBot(userLang, 'leaderboard.title').toUpperCase();
+        replyText = `🏆 *${title}*\n\n${userLang === 'zh-CN' ? '竞技场赛季刚刚开始。' : userLang === 'es' ? 'La temporada de la Arena acaba de comenzar.' : userLang === 'ru' ? 'Сезон Арены только начинается.' : 'The Arena season is just beginning.'}`;
       }
 
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -3185,7 +3259,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                getLaunchButton("🏆 FULL LEADERBOARD", "leaderboard", isPrivateChat)
+                getLaunchButton(tBot(userLang, 'leaderboard.title').toUpperCase(), "leaderboard", isPrivateChat)
               ]
             ]
           }
@@ -3194,7 +3268,7 @@ async function handleTelegramUpdate(update: any) {
       return;
     } 
     else if (command === '/missions') {
-      replyText = `🎯 *VIRAL MISSIONS*\n\nToday's challenges:\n\n⚔️ *Play Duel*\n🏆 *Win Battle*\n🤝 *Invite Friend*`;
+      replyText = tBot(userLang, 'bot.missionsTitle');
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3205,7 +3279,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                getLaunchButton("OPEN MISSIONS", "missions", isPrivateChat)
+                getLaunchButton(tBot(userLang, 'missions.title').toUpperCase() || "MISSIONS", "missions", isPrivateChat)
               ]
             ]
           }
@@ -3236,7 +3310,7 @@ async function handleTelegramUpdate(update: any) {
 
       // Check allowed stakes (Requirement 3)
       if (!DUEL_CONFIG.allowedStakes.includes(stake)) {
-        const replyText = `⚠️ *Invalid duel stake.*\n\nAvailable stakes: 0, 50, 100, 250, 500, 1000 vVIRAL.`;
+        const replyText = `⚠️ *${userLang === 'zh-CN' ? '无效的对决金额。' : userLang === 'es' ? 'Apuesta de duelo no válida.' : userLang === 'ru' ? 'Неверная ставка дуэли.' : 'Invalid duel stake.'}*\n\n${userLang === 'zh-CN' ? '可用金额' : userLang === 'es' ? 'Apuestas disponibles' : userLang === 'ru' ? 'Доступные ставки' : 'Available stakes'}: 0, 50, 100, 250, 500, 1000 vVIRAL.`;
         await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3254,7 +3328,7 @@ async function handleTelegramUpdate(update: any) {
       const lastDuel = userDuelCooldowns.get(tgId) || 0;
       if (now - lastDuel < 30000) {
         const remaining = Math.ceil((30000 - (now - lastDuel)) / 1000);
-        replyText = `⚠️ *@${username}*, please wait ${remaining}s before creating another duel challenge.`;
+        replyText = tBot(userLang, 'bot.cooldown', { seconds: remaining, username });
         await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3270,7 +3344,7 @@ async function handleTelegramUpdate(update: any) {
       // Check profile exists (Requirement 2)
       const uSnap = await db.collection('users').doc(tgId).get();
       if (!uSnap.exists) {
-        await sendProfileNotFound(chatId, isPrivateChat);
+        await sendProfileNotFound(chatId, isPrivateChat, userLang, username);
         return;
       }
 
@@ -3301,7 +3375,7 @@ async function handleTelegramUpdate(update: any) {
         .get();
 
       if (creatorActive.docs.length > 0 || opponentActive.docs.length > 0) {
-        const replyText = `⚠️ *@${username}*, you already have an active pending or in-progress duel challenge! Settle or let it expire first.`;
+        const replyText = tBot(userLang, 'bot.activeDuelError', { username });
         await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3318,7 +3392,7 @@ async function handleTelegramUpdate(update: any) {
       if (stake > 0) {
         const balance = uData.vViral !== undefined ? uData.vViral : 0;
         if (balance < stake) {
-          const replyText = `⚠️ *@${username}*, you have insufficient vVIRAL balance! You need at least ${stake} vVIRAL to create this challenge.`;
+          const replyText = tBot(userLang, 'bot.insufficientBalance', { username, stake });
           await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3406,11 +3480,8 @@ async function handleTelegramUpdate(update: any) {
       // Lock cooldown on successful challenge initiation
       userDuelCooldowns.set(tgId, now);
 
-      const displayStake = stake > 0 ? `${stake} vVIRAL` : "Free Duel";
-      const duelMsg = `⚔️ *VIRAL DUEL CHALLENGE*\n\n` +
-                      `@${username} entered the Arena!\n\n` +
-                      `Stake: ${displayStake}\n\n` +
-                      `Who accepts the battle?`;
+      const displayStake = stake > 0 ? `${stake} vVIRAL` : (userLang === 'zh-CN' ? '免费对决' : userLang === 'es' ? 'Duelo gratis' : userLang === 'ru' ? 'Бесплатная дуэль' : 'Free Duel');
+      const duelMsg = tBot(userLang, 'bot.challengeCreated', { username, stake: displayStake });
 
       const responseTg = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
@@ -3422,8 +3493,8 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                { "text": "🔥 ACCEPT DUEL", "callback_data": `accept_duel:${challengeId}` },
-                { "text": "❌ CANCEL", "callback_data": `cancel_duel:${challengeId}` }
+                { "text": `🔥 ${userLang === 'zh-CN' ? '接受对决' : userLang === 'es' ? 'ACEPTAR DUELO' : userLang === 'ru' ? 'ПРИНЯТЬ ДУЭЛЬ' : 'ACCEPT DUEL'}`, "callback_data": `accept_duel:${challengeId}` },
+                { "text": `❌ ${userLang === 'zh-CN' ? '取消' : userLang === 'es' ? 'CANCELAR' : userLang === 'ru' ? 'ОТМЕНА' : 'CANCEL'}`, "callback_data": `cancel_duel:${challengeId}` }
               ]
             ]
           }
@@ -3447,7 +3518,7 @@ async function handleTelegramUpdate(update: any) {
       const lastChallenge = userChallengeCooldowns.get(tgId) || 0;
       if (now - lastChallenge < 10000) {
         const remaining = Math.ceil((10000 - (now - lastChallenge)) / 1000);
-        replyText = `⚠️ *@${username}*, please wait ${remaining}s before creating another private challenge.`;
+        replyText = tBot(userLang, 'bot.cooldown', { seconds: remaining, username });
         await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3468,7 +3539,7 @@ async function handleTelegramUpdate(update: any) {
         .get();
 
       if (activeSnap.docs.length > 0) {
-        replyText = `⚠️ *@${username}*, you already have an active pending duel challenge! Settle or let it expire first.`;
+        replyText = tBot(userLang, 'bot.activeDuelError', { username });
         await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3484,7 +3555,7 @@ async function handleTelegramUpdate(update: any) {
       // Check user profile exists
       const uSnap = await db.collection('users').doc(tgId).get();
       if (!uSnap.exists) {
-        await sendProfileNotFound(chatId, isPrivateChat);
+        await sendProfileNotFound(chatId, isPrivateChat, userLang, username);
         return;
       }
 
@@ -3521,7 +3592,7 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                { "text": "📨 SHARE CHALLENGE", "url": `https://t.me/CyberDuellitebot?startapp=duel_${gameId}` }
+                { "text": `📨 ${userLang === 'zh-CN' ? '分享对决' : userLang === 'es' ? 'COMPARTIR DUELO' : userLang === 'ru' ? 'ПОДЕЛИТЬСЯ ДУЭЛЬЮ' : 'SHARE CHALLENGE'}`, "url": `https://t.me/CyberDuellitebot?startapp=duel_${gameId}` }
               ]
             ]
           }
