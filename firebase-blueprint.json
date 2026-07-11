@@ -64,6 +64,29 @@
         "timestamp": { "type": "string", "format": "date-time" },
         "idempotencyKey": { "type": "string" }
       }
+    },
+    "Challenge": {
+      "title": "VIRAL Duel Challenge Record",
+      "description": "Represents a persistent live community challenge record.",
+      "type": "object",
+      "properties": {
+        "challengeId": { "type": "string" },
+        "chatId": { "type": "string" },
+        "messageId": { "type": "string" },
+        "creatorTelegramId": { "type": "string" },
+        "creatorUsername": { "type": "string" },
+        "opponentTelegramId": { "type": "string" },
+        "opponentUsername": { "type": "string" },
+        "stake": { "type": "integer" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" },
+        "acceptedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "matchId": { "type": "string" },
+        "idempotencyKey": { "type": "string" }
+      },
+      "required": ["challengeId", "chatId", "creatorTelegramId", "creatorUsername", "stake", "status", "createdAt", "expiresAt"]
     }
   },
   "firestore": {
@@ -78,6 +101,10 @@
     "/transactions/{txId}": {
       "schema": "Transaction",
       "description": "Ledger entries tracking internal economy flows."
+    },
+    "/challenges/{challengeId}": {
+      "schema": "Challenge",
+      "description": "Live community duel challenge records."
     }
   }
 }

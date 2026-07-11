@@ -315,6 +315,182 @@ const ECONOMY_CONFIG = {
   welcomeBonus: 500 // Start with 500 vVIRAL to play stake matches immediately
 };
 
+// Centralized Duel / Challenge Configuration
+const DUEL_CONFIG = {
+  allowedStakes: [0, 50, 100, 250, 500, 1000],
+  defaultStake: 0,
+  expirationMinutes: 10,
+  maxPendingChallengesPerChat: 3,
+  platformFeePercent: 10
+};
+
+// Atomic Transaction-Safe Helper: Reserve User Stake
+async function reserveUserStake(userId: string, stake: number, challengeId: string, idempotencyKey: string) {
+  if (stake <= 0) return { success: true };
+  const userRefReal = doc(firestoreInstance, 'users', userId);
+  const { runTransaction } = await import('firebase/firestore');
+  return await runTransaction(firestoreInstance, async (transaction) => {
+    const uSnap = await transaction.get(userRefReal);
+    if (!uSnap.exists()) {
+      throw new Error("user_not_found");
+    }
+    const uData = uSnap.data() || {};
+    const currentBalance = uData.vViral !== undefined ? uData.vViral : 0;
+    const currentReserved = uData.vViralReserved !== undefined ? uData.vViralReserved : 0;
+
+    // Check transaction idempotency first
+    const txRef = doc(firestoreInstance, 'transactions', idempotencyKey);
+    const txSnap = await transaction.get(txRef);
+    if (txSnap.exists()) {
+      return { success: true };
+    }
+
+    if (currentBalance < stake) {
+      throw new Error("insufficient_balance");
+    }
+
+    const newBalance = currentBalance - stake;
+    const newReserved = currentReserved + stake;
+
+    const txRecord = {
+      id: idempotencyKey,
+      userId,
+      type: 'debit',
+      amount: -stake,
+      prevBalance: currentBalance,
+      newBalance: newBalance,
+      source: 'stake_duel_reserve',
+      referenceId: challengeId,
+      timestamp: new Date().toISOString(),
+      idempotencyKey,
+      status: 'completed'
+    };
+
+    transaction.set(txRef, txRecord);
+    transaction.update(userRefReal, {
+      vViral: newBalance,
+      vViralReserved: newReserved
+    });
+
+    return { success: true, newBalance, newReserved };
+  });
+}
+
+// Atomic Transaction-Safe Helper: Release User Stake
+async function releaseUserStake(userId: string, stake: number, challengeId: string, idempotencyKey: string) {
+  if (stake <= 0) return { success: true };
+  const userRefReal = doc(firestoreInstance, 'users', userId);
+  const { runTransaction } = await import('firebase/firestore');
+  return await runTransaction(firestoreInstance, async (transaction) => {
+    const uSnap = await transaction.get(userRefReal);
+    if (!uSnap.exists()) {
+      throw new Error("user_not_found");
+    }
+    const uData = uSnap.data() || {};
+    const currentBalance = uData.vViral !== undefined ? uData.vViral : 0;
+    const currentReserved = uData.vViralReserved !== undefined ? uData.vViralReserved : 0;
+
+    // Check transaction idempotency first
+    const txRef = doc(firestoreInstance, 'transactions', idempotencyKey);
+    const txSnap = await transaction.get(txRef);
+    if (txSnap.exists()) {
+      return { success: true };
+    }
+
+    const newBalance = currentBalance + stake;
+    const newReserved = Math.max(0, currentReserved - stake);
+
+    const txRecord = {
+      id: idempotencyKey,
+      userId,
+      type: 'credit',
+      amount: stake,
+      prevBalance: currentBalance,
+      newBalance: newBalance,
+      source: 'stake_duel_refund',
+      referenceId: challengeId,
+      timestamp: new Date().toISOString(),
+      idempotencyKey,
+      status: 'completed'
+    };
+
+    transaction.set(txRef, txRecord);
+    transaction.update(userRefReal, {
+      vViral: newBalance,
+      vViralReserved: newReserved
+    });
+
+    return { success: true, newBalance, newReserved };
+  });
+}
+
+// Atomic Transaction-Safe Helper: Settle and Clear Reserved Challenge Stakes upon Match Completion
+async function settleChallengeReservations(challengeId: string, winnerId: string, player1Id: string, player2Id: string, stake: number, matchId: string) {
+  // Update the challenge status to completed
+  await db.collection('challenges').doc(challengeId).update({
+    status: 'completed',
+    completedAt: new Date().toISOString(),
+    matchId: matchId
+  });
+
+  if (stake <= 0) return;
+
+  const { runTransaction } = await import('firebase/firestore');
+  const p1RefReal = doc(firestoreInstance, 'users', player1Id);
+  const p2RefReal = doc(firestoreInstance, 'users', player2Id);
+
+  await runTransaction(firestoreInstance, async (transaction) => {
+    const p1Snap = await transaction.get(p1RefReal);
+    const p2Snap = await transaction.get(p2RefReal);
+
+    const p1Data = p1Snap.data() || {};
+    const p2Data = p2Snap.data() || {};
+
+    const p1Reserved = p1Data.vViralReserved !== undefined ? p1Data.vViralReserved : 0;
+    const p2Reserved = p2Data.vViralReserved !== undefined ? p2Data.vViralReserved : 0;
+
+    const newP1Reserved = Math.max(0, p1Reserved - stake);
+    const newP2Reserved = Math.max(0, p2Reserved - stake);
+
+    transaction.update(p1RefReal, { vViralReserved: newP1Reserved });
+    transaction.update(p2RefReal, { vViralReserved: newP2Reserved });
+
+    const txIdP1 = `settle_clear_p1_${challengeId}`;
+    const txIdP2 = `settle_clear_p2_${challengeId}`;
+
+    const txRefP1 = doc(firestoreInstance, 'transactions', txIdP1);
+    const txRefP2 = doc(firestoreInstance, 'transactions', txIdP2);
+
+    transaction.set(txRefP1, {
+      id: txIdP1,
+      userId: player1Id,
+      type: 'debit',
+      amount: -stake,
+      prevBalance: p1Data.vViral || 0,
+      newBalance: p1Data.vViral || 0,
+      source: 'stake_duel_clear_reserve',
+      referenceId: challengeId,
+      timestamp: new Date().toISOString(),
+      idempotencyKey: txIdP1,
+      status: 'completed'
+    });
+
+    transaction.set(txRefP2, {
+      id: txIdP2,
+      userId: player2Id,
+      type: 'debit',
+      amount: -stake,
+      prevBalance: p2Data.vViral || 0,
+      newBalance: p2Data.vViral || 0,
+      source: 'stake_duel_clear_reserve',
+      referenceId: challengeId,
+      timestamp: new Date().toISOString(),
+      idempotencyKey: txIdP2,
+      status: 'completed'
+    });
+  });
+}
+
 // Reusable Atomic Transaction Ledger Helper
 async function adjustUserVViral(
   userId: string,
@@ -941,6 +1117,37 @@ app.post('/api/matchmaking/join', async (req, res) => {
 
     // Direct Challenge Acceptance Flow
     if (challengeId) {
+      // Check if this challenge exists in the new challenges collection
+      let chalDoc = await db.collection('challenges').doc(challengeId).get();
+      if (!chalDoc.exists && challengeId.startsWith('duel_')) {
+        const cleanId = challengeId.replace('duel_', '');
+        chalDoc = await db.collection('challenges').doc(cleanId).get();
+      }
+
+      if (chalDoc.exists) {
+        const chalData = chalDoc.data() || {};
+        const creatorId = chalData.creatorTelegramId;
+        const opponentId = chalData.opponentTelegramId;
+
+        // Requirement 9: Backend must validate challenge ID, current user identity, creator or accepted opponent, challenge status, and associated match ID
+        if (targetUserId !== creatorId && targetUserId !== opponentId) {
+          return res.status(403).json({ error: "Access denied. You are not a participant in this duel." });
+        }
+
+        if (chalData.status !== 'accepted' && chalData.status !== 'in_progress' && chalData.status !== 'completed') {
+          return res.status(400).json({ error: `This duel challenge is currently ${chalData.status}.` });
+        }
+
+        const mId = chalData.matchId || challengeId;
+        const matchSnap = await db.collection('games').doc(mId).get();
+        if (!matchSnap.exists) {
+          return res.status(404).json({ error: "Associated game match not found." });
+        }
+
+        const matchData = matchSnap.data();
+        return res.json({ game: sanitizeGameForUser(matchData, targetUserId) });
+      }
+
       const gameRef = db.collection('games').doc(challengeId);
       const gameSnap = await gameRef.get();
       if (!gameSnap.exists) {
@@ -1438,6 +1645,18 @@ app.post('/api/game/leave', async (req, res) => {
       await Promise.all(updatePromises);
     }
 
+    // Settle challenge reservations if this match was generated by a persistent community challenge
+    if (gData.challengeId) {
+      await settleChallengeReservations(
+        gData.challengeId,
+        opponentId,
+        gData.player1Id,
+        gData.player2Id,
+        stakeAmount,
+        gameId
+      ).catch(err => console.error("Error settling challenge reservations:", err));
+    }
+
     const fullGame = { ...gData, ...updatedFields };
     res.json({ game: sanitizeGameForUser(fullGame, targetUserId) });
   } catch (error: any) {
@@ -1622,6 +1841,18 @@ app.post('/api/game/move', async (req, res) => {
 
       if (updatePromises.length > 0) {
         await Promise.all(updatePromises);
+      }
+
+      // Settle challenge reservations if this match was generated by a persistent community challenge
+      if (gameData.challengeId) {
+        await settleChallengeReservations(
+          gameData.challengeId,
+          winnerId,
+          gameData.player1Id,
+          gameData.player2Id,
+          stakeAmount,
+          gameId
+        ).catch(err => console.error("Error settling challenge reservations:", err));
       }
     } else {
       // Only one player has moved
@@ -2063,10 +2294,355 @@ async function handleTelegramUpdate(update: any) {
 
     console.log(`[Telegram Callback Query] User ID: ${cqTgId}, Username: @${cqUsername}, Data: ${cqData}`);
 
+    console.log(`[Telegram Callback Query] User ID: ${cqTgId}, Username: @${cqUsername}, Data: ${cqData}`);
+
+    if (cqData.startsWith("cancel_duel:")) {
+      const challengeId = cqData.substring("cancel_duel:".length);
+      try {
+        const chalRef = db.collection('challenges').doc(challengeId);
+        const chalSnap = await chalRef.get();
+        if (!chalSnap.exists) {
+          await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              callback_query_id: cqId,
+              text: "⚠️ Challenge not found!",
+              show_alert: true
+            })
+          });
+          return;
+        }
+
+        const chalData = chalSnap.data() || {};
+        const isAdminUser = ADMIN_TELEGRAM_IDS.includes(cqTgId) || ADMIN_TELEGRAM_IDS.includes(cqUsername.toLowerCase());
+
+        // Verify identity: must be creator or approved admin (Requirement 11)
+        if (cqTgId !== chalData.creatorTelegramId && !isAdminUser) {
+          await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              callback_query_id: cqId,
+              text: "⚠️ Only the challenge creator or administrators can cancel this duel!",
+              show_alert: true
+            })
+          });
+          return;
+        }
+
+        // Confirm status is pending
+        if (chalData.status !== 'pending') {
+          await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              callback_query_id: cqId,
+              text: `⚠️ This challenge is already ${chalData.status} and cannot be cancelled.`,
+              show_alert: true
+            })
+          });
+          return;
+        }
+
+        // Atomic transaction to mark as cancelled
+        const { runTransaction } = await import('firebase/firestore');
+        const chalRefReal = doc(firestoreInstance, 'challenges', challengeId);
+        await runTransaction(firestoreInstance, async (transaction) => {
+          const freshSnap = await transaction.get(chalRefReal);
+          if (!freshSnap.exists()) throw new Error("not_found");
+          const freshData = freshSnap.data() || {};
+          if (freshData.status !== 'pending') throw new Error("status_changed");
+
+          transaction.update(chalRefReal, {
+            status: 'cancelled',
+            completedAt: new Date().toISOString()
+          });
+        });
+
+        // Release creator stake atomically if any (Requirement 11)
+        if (chalData.stake > 0) {
+          await releaseUserStake(
+            chalData.creatorTelegramId,
+            chalData.stake,
+            challengeId,
+            `cancel_refund_creator_${chalData.creatorTelegramId}_${challengeId}`
+          );
+        }
+
+        // Edit Telegram group message
+        if (cq.message) {
+          const cancelMsg = `❌ *VIRAL DUEL CANCELLED*\n\nThe challenger left the Arena.`;
+          await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: cq.message.chat.id,
+              message_id: cq.message.message_id,
+              text: cancelMsg,
+              parse_mode: "Markdown",
+              reply_markup: { inline_keyboard: [] }
+            })
+          });
+        }
+
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callback_query_id: cqId,
+            text: "❌ Duel challenge cancelled successfully.",
+            show_alert: false
+          })
+        });
+
+      } catch (err) {
+        console.error("Cancel challenge callback error:", err);
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            callback_query_id: cqId,
+            text: "⚠️ An error occurred while cancelling the challenge.",
+            show_alert: true
+          })
+        });
+      }
+      return;
+    }
+
     if (cqData.startsWith("accept_duel:")) {
       const challengeId = cqData.substring("accept_duel:".length);
 
       try {
+        // Intercept if it exists in the challenges collection
+        const chalRef = db.collection('challenges').doc(challengeId);
+        const chalSnap = await chalRef.get();
+        if (chalSnap.exists) {
+          const chalData = chalSnap.data() || {};
+
+          // Validate personal account (Requirement 6)
+          const isAnonymous = !cqUser || !cqUser.id || String(cqUser.id) === "1087968824" || cqUsername.toLowerCase() === "groupanonymousbot" || !!cq.message?.sender_chat;
+          if (isAnonymous) {
+            await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                callback_query_id: cqId,
+                text: "⚠️ Personal account required. Please accept from your personal Telegram account.",
+                show_alert: true
+              })
+            });
+            return;
+          }
+
+          // Validate profiles
+          const acceptorSnap = await db.collection('users').doc(cqTgId).get();
+          if (!acceptorSnap.exists) {
+            await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                callback_query_id: cqId,
+                text: "⚠️ Profile not initialized. Open the app to join first.",
+                show_alert: true
+              })
+            });
+            return;
+          }
+
+          const acceptorData = acceptorSnap.data() || {};
+          if (acceptorData.blocked || acceptorData.isBlocked) {
+            await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                callback_query_id: cqId,
+                text: "⚠️ Your account is blocked from participating in duels.",
+                show_alert: true
+              })
+            });
+            return;
+          }
+
+          // Validate not creator
+          if (chalData.creatorTelegramId === cqTgId) {
+            await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                callback_query_id: cqId,
+                text: "⚠️ You cannot accept your own duel challenge!",
+                show_alert: true
+              })
+            });
+            return;
+          }
+
+          // Validate status
+          if (chalData.status !== 'pending') {
+            await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                callback_query_id: cqId,
+                text: `⚠️ This duel challenge is already ${chalData.status}!`,
+                show_alert: true
+              })
+            });
+            return;
+          }
+
+          // Validate expiration
+          const expiresAtTime = new Date(chalData.expiresAt).getTime();
+          if (Date.now() > expiresAtTime) {
+            await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                callback_query_id: cqId,
+                text: "⚠️ This duel challenge has expired!",
+                show_alert: true
+              })
+            });
+            return;
+          }
+
+          // Validate dual participation (Requirement 13)
+          const creatorActiveChals = await db.collection('challenges')
+            .where('creatorTelegramId', '==', cqTgId)
+            .where('status', 'in', ['pending', 'accepted', 'in_progress'])
+            .get();
+          const opponentActiveChals = await db.collection('challenges')
+            .where('opponentTelegramId', '==', cqTgId)
+            .where('status', 'in', ['accepted', 'in_progress'])
+            .get();
+          if (creatorActiveChals.docs.length > 0 || opponentActiveChals.docs.length > 0) {
+            await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                callback_query_id: cqId,
+                text: "⚠️ You already have an active duel!",
+                show_alert: true
+              })
+            });
+            return;
+          }
+
+          // Validate balance
+          const checkStake = chalData.stake || 0;
+          if (checkStake > 0) {
+            const availableBalance = acceptorData.vViral !== undefined ? acceptorData.vViral : 0;
+            if (availableBalance < checkStake) {
+              await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  callback_query_id: cqId,
+                  text: `⚠️ Insufficient balance! You need ${checkStake} vVIRAL.`,
+                  show_alert: true
+                })
+              });
+              return;
+            }
+          }
+
+          // Run transaction to transition the challenge status and assign the match ID
+          const chalRefReal = doc(firestoreInstance, 'challenges', challengeId);
+          const { runTransaction } = await import('firebase/firestore');
+
+          const txResult = await runTransaction(firestoreInstance, async (transaction) => {
+            const freshSnap = await transaction.get(chalRefReal);
+            if (!freshSnap.exists()) throw new Error("not_found");
+            const freshData = freshSnap.data() || {};
+            if (freshData.status !== 'pending') throw new Error("already_accepted");
+
+            const matchId = db.collection('games').doc().id;
+            transaction.update(chalRefReal, {
+              status: 'accepted',
+              opponentTelegramId: cqTgId,
+              opponentUsername: cqUsername,
+              acceptedAt: new Date().toISOString(),
+              matchId: matchId
+            });
+            return { freshData, matchId };
+          });
+
+          // Reserve stakeholder balance for opponent
+          if (checkStake > 0) {
+            await reserveUserStake(
+              cqTgId,
+              checkStake,
+              challengeId,
+              `accept_reserve_opponent_${cqTgId}_${challengeId}`
+            );
+          }
+
+          // Create the game match session
+          const isPrivateChat = cq.message?.chat?.type === 'private';
+          const newGame = {
+            id: txResult.matchId,
+            player1Id: chalData.creatorTelegramId,
+            player1Username: chalData.creatorUsername,
+            player2Id: cqTgId,
+            player2Username: cqUsername,
+            status: "matched",
+            mode: checkStake > 0 ? "stake" : "free",
+            stake: checkStake,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            tgChatId: String(cq.message?.chat?.id || ""),
+            tgMessageId: String(cq.message?.message_id || ""),
+            challengeId: challengeId
+          };
+          await db.collection('games').doc(txResult.matchId).set(newGame);
+
+          // Edit public Telegram group message (Requirement 8)
+          if (cq.message) {
+            const totalPrizePool = checkStake * 2;
+            const prizePoolText = checkStake > 0 ? `${totalPrizePool} vVIRAL` : "Community Duel";
+            const editMsgText = `⚔️ *DUEL ACCEPTED*\n\n` +
+                                `@${chalData.creatorUsername}\n` +
+                                `VS\n` +
+                                `@${cqUsername}\n\n` +
+                                `Prize Pool: ${prizePoolText}\n\n` +
+                                `The battle is ready.`;
+
+            const enterBtn = getLaunchButton("⚔️ ENTER BATTLE", "duel_" + challengeId, isPrivateChat);
+            await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: cq.message.chat.id,
+                message_id: cq.message.message_id,
+                text: editMsgText,
+                parse_mode: "Markdown",
+                reply_markup: {
+                  inline_keyboard: [
+                    [enterBtn]
+                  ]
+                }
+              })
+            });
+          }
+
+          await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              callback_query_id: cqId,
+              text: "⚔️ Duel challenge accepted successfully! Press ENTER BATTLE to launch.",
+              show_alert: false
+            })
+          });
+
+          // Trigger mission achievements
+          await updateMissionProgress(chalData.creatorTelegramId, 'challenge_friend', 1);
+          await updateMissionProgress(cqTgId, 'challenge_friend', 1);
+          return;
+        }
+
         const gameRef = db.collection('games').doc(challengeId);
         const gameSnap = await gameRef.get();
         if (!gameSnap.exists) {
@@ -2638,7 +3214,42 @@ async function handleTelegramUpdate(update: any) {
       return;
     } 
     else if (command === '/duel') {
-      // 12. Implement 30s Cooldown
+      let stake = DUEL_CONFIG.defaultStake; // Default 0
+      const args = text.trim().split(/\s+/).slice(1);
+      if (args.length > 0) {
+        const parsed = parseInt(args[0], 10);
+        if (isNaN(parsed)) {
+          const replyText = `⚠️ *Invalid duel stake.*\n\nAvailable stakes: 0, 50, 100, 250, 500, 1000 vVIRAL.`;
+          await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: replyText,
+              parse_mode: "Markdown"
+            })
+          });
+          return;
+        }
+        stake = parsed;
+      }
+
+      // Check allowed stakes (Requirement 3)
+      if (!DUEL_CONFIG.allowedStakes.includes(stake)) {
+        const replyText = `⚠️ *Invalid duel stake.*\n\nAvailable stakes: 0, 50, 100, 250, 500, 1000 vVIRAL.`;
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: "Markdown"
+          })
+        });
+        return;
+      }
+
+      // Cooldown (Requirement 13)
       const now = Date.now();
       const lastDuel = userDuelCooldowns.get(tgId) || 0;
       if (now - lastDuel < 30000) {
@@ -2655,16 +3266,17 @@ async function handleTelegramUpdate(update: any) {
         });
         return;
       }
-      userDuelCooldowns.set(tgId, now);
 
-      // Check maximum active challenges: 1 per user
-      const activeSnap = await db.collection('games')
-        .where('player1Id', '==', tgId)
-        .where('status', '==', 'waiting')
-        .get();
+      // Check profile exists (Requirement 2)
+      const uSnap = await db.collection('users').doc(tgId).get();
+      if (!uSnap.exists) {
+        await sendProfileNotFound(chatId, isPrivateChat);
+        return;
+      }
 
-      if (activeSnap.docs.length > 0) {
-        replyText = `⚠️ *@${username}*, you already have an active pending duel challenge! Settle or let it expire first.`;
+      const uData = uSnap.data() || {};
+      if (uData.blocked || uData.isBlocked) {
+        const replyText = `⚠️ *Account Blocked*\n\nYour account is currently blocked from participating in duels.`;
         await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2677,34 +3289,127 @@ async function handleTelegramUpdate(update: any) {
         return;
       }
 
-      // Check user profile exists
-      const uSnap = await db.collection('users').doc(tgId).get();
-      if (!uSnap.exists) {
-        await sendProfileNotFound(chatId, isPrivateChat);
+      // Check active pending or in-progress challenges (Requirement 13)
+      const creatorActive = await db.collection('challenges')
+        .where('creatorTelegramId', '==', tgId)
+        .where('status', 'in', ['pending', 'accepted', 'in_progress'])
+        .get();
+
+      const opponentActive = await db.collection('challenges')
+        .where('opponentTelegramId', '==', tgId)
+        .where('status', 'in', ['accepted', 'in_progress'])
+        .get();
+
+      if (creatorActive.docs.length > 0 || opponentActive.docs.length > 0) {
+        const replyText = `⚠️ *@${username}*, you already have an active pending or in-progress duel challenge! Settle or let it expire first.`;
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: replyText,
+            parse_mode: "Markdown"
+          })
+        });
         return;
       }
 
-      // Generate challenge ID
-      const gameId = db.collection('games').doc().id;
-      const newGame = {
-        id: gameId,
-        player1Id: tgId,
-        player1Username: username,
-        player2Id: "waiting",
-        player2Username: "waiting",
-        status: "waiting",
-        mode: "free",
-        stake: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        tgChatId: String(chatId),
-        tgMessageId: ""
+      // Check balance (Requirement 2)
+      if (stake > 0) {
+        const balance = uData.vViral !== undefined ? uData.vViral : 0;
+        if (balance < stake) {
+          const replyText = `⚠️ *@${username}*, you have insufficient vVIRAL balance! You need at least ${stake} vVIRAL to create this challenge.`;
+          await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: replyText,
+              parse_mode: "Markdown"
+            })
+          });
+          return;
+        }
+      }
+
+      // Check maximum pending challenges per chat (Requirement 13)
+      if (!isPrivateChat) {
+        const chatPending = await db.collection('challenges')
+          .where('chatId', '==', String(chatId))
+          .where('status', '==', 'pending')
+          .get();
+        if (chatPending.docs.length >= DUEL_CONFIG.maxPendingChallengesPerChat) {
+          const replyText = `⚠️ *Arena Full*\n\nThere are already ${DUEL_CONFIG.maxPendingChallengesPerChat} pending challenges in this community. Settle or let them expire first!`;
+          await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: replyText,
+              parse_mode: "Markdown"
+            })
+          });
+          return;
+        }
+      }
+
+      // Generate Challenge
+      const challengeId = db.collection('challenges').doc().id;
+
+      // Reserve creator's stake atomically (Requirement 7)
+      if (stake > 0) {
+        try {
+          await reserveUserStake(
+            tgId,
+            stake,
+            challengeId,
+            `create_reserve_creator_${tgId}_${challengeId}`
+          );
+        } catch (err) {
+          const replyText = `⚠️ *Reservation Failure*\n\nCould not lock stake funds. Please try again.`;
+          await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: replyText,
+              parse_mode: "Markdown"
+            })
+          });
+          return;
+        }
+      }
+
+      const createdAt = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + DUEL_CONFIG.expirationMinutes * 60 * 1000).toISOString();
+
+      const newChallenge = {
+        challengeId,
+        chatId: String(chatId),
+        messageId: "",
+        creatorTelegramId: tgId,
+        creatorUsername: username,
+        opponentTelegramId: "",
+        opponentUsername: "",
+        stake,
+        status: 'pending',
+        createdAt,
+        expiresAt,
+        acceptedAt: "",
+        completedAt: "",
+        matchId: "",
+        idempotencyKey: `create_${tgId}_${challengeId}`
       };
 
-      await db.collection('games').doc(gameId).set(newGame);
+      await db.collection('challenges').doc(challengeId).set(newChallenge);
 
+      // Lock cooldown on successful challenge initiation
+      userDuelCooldowns.set(tgId, now);
+
+      const displayStake = stake > 0 ? `${stake} vVIRAL` : "Free Duel";
       const duelMsg = `⚔️ *VIRAL DUEL CHALLENGE*\n\n` +
                       `@${username} entered the Arena!\n\n` +
+                      `Stake: ${displayStake}\n\n` +
                       `Who accepts the battle?`;
 
       const responseTg = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -2717,7 +3422,8 @@ async function handleTelegramUpdate(update: any) {
           reply_markup: {
             inline_keyboard: [
               [
-                { "text": "🔥 ACCEPT DUEL", "callback_data": `accept_duel:${gameId}` }
+                { "text": "🔥 ACCEPT DUEL", "callback_data": `accept_duel:${challengeId}` },
+                { "text": "❌ CANCEL", "callback_data": `cancel_duel:${challengeId}` }
               ]
             ]
           }
@@ -2728,8 +3434,8 @@ async function handleTelegramUpdate(update: any) {
         const sentData = await responseTg.json();
         const msgId = sentData.result?.message_id;
         if (msgId) {
-          await db.collection('games').doc(gameId).update({
-            tgMessageId: String(msgId)
+          await db.collection('challenges').doc(challengeId).update({
+            messageId: String(msgId)
           });
         }
       }
@@ -2970,6 +3676,7 @@ async function startTelegramBot() {
   // 3. Setup active challenge expiration background monitor (polls every 30 seconds)
   setInterval(async () => {
     try {
+      // (a) Handle legacy game challenges (backward compatibility)
       const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const expiredGames = await db.collection('games')
         .where('status', '==', 'waiting')
@@ -3006,6 +3713,60 @@ async function startTelegramBot() {
                 reply_markup: { inline_keyboard: [] }
               })
             }).catch(e => console.error("Error editing expired Telegram message:", e));
+          }
+        }
+      }
+
+      // (b) Handle new custom challenges expiration (Requirement 11)
+      const expiredChallenges = await db.collection('challenges')
+        .where('status', '==', 'pending')
+        .get();
+
+      for (const chDoc of expiredChallenges.docs) {
+        const chalData = chDoc.data() || {};
+        const isExpired = chalData.expiresAt && new Date(chalData.expiresAt).getTime() < Date.now();
+        if (isExpired) {
+          try {
+            const { runTransaction } = await import('firebase/firestore');
+            const chalRefReal = doc(firestoreInstance, 'challenges', chDoc.id);
+            await runTransaction(firestoreInstance, async (transaction) => {
+              const freshSnap = await transaction.get(chalRefReal);
+              if (!freshSnap.exists()) throw new Error("not_found");
+              const freshData = freshSnap.data() || {};
+              if (freshData.status !== 'pending') throw new Error("already_handled");
+
+              transaction.update(chalRefReal, {
+                status: 'expired',
+                completedAt: new Date().toISOString()
+              });
+            });
+
+            // Release creator's stake if any
+            if (chalData.stake > 0) {
+              await releaseUserStake(
+                chalData.creatorTelegramId,
+                chalData.stake,
+                chDoc.id,
+                `expire_refund_creator_${chalData.creatorTelegramId}_${chDoc.id}`
+              );
+            }
+
+            // Edit Telegram group message
+            if (chalData.chatId && chalData.messageId) {
+              await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: chalData.chatId,
+                  message_id: Number(chalData.messageId),
+                  text: `❌ *DUEL CHALLENGE EXPIRED*\n\nThe challenge hosted by @${chalData.creatorUsername || 'user'} has expired. Any stakes have been refunded.`,
+                  parse_mode: "Markdown",
+                  reply_markup: { inline_keyboard: [] }
+                })
+              }).catch(e => console.error("Error editing expired Telegram message:", e));
+            }
+          } catch (txErr: any) {
+            console.error(`Error processing expired challenge ${chDoc.id}:`, txErr);
           }
         }
       }
