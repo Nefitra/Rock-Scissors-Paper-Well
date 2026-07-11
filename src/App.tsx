@@ -657,13 +657,13 @@ function GameAppInner() {
         setDepositVerifyError(data.error);
       } else if (data.success && data.depositId) {
         setDepositPendingId(data.depositId);
-        setDepositAmountNano(data.amountNano);
+        setDepositAmountNano(String(data.amountNano));
         setDepositMessage(data.payload);
         setDepositTreasuryAddress(data.treasuryAddress);
         setDepositPendingStatus('awaiting_payment');
       } else if (data.intent) {
         setDepositPendingId(data.intent.id);
-        setDepositAmountNano(data.intent.amountNano);
+        setDepositAmountNano(String(data.intent.amountNano));
         setDepositMessage(data.intent.message);
         setDepositTreasuryAddress(data.intent.treasuryAddress);
         setDepositPendingStatus('awaiting_payment');
@@ -676,6 +676,10 @@ function GameAppInner() {
   };
 
   const handleVerifyDeposit = async (simulateOnChain = false) => {
+    if (!depositPendingId) {
+      setDepositVerifyError("No pending deposit to verify.");
+      return;
+    }
     setDepositLoading(true);
     setDepositVerifyError(null);
     try {
@@ -684,26 +688,27 @@ function GameAppInner() {
       if (initData) {
         headers['x-telegram-init-data'] = initData;
       }
-      const res = await fetch('/api/ton/deposit/verify', {
+      const url = `/api/ton/deposits/${depositPendingId}/verify`;
+      const res = await fetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          depositId: depositPendingId,
-          intentId: depositPendingId,
           simulateOnChain: simulateOnChain
         })
       });
       const data = await res.json();
       if (data.error) {
         setDepositVerifyError(data.error);
-      } else if (data.success && data.status === 'confirmed') {
+      } else if (data.success && (data.status === 'confirmed' || data.status === 'credited' || data.status === 'completed')) {
         setDepositPendingStatus('completed');
         playRewardXPSound();
         syncProfile();
-      } else if (data.status === 'completed' || data.status === 'confirmed') {
+      } else if (data.status === 'completed' || data.status === 'confirmed' || data.status === 'credited') {
         setDepositPendingStatus('completed');
         playRewardXPSound();
         syncProfile();
+      } else if (data.ok && data.status === 'pending') {
+        setDepositVerifyError(data.message || "Transaction not detected yet.");
       } else {
         setDepositVerifyError("Transaction not found on-chain yet. Please wait a moment and try again.");
       }
@@ -4754,16 +4759,18 @@ function GameAppInner() {
                         }
                         setDepositLoading(true);
                         try {
-                          await tonConnectUI.sendTransaction({
+                          const txParams = {
                             validUntil: Math.floor(Date.now() / 1000) + 300,
                             messages: [
                               {
                                 address: depositTreasuryAddress,
-                                amount: depositAmountNano,
+                                amount: String(depositAmountNano),
                                 payload: buildTextCommentBoc(depositMessage)
                               }
                             ]
-                          });
+                          };
+                          console.log("TON Connect sendTransaction parameters:", JSON.stringify(txParams, null, 2));
+                          await tonConnectUI.sendTransaction(txParams);
                           // After transaction is signed, we automatically wait 10 seconds and auto-trigger on-chain verification
                           setDepositVerifyError("Transaction signed successfully! Wait 10 seconds and click VERIFY below.");
                         } catch (err: any) {

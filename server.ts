@@ -18,6 +18,9 @@ import {
   runTransaction
 } from 'firebase/firestore';
 import crypto from 'crypto';
+import admin from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getApp } from 'firebase-admin/app';
 
 // Initialize Express
 const app = express();
@@ -34,12 +37,18 @@ if (!fs.existsSync(configPath)) {
 
 const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 
+// Initialize Firebase Client
 const firebaseApp = initializeApp(firebaseConfig);
 const firestoreInstance = initializeFirestore(firebaseApp, {
   experimentalForceLongPolling: true,
   useFetchStreams: false,
   localCache: memoryLocalCache()
 } as any, firebaseConfig.firestoreDatabaseId);
+
+// Initialize Firebase Admin SDK
+admin.initializeApp({
+  projectId: firebaseConfig.projectId
+});
 
 // Simple compatibility shim so we do not have to rewrite all DB queries across the codebase:
 class DocumentReferenceShim {
@@ -997,10 +1006,177 @@ function getTonCenterUrl(path: string): string {
   return `https://${host}${path}`;
 }
 
+function getTonCenterHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Accept': 'application/json',
+  };
+  if (process.env.TONCENTER_API_KEY) {
+    headers['X-API-Key'] = process.env.TONCENTER_API_KEY;
+  }
+  return headers;
+}
+
+function normalizeTonAddress(address: string): string {
+  if (!address) return "";
+  const trimmed = address.trim();
+  
+  if (trimmed.includes(':')) {
+    const parts = trimmed.split(':');
+    if (parts.length === 2) {
+      const wc = parseInt(parts[0], 10);
+      const hex = parts[1].toLowerCase().replace(/[^0-9a-f]/g, '');
+      return `${wc}:${hex}`;
+    }
+  }
+
+  try {
+    let base64 = trimmed
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
+    
+    while (base64.length % 4 !== 0) {
+      base64 += '=';
+    }
+
+    const buffer = Buffer.from(base64, 'base64');
+    if (buffer.length === 36) {
+      let wc = buffer[1];
+      if (wc === 255) {
+        wc = -1;
+      } else if (wc > 127) {
+        wc = wc - 256;
+      }
+      
+      const hashHex = buffer.subarray(2, 34).toString('hex').toLowerCase();
+      return `${wc}:${hashHex}`;
+    }
+  } catch (e) {
+    console.error(`Error normalizing TON address "${address}":`, e);
+  }
+
+  return trimmed.toLowerCase();
+}
+
+function extractMessageText(inMsg: any): string {
+  if (!inMsg) return "";
+  
+  // Try raw message field
+  if (typeof inMsg.message === 'string' && inMsg.message.trim() !== '') {
+    const msg = inMsg.message.trim();
+    if (msg.startsWith('DEP_')) {
+      return msg;
+    }
+    // Check if it's base64 encoded text
+    try {
+      const decoded = Buffer.from(msg, 'base64').toString('utf8').trim();
+      if (decoded.startsWith('DEP_')) {
+        return decoded;
+      }
+    } catch {}
+    // Check if it's hex-encoded text
+    try {
+      const decoded = Buffer.from(msg, 'hex').toString('utf8').trim();
+      if (decoded.startsWith('DEP_')) {
+        return decoded;
+      }
+    } catch {}
+  }
+
+  // Try decoded_body or decoded_body.text
+  if (inMsg.decoded_body) {
+    if (typeof inMsg.decoded_body === 'string') {
+      const text = inMsg.decoded_body.trim();
+      if (text.startsWith('DEP_')) return text;
+    } else if (typeof inMsg.decoded_body.text === 'string') {
+      const text = inMsg.decoded_body.text.trim();
+      if (text.startsWith('DEP_')) return text;
+    }
+  }
+
+  // Check if there is msg_data or other fields
+  if (inMsg.msg_data && typeof inMsg.msg_data.text === 'string') {
+    const text = inMsg.msg_data.text.trim();
+    if (text.startsWith('DEP_')) return text;
+    // Check base64 in msg_data
+    try {
+      const decoded = Buffer.from(text, 'base64').toString('utf8').trim();
+      if (decoded.startsWith('DEP_')) {
+        return decoded;
+      }
+    } catch {}
+  }
+
+  return "";
+}
+
+async function fetchTransactionsFromToncenter(address: string, network: string): Promise<any[]> {
+  const host = network === 'mainnet' ? 'toncenter.com' : 'testnet.toncenter.com';
+  const headers = getTonCenterHeaders();
+  const txs: any[] = [];
+
+  // 1. Try API v3 (REST): GET /api/v3/transactions?account=address&limit=20
+  try {
+    const url = `https://${host}/api/v3/transactions?account=${address}&limit=20`;
+    console.log(`[Toncenter V3] Fetching: ${url}`);
+    const res = await fetch(url, { headers });
+    const data = await res.json();
+    if (data && Array.isArray(data.transactions)) {
+      console.log(`[Toncenter V3] Successfully fetched ${data.transactions.length} transactions.`);
+      for (const tx of data.transactions) {
+        txs.push({
+          version: 'v3',
+          hash: tx.hash,
+          lt: tx.lt,
+          now: tx.now,
+          in_msg: tx.in_msg ? {
+            source: tx.in_msg.source,
+            destination: tx.in_msg.destination,
+            value: tx.in_msg.value,
+            message: tx.in_msg.message,
+            decoded_body: tx.in_msg.decoded_body
+          } : null
+        });
+      }
+    }
+  } catch (err) {
+    console.error(`[Toncenter V3] Failed to fetch transactions:`, err);
+  }
+
+  // 2. Also fetch from API v2 (standard JSON-RPC REST): GET /api/v2/getTransactions?address=address&limit=20
+  try {
+    const url = `https://${host}/api/v2/getTransactions?address=${address}&limit=20`;
+    console.log(`[Toncenter V2] Fetching: ${url}`);
+    const res = await fetch(url, { headers });
+    const data = await res.json();
+    if (data && data.ok && Array.isArray(data.result)) {
+      console.log(`[Toncenter V2] Successfully fetched ${data.result.length} transactions.`);
+      for (const tx of data.result) {
+        txs.push({
+          version: 'v2',
+          hash: tx.transaction_id ? tx.transaction_id.hash : "",
+          lt: tx.transaction_id ? tx.transaction_id.lt : "",
+          now: tx.utime,
+          in_msg: tx.in_msg ? {
+            source: tx.in_msg.source,
+            destination: tx.in_msg.destination,
+            value: tx.in_msg.value,
+            message: tx.in_msg.message,
+            decoded_body: tx.in_msg.decoded_body || (tx.in_msg.msg_data && tx.in_msg.msg_data.text ? { text: tx.in_msg.msg_data.text } : null)
+          } : null
+        });
+      }
+    }
+  } catch (err) {
+    console.error(`[Toncenter V2] Failed to fetch transactions:`, err);
+  }
+
+  return txs;
+}
+
 async function getOnChainBalance(address: string): Promise<number> {
   try {
     const url = getTonCenterUrl(`/api/v2/getAddressInformation?address=${address}`);
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: getTonCenterHeaders() });
     const data = await res.json();
     if (data.ok && data.result) {
       return Number(data.result.balance || 0);
@@ -1759,6 +1935,269 @@ app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
 });
 
 // 2. Verify Deposit Manual Trigger
+async function verifyAndCreditDeposit(depositId: string, targetUserId: string, simulateOnChain: boolean): Promise<any> {
+  const depRef = db.collection('tonDeposits').doc(depositId);
+  const depSnap = await depRef.get();
+  if (!depSnap.exists) {
+    return { status: 'rejected', error: "Deposit intent not found." };
+  }
+
+  const depData = depSnap.data() || {};
+  if (depData.telegramUserId !== targetUserId) {
+    return { status: 'rejected', error: "Unauthorized access to deposit record." };
+  }
+
+  // Already credited or confirmed
+  if (depData.status === 'credited' || depData.status === 'confirmed') {
+    const uSnap = await db.collection('users').doc(targetUserId).get();
+    const updatedProfile = uSnap.exists ? uSnap.data() : {};
+    return {
+      success: true,
+      status: 'credited',
+      amountNano: depData.actualAmountNano || depData.expectedAmountNano,
+      newGameBalanceNano: updatedProfile.tonAccount?.availableNano || 0,
+      transactionHash: depData.transactionHash,
+      profile: updatedProfile
+    };
+  }
+
+  if (new Date(depData.expiresAt).getTime() < Date.now() && !simulateOnChain) {
+    await depRef.update({ status: 'failed', failureCode: 'EXPIRED', failureReason: 'Deposit verification session has expired.' });
+    return { status: 'failed', error: "Deposit verification session has expired. Please create a new intent." };
+  }
+
+  let foundOnChain = false;
+  let detectedAmountNano = Number(depData.expectedAmountNano);
+  let detectedHash = "";
+  let detectedLt = "";
+
+  console.log(`[Verification] Checking on-chain for depositId: ${depositId}, Expected wallet: ${depData.expectedWalletAddress}, Expected Amount: ${depData.expectedAmountNano}`);
+
+  // Fetch transactions using our v2 & v3 helper
+  try {
+    const txs = await fetchTransactionsFromToncenter(TON_CONFIG.treasuryAddress, TON_CONFIG.network);
+    console.log(`[Verification] Fetched ${txs.length} total transactions to verify against.`);
+    
+    for (const tx of txs) {
+      if (!tx.in_msg) continue;
+
+      const normOnChainSource = normalizeTonAddress(tx.in_msg.source);
+      const normExpectedSource = normalizeTonAddress(depData.expectedWalletAddress);
+      const normOnChainDest = normalizeTonAddress(tx.in_msg.destination);
+      const normTreasury = normalizeTonAddress(TON_CONFIG.treasuryAddress);
+      
+      const comment = extractMessageText(tx.in_msg);
+      
+      console.log(`[Tx Inspect] Hash: ${tx.hash}, Source: ${tx.in_msg.source} (${normOnChainSource}), Dest: ${tx.in_msg.destination} (${normOnChainDest}), Val: ${tx.in_msg.value}, Comment: "${comment}"`);
+
+      // 1. Destination check
+      if (normOnChainDest !== normTreasury) {
+        continue;
+      }
+
+      // 2. Source/Sender check
+      if (normOnChainSource !== normExpectedSource) {
+        continue;
+      }
+
+      // 3. Amount check
+      const onChainVal = String(tx.in_msg.value);
+      const expectedVal = String(depData.expectedAmountNano);
+      if (onChainVal !== expectedVal) {
+        continue;
+      }
+
+      // 4. Timing check
+      const txTimeMs = tx.now * 1000;
+      const intentTimeMs = new Date(depData.createdAt).getTime();
+      if (txTimeMs < intentTimeMs - 60000) {
+        continue;
+      }
+
+      // 5. Comment check
+      if (comment !== depositId) {
+        continue;
+      }
+
+      // Match found!
+      foundOnChain = true;
+      detectedAmountNano = Number(tx.in_msg.value);
+      detectedHash = tx.hash || "";
+      detectedLt = tx.lt || "";
+      console.log(`[Verification SUCCESS] Decoded comment matches expected! Hash: ${detectedHash}, LT: ${detectedLt}, Amount: ${detectedAmountNano}`);
+      break;
+    }
+  } catch (err) {
+    console.error("[Verification ERROR] Error scanning Toncenter transactions:", err);
+  }
+
+  // Simulator check
+  if (!foundOnChain && simulateOnChain) {
+    if (TON_CONFIG.network === 'mainnet' || process.env.NODE_ENV === 'production') {
+      return { status: 'rejected', error: "Simulation and development helpers are disabled in production Mainnet." };
+    }
+    foundOnChain = true;
+    detectedHash = crypto.createHash('sha256').update(`sim_${depositId}`).digest('hex');
+    detectedLt = "1234567890";
+  }
+
+  if (!foundOnChain) {
+    return { ok: true, status: "pending", message: "Transaction not detected yet." };
+  }
+
+  // Duplicate Hash check
+  try {
+    const dupSnap = await db.collection('tonDeposits')
+      .where('transactionHash', '==', detectedHash)
+      .get();
+    if (!dupSnap.empty) {
+      let isSelf = false;
+      dupSnap.forEach(d => { if (d.id === depositId) isSelf = true; });
+      if (!isSelf) {
+        return { status: 'failed', error: "This on-chain transaction hash has already been credited to another account." };
+      }
+    }
+  } catch (err: any) {
+    console.error("[Verification ERROR] Duplicate hash check error:", err);
+  }
+
+  // Atomic crediting using Client-side transaction
+  try {
+    const confirmKey = `TON_DEPOSIT_CREDIT:${depositId}`;
+    await runTransaction(firestoreInstance, async (transaction) => {
+      const dRefReal = doc(firestoreInstance, 'tonDeposits', depositId);
+      const dSnap = await transaction.get(dRefReal);
+      const dData = dSnap.data() || {};
+      
+      if (dData.status === 'credited' || dData.status === 'confirmed') {
+        return;
+      }
+
+      // Idempotency check
+      const ledgerRefReal = doc(firestoreInstance, 'ledgerTransactions', confirmKey);
+      const ledgerSnap = await transaction.get(ledgerRefReal);
+      if (ledgerSnap.exists()) {
+        return;
+      }
+
+      const userRefReal = doc(firestoreInstance, 'users', targetUserId);
+      const userSnap = await transaction.get(userRefReal);
+      if (!userSnap.exists()) {
+        throw new Error(`User profile ${targetUserId} not found.`);
+      }
+
+      const userData = userSnap.data() || {};
+      const tonAccount = getOrCreateTonAccount(userData, targetUserId);
+
+      let available = Number(tonAccount.availableNano || 0);
+      available += detectedAmountNano;
+
+      const updatedTonAccount = {
+        ...tonAccount,
+        availableNano: available,
+        updatedAt: new Date().toISOString()
+      };
+
+      const nowIso = new Date().toISOString();
+
+      // Set ledger transaction
+      const ledgerTx = {
+        transactionId: confirmKey,
+        type: 'TON_DEPOSIT_CONFIRMED',
+        telegramUserId: targetUserId,
+        depositId,
+        amountNano: detectedAmountNano,
+        currency: 'TON',
+        status: 'posted',
+        idempotencyKey: confirmKey,
+        createdAt: nowIso,
+        postedAt: nowIso,
+        metadata: { depositId }
+      };
+      transaction.set(ledgerRefReal, ledgerTx);
+
+      // Create ledger entries
+      const entry1RefReal = doc(firestoreInstance, 'ledgerEntries', `${confirmKey}_ent_1`);
+      const entry2RefReal = doc(firestoreInstance, 'ledgerEntries', `${confirmKey}_ent_2`);
+
+      transaction.set(entry1RefReal, {
+        entryId: `${confirmKey}_ent_1`,
+        transactionId: confirmKey,
+        account: 'deposit_clearing',
+        telegramUserId: targetUserId,
+        amountNano: detectedAmountNano,
+        createdAt: nowIso
+      });
+
+      transaction.set(entry2RefReal, {
+        entryId: `${confirmKey}_ent_2`,
+        transactionId: confirmKey,
+        account: 'player_available',
+        telegramUserId: targetUserId,
+        amountNano: -detectedAmountNano,
+        createdAt: nowIso
+      });
+
+      transaction.update(userRefReal, { tonAccount: updatedTonAccount });
+
+      transaction.update(dRefReal, {
+        status: 'credited',
+        transactionHash: detectedHash,
+        transactionLt: detectedLt,
+        actualAmountNano: detectedAmountNano,
+        detectedAt: nowIso,
+        confirmedAt: nowIso,
+        creditedAt: nowIso,
+        updatedAt: nowIso
+      });
+    });
+
+    const userSnap = await db.collection('users').doc(targetUserId).get();
+    const finalProfile = userSnap.exists ? userSnap.data() : {};
+
+    return {
+      success: true,
+      status: 'credited',
+      amountNano: detectedAmountNano,
+      newGameBalanceNano: finalProfile.tonAccount?.availableNano || 0,
+      transactionHash: detectedHash,
+      profile: finalProfile
+    };
+  } catch (txErr: any) {
+    console.error("[Verification ERROR] Transaction failed:", txErr);
+    return { status: 'failed', error: txErr.message };
+  }
+}
+
+app.post('/api/ton/deposits/:depositId/verify', checkTonNetwork, async (req, res) => {
+  try {
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr) {
+      const verifiedUser = getRequestUser(req);
+      validatedUser = { userId: verifiedUser.userId, username: verifiedUser.username || "" };
+    }
+
+    const { depositId } = req.params;
+    const { simulateOnChain } = req.body;
+    const targetUserId = validatedUser.userId;
+
+    if (!depositId) {
+      return res.status(400).json({ error: "depositId is required in path parameters" });
+    }
+
+    const result = await verifyAndCreditDeposit(depositId, targetUserId, !!simulateOnChain);
+    if (result.error) {
+      return res.status(result.status === 'rejected' ? 400 : 500).json({ error: result.error });
+    }
+
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post('/api/ton/deposit/verify', checkTonNetwork, async (req, res) => {
   try {
     let validatedUser;
@@ -1776,113 +2215,12 @@ app.post('/api/ton/deposit/verify', checkTonNetwork, async (req, res) => {
       return res.status(400).json({ error: "depositId is required" });
     }
 
-    const depRef = db.collection('tonDeposits').doc(depositId);
-    const depSnap = await depRef.get();
-    if (!depSnap.exists) {
-      return res.status(404).json({ error: "Deposit intent not found." });
+    const result = await verifyAndCreditDeposit(depositId, targetUserId, !!simulateOnChain);
+    if (result.error) {
+      return res.status(result.status === 'rejected' ? 400 : 500).json({ error: result.error });
     }
 
-    const depData = depSnap.data() || {};
-    if (depData.telegramUserId !== targetUserId) {
-      return res.status(403).json({ error: "Unauthorized access to deposit record." });
-    }
-
-    if (depData.status === 'confirmed') {
-      const uSnap = await db.collection('users').doc(targetUserId).get();
-      const updatedProfile = uSnap.exists ? uSnap.data() : {};
-      return res.json({ success: true, status: 'confirmed', profile: updatedProfile });
-    }
-
-    if (new Date(depData.expiresAt).getTime() < Date.now() && !simulateOnChain) {
-      await depRef.update({ status: 'expired' });
-      return res.status(400).json({ error: "Deposit verification session has expired. Please create a new intent." });
-    }
-
-    let foundOnChain = false;
-    let detectedAmountNano = Number(depData.expectedAmountNano);
-    let detectedHash = "";
-
-    try {
-      const url = getTonCenterUrl(`/api/v2/getTransactions?address=${TON_CONFIG.treasuryAddress}&limit=20`);
-      const tonRes = await fetch(url);
-      const tonData = await tonRes.json();
-      if (tonData.ok && Array.isArray(tonData.result)) {
-        for (const tx of tonData.result) {
-          const inMsg = tx.in_msg;
-          if (!inMsg) continue;
-          
-          const value = Number(inMsg.value || 0);
-          const textMessage = inMsg.message || (inMsg.decoded_body && inMsg.decoded_body.text) || "";
-          
-          if (textMessage === depositId) {
-            foundOnChain = true;
-            detectedAmountNano = value;
-            detectedHash = tx.transaction_id ? tx.transaction_id.hash : "";
-            break;
-          }
-        }
-      }
-    } catch (apiErr) {
-      console.error("TON Center transaction lookup failed, checking simulator fallback...", apiErr);
-    }
-
-    if (!foundOnChain && simulateOnChain) {
-      if (TON_CONFIG.network === 'mainnet' || process.env.NODE_ENV === 'production') {
-        return res.status(400).json({ error: "Simulation and development helpers are disabled in production Mainnet." });
-      }
-      foundOnChain = true;
-      detectedHash = crypto.createHash('sha256').update(`sim_${depositId}`).digest('hex');
-    }
-
-    if (!foundOnChain) {
-      return res.json({ success: false, status: depData.status, message: "Transaction not found on-chain yet. Please broadcast it and wait." });
-    }
-
-    const hashCheck = await db.collection('tonDeposits').where('transactionHash', '==', detectedHash).get();
-    if (!hashCheck.empty) {
-      let isSelf = false;
-      hashCheck.forEach(d => { if (d.id === depositId) isSelf = true; });
-      if (!isSelf) {
-        return res.status(400).json({ error: "This on-chain transaction has already been credited to another account." });
-      }
-    }
-
-    const confirmKey = `dep_confirm_${depositId}`;
-    const depRefReal = doc(firestoreInstance, 'tonDeposits', depositId);
-
-    await runTransaction(firestoreInstance, async (transaction) => {
-      const freshDep = await transaction.get(depRefReal);
-      const fd = freshDep.data() || {};
-      if (fd.status === 'confirmed') return;
-
-      transaction.update(depRefReal, {
-        status: 'confirmed',
-        transactionHash: detectedHash,
-        actualAmountNano: detectedAmountNano,
-        confirmedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      });
-
-      await creditUserTonDeposit(
-        transaction,
-        targetUserId,
-        detectedAmountNano,
-        depositId,
-        confirmKey
-      );
-    });
-
-    const userRef = db.collection('users').doc(targetUserId);
-    const userSnap = await userRef.get();
-    const finalProfile = userSnap.exists ? userSnap.data() : {};
-
-    res.json({
-      success: true,
-      status: 'confirmed',
-      transactionHash: detectedHash,
-      amountNano: detectedAmountNano,
-      profile: finalProfile
-    });
+    res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -5934,6 +6272,99 @@ async function startTelegramBot() {
   }
 }
 
+async function runDepositScanCycle() {
+  console.log(`[Monitor] TON_DEPOSIT_SCAN_STARTED`);
+  try {
+    // 1. Fetch pending deposits from Firestore (status: created or submitted, non-expired)
+    const nowIso = new Date().toISOString();
+    const pendingSnap = await db.collection('tonDeposits')
+      .where('status', 'in', ['created', 'submitted'])
+      .get();
+      
+    if (pendingSnap.empty) {
+      return;
+    }
+
+    const pendingDocs: any[] = [];
+    pendingSnap.forEach(doc => {
+      const data = doc.data();
+      if (new Date(data.expiresAt).getTime() > Date.now()) {
+        pendingDocs.push({ id: doc.id, ...data });
+      }
+    });
+
+    if (pendingDocs.length === 0) {
+      return;
+    }
+
+    // 2. Fetch recent transactions for treasury address
+    const txs = await fetchTransactionsFromToncenter(TON_CONFIG.treasuryAddress, TON_CONFIG.network);
+    
+    for (const tx of txs) {
+      if (!tx.in_msg) continue;
+      
+      console.log(`[Monitor] TON_DEPOSIT_TRANSACTION_FOUND: ${tx.hash}`);
+      const comment = extractMessageText(tx.in_msg);
+      if (comment) {
+        console.log(`[Monitor] TON_DEPOSIT_COMMENT_DECODED: "${comment}"`);
+      }
+
+      // Check if this matches any of our active pending deposits
+      const matched = pendingDocs.find(dep => dep.id === comment);
+      if (matched) {
+        console.log(`[Monitor] TON_DEPOSIT_MATCHED: ${matched.id}`);
+        
+        // Run full verification check
+        const normOnChainSource = normalizeTonAddress(tx.in_msg.source);
+        const normExpectedSource = normalizeTonAddress(matched.expectedWalletAddress);
+        const normOnChainDest = normalizeTonAddress(tx.in_msg.destination);
+        const normTreasury = normalizeTonAddress(TON_CONFIG.treasuryAddress);
+
+        if (normOnChainDest === normTreasury && normOnChainSource === normExpectedSource) {
+          const onChainVal = String(tx.in_msg.value);
+          const expectedVal = String(matched.expectedAmountNano);
+          
+          if (onChainVal === expectedVal) {
+            console.log(`[Monitor] TON_DEPOSIT_CONFIRMED: Matched on-chain Tx details for ${matched.id}`);
+            
+            // Execute atomic credit
+            const res = await verifyAndCreditDeposit(matched.id, matched.telegramUserId, false);
+            if (res && res.success) {
+              console.log(`[Monitor] TON_DEPOSIT_CREDITED: Successfully credited ${matched.id}. User balance now: ${res.newGameBalanceNano}`);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[Monitor] TON_DEPOSIT_SCAN_ERROR:`, err);
+  }
+}
+
+function startDepositMonitor() {
+  const isEnabled = process.env.TON_DEPOSIT_MONITOR_ENABLED === 'true';
+  if (!isEnabled) {
+    console.log(`[Monitor] TON Deposit Monitor is disabled.`);
+    return;
+  }
+
+  console.log(`[Monitor] TON_DEPOSIT_MONITOR_STARTED`);
+  console.log(`[Monitor] network: ${TON_CONFIG.network}`);
+  console.log(`[Monitor] treasuryAddress: ${TON_CONFIG.treasuryAddress}`);
+  console.log(`[Monitor] pollInterval: 15000`);
+  console.log(`[Monitor] provider: toncenter`);
+
+  // Run immediately on start
+  setTimeout(() => {
+    runDepositScanCycle();
+  }, 5000);
+
+  // Run every 15 seconds
+  setInterval(() => {
+    runDepositScanCycle();
+  }, 15000);
+}
+
 // Configure Vite integration inside main async bootstrapper
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
@@ -5952,6 +6383,9 @@ async function startServer() {
 
   // Launch background Telegram Bot poller if token configured
   startTelegramBot();
+
+  // Launch background TON deposit monitor
+  startDepositMonitor();
 
   // Binds to 0.0.0.0:3000
   app.listen(PORT, '0.0.0.0', () => {
