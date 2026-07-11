@@ -829,7 +829,19 @@ app.post('/api/user/sync', async (req, res) => {
       if (updated) {
         await userRef.update(upData);
       }
-      return res.json({ profile: { ...currentData, ...upData } });
+      const mergedProfile = { ...currentData, ...upData };
+      const upAccount = getOrCreateTonAccount(mergedProfile, userId);
+      mergedProfile.tonAccount = upAccount;
+
+      const tonConfig = {
+        network: TON_CONFIG.network,
+        treasuryAddress: TON_CONFIG.treasuryAddress,
+        pauseDeposits: TON_CONFIG.pauseDeposits,
+        pauseGames: TON_CONFIG.pauseGames,
+        pauseWithdrawals: TON_CONFIG.pauseWithdrawals
+      };
+
+      return res.json({ profile: mergedProfile, tonConfig });
     }
 
     // New user signup
@@ -859,7 +871,7 @@ app.post('/api/user/sync', async (req, res) => {
       }
     }
 
-    const newProfile = {
+    const newProfile: any = {
       telegramId: targetTgId,
       username: targetUsername || `telegram_${targetTgId}`,
       walletAddress: walletAddress || "",
@@ -891,7 +903,18 @@ app.post('/api/user/sync', async (req, res) => {
       `welcome_${targetTgId}`
     );
 
-    res.json({ profile: newProfile });
+    const upAccount = getOrCreateTonAccount(newProfile, userId);
+    newProfile.tonAccount = upAccount;
+
+    const tonConfig = {
+      network: TON_CONFIG.network,
+      treasuryAddress: TON_CONFIG.treasuryAddress,
+      pauseDeposits: TON_CONFIG.pauseDeposits,
+      pauseGames: TON_CONFIG.pauseGames,
+      pauseWithdrawals: TON_CONFIG.pauseWithdrawals
+    };
+
+    res.json({ profile: newProfile, tonConfig });
   } catch (error: any) {
     console.error("Sync error:", error);
     res.status(500).json({ error: error.message });
@@ -916,7 +939,16 @@ app.get('/api/user/:userId', async (req, res) => {
     // Lazy initialisation of TON Custodial Account state
     const upAccount = getOrCreateTonAccount(userData, userId);
     userData.tonAccount = upAccount;
-    res.json({ profile: userData });
+
+    const tonConfig = {
+      network: TON_CONFIG.network,
+      treasuryAddress: TON_CONFIG.treasuryAddress,
+      pauseDeposits: TON_CONFIG.pauseDeposits,
+      pauseGames: TON_CONFIG.pauseGames,
+      pauseWithdrawals: TON_CONFIG.pauseWithdrawals
+    };
+
+    res.json({ profile: userData, tonConfig });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1949,18 +1981,92 @@ app.get('/api/ton/history', checkTonNetwork, async (req, res) => {
       return res.status(400).json({ error: "userId is required" });
     }
 
-    const [depsSnap, withdrawsSnap] = await Promise.all([
+    const [depsSnap, withdrawsSnap, ledgerSnap, p1SettledSnap, p2SettledSnap] = await Promise.all([
       db.collection('tonDeposits').where('telegramUserId', '==', targetUserId).get(),
-      db.collection('tonWithdrawals').where('telegramUserId', '==', targetUserId).get()
+      db.collection('tonWithdrawals').where('telegramUserId', '==', targetUserId).get(),
+      db.collection('ledgerTransactions').where('telegramUserId', '==', targetUserId).get(),
+      db.collection('ledgerTransactions').where('metadata.player1Id', '==', targetUserId).get(),
+      db.collection('ledgerTransactions').where('metadata.player2Id', '==', targetUserId).get()
     ]);
 
-    const deposits: any[] = [];
-    depsSnap.forEach(d => deposits.push({ ...d.data(), type: 'deposit' }));
+    const itemsMap = new Map<string, any>();
 
-    const withdrawals: any[] = [];
-    withdrawsSnap.forEach(d => withdrawals.push({ ...d.data(), type: 'withdrawal' }));
+    depsSnap.forEach(d => {
+      const data = d.data();
+      itemsMap.set(data.depositId, {
+        id: data.depositId,
+        type: 'deposit',
+        amountNano: data.actualAmountNano || data.expectedAmountNano,
+        status: data.status,
+        createdAt: data.createdAt,
+        txHash: data.transactionHash || null
+      });
+    });
 
-    const history = [...deposits, ...withdrawals];
+    withdrawsSnap.forEach(d => {
+      const data = d.data();
+      itemsMap.set(data.withdrawalId, {
+        id: data.withdrawalId,
+        type: 'withdrawal',
+        amountNano: data.amountNano,
+        status: data.status,
+        createdAt: data.createdAt,
+        txHash: data.transactionHash || null
+      });
+    });
+
+    const processLedger = (snap: any) => {
+      snap.forEach((d: any) => {
+        const data = d.data();
+        const txId = data.transactionId;
+        if (itemsMap.has(txId)) return;
+
+        let displayType = data.type.toLowerCase();
+        let displayAmountNano = data.amountNano;
+        let details = '';
+
+        if (data.type === 'GAME_SETTLEMENT_WIN') {
+          const winnerId = data.metadata?.winnerId;
+          if (winnerId === targetUserId) {
+            displayType = 'game_win';
+            displayAmountNano = data.metadata?.winnerPayoutNano || (2000000000 - (data.metadata?.feeNano || 100000000));
+            details = `Won duel! Platform fee of ${(Number(data.metadata?.feeNano || 100000000) / 1e9).toFixed(2)} TON deducted.`;
+          } else {
+            displayType = 'game_loss';
+            displayAmountNano = 1000000000; // Lost their 1 TON stake
+            details = 'Lost duel.';
+          }
+        } else if (data.type === 'GAME_SETTLEMENT_DRAW') {
+          displayType = 'game_draw';
+          displayAmountNano = 1000000000; // Got 1 TON back
+          details = 'Duel draw. Stake refunded.';
+        } else if (data.type === 'GAME_RESERVATION') {
+          displayType = 'stake_reservation';
+          displayAmountNano = data.amountNano;
+          details = 'Reserved for duel matchmaking.';
+        } else if (data.type === 'GAME_RESERVATION_REFUND') {
+          displayType = 'refund';
+          displayAmountNano = data.amountNano;
+          details = 'Matchmaking reservation refunded.';
+        }
+
+        itemsMap.set(txId, {
+          id: txId,
+          type: displayType,
+          amountNano: displayAmountNano,
+          status: data.status || 'posted',
+          createdAt: data.createdAt,
+          details,
+          matchId: data.matchId || null
+        });
+      });
+    };
+
+    processLedger(ledgerSnap);
+    processLedger(p1SettledSnap);
+    processLedger(p2SettledSnap);
+
+    const history = Array.from(itemsMap.values());
     history.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
     res.json({ history });
