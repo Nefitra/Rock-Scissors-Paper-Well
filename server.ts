@@ -1183,27 +1183,60 @@ app.post('/api/mission/trigger', async (req, res) => {
   }
 });
 
+// Global counter for failed matchmaking transactions
+let failedTransactionsCount = 0;
+
+// Helper to get verified Telegram user id & username or reject with error
+function getValidatedTelegramUser(req: express.Request): { userId: string; username: string } {
+  const initDataHeader = req.headers['x-telegram-init-data'];
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+
+  if (botToken) {
+    if (!initDataHeader || typeof initDataHeader !== 'string') {
+      throw new Error("unauthorized_missing_init_data");
+    }
+    const verification = verifyTelegramWebAppData(initDataHeader, botToken);
+    if (!verification.verified || !verification.user) {
+      throw new Error("unauthorized_invalid_signature");
+    }
+    return {
+      userId: sanitizeUserId(String(verification.user.id)),
+      username: String(verification.user.username || verification.user.first_name || `User_${verification.user.id}`)
+    };
+  } else {
+    // Falls back graciously for development or sandbox environments where bot token is not set
+    const fallbackUser = getRequestUser(req);
+    if (!fallbackUser.userId) {
+      throw new Error("unauthorized_invalid_fallback_user");
+    }
+    return {
+      userId: fallbackUser.userId,
+      username: fallbackUser.username || `User_${fallbackUser.userId}`
+    };
+  }
+}
+
 // 4. Join matchmaking / Find Game (Supports free & staked duels securely)
 app.post('/api/matchmaking/join', async (req, res) => {
+  let targetUserId = "";
   try {
-    const verifiedUser = getRequestUser(req);
-    const { userId, username, playWithBot, mode, stake, challengeId } = req.body;
-
-    let targetUserId = userId;
-    let targetUsername = username;
-
-    if (verifiedUser.userId) {
-      targetUserId = verifiedUser.userId;
-      if (verifiedUser.username) {
-        targetUsername = verifiedUser.username;
-      }
+    // 1. Validate player identity securely
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr: any) {
+      console.warn("[MATCHMAKING_ERROR] Matchmaking Join Unauthorized:", authErr.message);
+      return res.status(401).json({ error: "Invalid or missing Telegram authentication. Join matchmaking rejected." });
     }
 
-    if (!targetUserId) {
-      return res.status(400).json({ error: "userId is required" });
-    }
+    targetUserId = validatedUser.userId;
+    const targetUsername = validatedUser.username;
 
-    // Direct Challenge Acceptance Flow
+    const { playWithBot, mode, stake, challengeId } = req.body;
+
+    console.log(`[MATCHMAKING_JOIN_REQUEST] User: ${targetUserId} (${targetUsername}), Mode: ${mode}, Stake: ${stake}, Bot: ${playWithBot}, Inst: ${process.env.K_REVISION || 'local_dev'}, Timestamp: ${new Date().toISOString()}`);
+
+    // Direct Challenge Acceptance Flow (Preserved as-is but with secure user identification)
     if (challengeId) {
       // Check if this challenge exists in the new challenges collection
       let chalDoc = await db.collection('challenges').doc(challengeId).get();
@@ -1337,7 +1370,7 @@ app.post('/api/matchmaking/join', async (req, res) => {
         }
       }
 
-      // Complete Daily Mission "Challenge a Friend"
+      // Complete Daily Missions
       await updateMissionProgress(gd.player1Id, 'challenge_friend', 1);
       await updateMissionProgress(targetUserId, 'challenge_friend', 1);
 
@@ -1355,14 +1388,13 @@ app.post('/api/matchmaking/join', async (req, res) => {
     }
 
     // Read player document to check vVIRAL balance and wallet status
-    let targetWallet: string | null = null;
     const targetUserSnap = await db.collection('users').doc(targetUserId).get();
     if (!targetUserSnap.exists) {
       return res.status(404).json({ error: "User profile not found. Please sync first." });
     }
 
     const userData = targetUserSnap.data() || {};
-    targetWallet = userData.walletAddress || null;
+    const targetWallet = userData.walletAddress || null;
 
     // Check balance for stake modes
     if (targetMode === 'stake' && targetStake > 0) {
@@ -1374,43 +1406,77 @@ app.post('/api/matchmaking/join', async (req, res) => {
       }
     }
 
-    // Always clean up any existing uncompleted games created by this same user to avoid phantom matches
-    try {
-      const existingWaiting = await db.collection('games')
-        .where('player1Id', '==', targetUserId)
-        .where('status', 'in', ['searching', 'waiting', 'matched', 'countdown', 'move_selection', 'resolving'])
-        .get();
-      for (const doc of existingWaiting.docs) {
-        const gd = doc.data() || {};
-        // If it was a stake game, refund the player immediately!
-        if (gd.status === 'searching' && gd.mode === 'stake' && gd.stake > 0) {
-          await adjustUserVViral(
-            targetUserId, 
-            gd.stake, 
-            'credit', 
-            'stake_duel_refund', 
-            doc.id, 
-            `refund_cleanup_${doc.id}_${targetUserId}`
-          );
+    // Always clean up any existing uncompleted games created by this same user to avoid duplicate entries & phantom matches
+    const cleanUpGames = async (pId: string) => {
+      try {
+        const list1 = await db.collection('games')
+          .where('player1Id', '==', pId)
+          .where('status', 'in', ['searching', 'waiting'])
+          .get();
+        for (const d of list1.docs) {
+          const gd = d.data() || {};
+          if (gd.mode === 'stake' && gd.stake > 0) {
+            await adjustUserVViral(
+              pId, 
+              gd.stake, 
+              'credit', 
+              'stake_duel_refund', 
+              d.id, 
+              `refund_cleanup_${d.id}_${pId}`
+            );
+          }
+          await db.collection('games').doc(d.id).update({
+            status: 'canceled',
+            updatedAt: new Date().toISOString()
+          });
         }
-        await db.collection('games').doc(doc.id).update({
-          status: 'canceled',
-          updatedAt: new Date().toISOString()
-        });
+        const list2 = await db.collection('games')
+          .where('player2Id', '==', pId)
+          .where('status', 'in', ['searching', 'waiting'])
+          .get();
+        for (const d of list2.docs) {
+          await db.collection('games').doc(d.id).update({
+            status: 'canceled',
+            updatedAt: new Date().toISOString()
+          });
+        }
+      } catch (err) {
+        console.error("Error in cleanUpGames:", err);
       }
-      
-      const existingWaiting2 = await db.collection('games')
-        .where('player2Id', '==', targetUserId)
-        .where('status', 'in', ['searching', 'waiting', 'matched', 'countdown', 'move_selection', 'resolving'])
-        .get();
-      for (const doc of existingWaiting2.docs) {
-        await db.collection('games').doc(doc.id).update({
-          status: 'canceled',
-          updatedAt: new Date().toISOString()
-        });
-      }
-    } catch (cleanupErr) {
-      console.error("Error cleaning up previous games:", cleanupErr);
+    };
+    await cleanUpGames(targetUserId);
+
+    // Bot Match Flow
+    if (playWithBot) {
+      const botGameRef = db.collection('games').doc();
+      const botGame = {
+        id: botGameRef.id,
+        matchId: botGameRef.id,
+        player1Id: targetUserId,
+        player1TelegramId: targetUserId,
+        player1Username: targetUsername || "Player 1",
+        player1Profile: userData,
+        player2Id: "bot",
+        player2TelegramId: "bot",
+        player2Username: "TonBot 🤖",
+        player2Profile: { username: "TonBot", vViral: 999999 },
+        player1Move: "",
+        player2Move: "",
+        winnerId: "",
+        winnerTelegramId: "",
+        status: "matched",
+        matchStatus: "ready",
+        mode: targetMode,
+        gameMode: targetMode,
+        stake: targetStake,
+        matchedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        serverInstanceId: process.env.K_REVISION || "local_dev"
+      };
+      await botGameRef.set(botGame);
+      console.log(`[MATCH_CREATED] MatchId: ${botGame.id}, Player1: ${targetUserId}, Player2: bot, Mode: ${targetMode}, Stake: ${targetStake}`);
+      return res.json({ game: botGame });
     }
 
     // Deduct stake if playing stake mode
@@ -1426,117 +1492,182 @@ app.post('/api/matchmaking/join', async (req, res) => {
       );
     }
 
-    if (playWithBot) {
-      // Create immediate custom bot game
-      const botGameRef = db.collection('games').doc();
-      const botGame = {
-        id: botGameRef.id,
-        player1Id: targetUserId,
-        player1Username: targetUsername || "Player 1",
-        player2Id: "bot",
-        player2Username: "TonBot 🤖",
-        player1Move: "",
-        player2Move: "",
-        winnerId: "",
-        status: "matched",
-        mode: targetMode,
-        stake: targetStake,
-        matchedAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      await botGameRef.set(botGame);
-      return res.json({ game: botGame });
-    }
-
-    // Look for a game waiting for active players (searching status or waiting status)
-    const querySnapshot = await db.collection('games')
-      .where('status', 'in', ['searching', 'waiting'])
+    // Retrieve users currently waiting in queue to search for compatible opponent
+    console.log(`[MATCHMAKING_OPPONENT_SEARCH] User: ${targetUserId}, Mode: ${targetMode}, Stake: ${targetStake}`);
+    const nowMs = Date.now();
+    const queueSnap = await db.collection('matchmakingQueue')
+      .where('status', '==', 'waiting')
+      .where('gameMode', '==', targetMode)
+      .where('stake', '==', targetStake)
       .get();
 
-    let foundGame: any = null;
-    const now = Date.now();
-    for (const docSnap of querySnapshot.docs) {
-      const gData = docSnap.data();
+    let compatibleOpponents: any[] = [];
+    queueSnap.forEach((docSnap) => {
+      const entry = docSnap.data();
+      const expiresAtMs = entry.expiresAt ? new Date(entry.expiresAt).getTime() : 0;
+      if (
+        entry.telegramUserId !== targetUserId && // Exclude self
+        expiresAtMs > nowMs // Not expired
+      ) {
+        compatibleOpponents.push(entry);
+      }
+    });
+
+    // Sort compatible opponents by createdAt ascending to pair with the oldest first
+    compatibleOpponents.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    const opponent = compatibleOpponents[0];
+    const nowIso = new Date().toISOString();
+    const expiryIso = new Date(Date.now() + 120000).toISOString(); // 120 seconds timeout
+
+    if (opponent) {
+      console.log(`[MATCHMAKING_OPPONENT_FOUND] User: ${targetUserId} found compatible opponent: ${opponent.telegramUserId}`);
       
-      // Prevent self matching on telegramId
-      if (gData.player1Id === targetUserId) {
-        continue;
-      }
+      const opponentId = opponent.telegramUserId;
+      const opponentUserSnap = await db.collection('users').doc(opponentId).get();
+      const opponentProfile = opponentUserSnap.exists ? opponentUserSnap.data() : null;
 
-      // Match free with free, and stakes with matching stakes
-      const opponentMode = gData.mode || "free";
-      const opponentStake = gData.stake || 0;
-      if (opponentMode !== targetMode || opponentStake !== targetStake) {
-        continue;
-      }
-
-      // Only match if the game host is actively polling (updatedAt within the last 15 seconds)
-      const lastUpdatedMs = gData.updatedAt ? new Date(gData.updatedAt).getTime() : 0;
-      if (now - lastUpdatedMs > 15000) {
-        continue; // This is a stale/abandoned matchmaking request, bypass it
-      }
-
-      // Prevent matching on same wallet address
-      let opponentWallet: string | null = null;
-      const opponentUserSnap = await db.collection('users').doc(gData.player1Id).get();
-      if (opponentUserSnap.exists) {
-        opponentWallet = opponentUserSnap.data()?.walletAddress || null;
-      }
-
-      if (targetWallet && opponentWallet && targetWallet.toLowerCase() === opponentWallet.toLowerCase()) {
-        continue;
-      }
-
-      foundGame = gData;
-      break;
-    }
-
-    if (foundGame) {
       try {
+        console.log(`[MATCHMAKING_TRANSACTION_STARTED] Pairing ${targetUserId} and ${opponentId}`);
         const { runTransaction } = await import('firebase/firestore');
-        const gameRefReal = doc(firestoreInstance, 'games', foundGame.id);
-        const matchResult = await runTransaction(firestoreInstance, async (transaction) => {
-          const freshSnap = await transaction.get(gameRefReal);
-          if (!freshSnap.exists()) {
-            throw new Error("game_not_found");
-          }
-          const freshData = freshSnap.data() || {};
-          const currentStatus = freshData.status;
-          const currentPlayer2Id = freshData.player2Id;
-          
-          if ((currentStatus !== 'searching' && currentStatus !== 'waiting') || currentPlayer2Id !== 'waiting') {
-            throw new Error("already_matched");
-          }
-          
-          const updatedFields = {
-            player2Id: targetUserId,
-            player2Username: targetUsername || "Player 2",
-            status: "matched",
-            matchedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-          };
-          
-          transaction.update(gameRefReal, updatedFields);
-          return { ...freshData, ...updatedFields };
-        });
+        const selfQueueRefReal = doc(firestoreInstance, 'matchmakingQueue', targetUserId);
+        const oppQueueRefReal = doc(firestoreInstance, 'matchmakingQueue', opponentId);
         
-        return res.json({ game: sanitizeGameForUser(matchResult, targetUserId) });
-      } catch (transactionError: any) {
-        if (transactionError.message === 'already_matched') {
-          console.log(`Race condition avoided: game ${foundGame.id} was already matched.`);
-        } else {
-          console.error("Matchmaking transaction error:", transactionError);
-        }
+        const matchResult = await runTransaction(firestoreInstance, async (transaction) => {
+          // 1. Lock and read opponent's queue entry
+          const oppSnap = await transaction.get(oppQueueRefReal);
+          if (!oppSnap.exists()) {
+            throw new Error("opponent_queue_not_found");
+          }
+          const oppData = oppSnap.data() || {};
+          if (oppData.status !== 'waiting') {
+            throw new Error("opponent_no_longer_waiting");
+          }
+          
+          // Check expiration
+          const oppExpiryMs = oppData.expiresAt ? new Date(oppData.expiresAt).getTime() : 0;
+          if (oppExpiryMs < Date.now()) {
+            throw new Error("opponent_expired");
+          }
+
+          // 2. Lock and read self queue entry
+          await transaction.get(selfQueueRefReal);
+          
+          // 3. Create match document ID and object
+          const matchId = doc(collection(firestoreInstance, 'games')).id;
+          const matchRefReal = doc(firestoreInstance, 'games', matchId);
+
+          const gameObj = {
+            id: matchId,
+            matchId: matchId,
+            player1Id: opponentId, // Oldest waiting player is Player 1 (host)
+            player1TelegramId: opponentId,
+            player1Username: opponent.username || `User_${opponentId}`,
+            player1Profile: opponentProfile,
+            player2Id: targetUserId, // Current player is Player 2
+            player2TelegramId: targetUserId,
+            player2Username: targetUsername,
+            player2Profile: userData,
+            player1Move: "",
+            player2Move: "",
+            winnerId: "",
+            winnerTelegramId: "",
+            status: "matched", // For frontend compatibility
+            matchStatus: "ready", // For Requirement 12 compatibility
+            mode: targetMode,
+            gameMode: targetMode,
+            stake: targetStake,
+            createdAt: nowIso,
+            startedAt: nowIso,
+            completedAt: "",
+            round: 1,
+            serverInstanceId: process.env.K_REVISION || "local_dev",
+            updatedAt: nowIso
+          };
+
+          // Write match document
+          transaction.set(matchRefReal, gameObj);
+
+          // Update opponent's queue entry to matched
+          transaction.update(oppQueueRefReal, {
+            status: "matched",
+            matchedAt: nowIso,
+            matchId: matchId,
+            updatedAt: nowIso
+          });
+
+          // Create/Update self queue entry to matched
+          transaction.set(selfQueueRefReal, {
+            queueEntryId: targetUserId,
+            telegramUserId: targetUserId,
+            playerId: targetUserId,
+            username: targetUsername,
+            gameMode: targetMode,
+            stake: targetStake,
+            region: null,
+            language: null,
+            status: "matched",
+            createdAt: nowIso,
+            expiresAt: expiryIso,
+            matchedAt: nowIso,
+            matchId: matchId,
+            sessionId: null,
+            clientConnectionId: null,
+            appVersion: null,
+            updatedAt: nowIso
+          });
+
+          return gameObj;
+        });
+
+        console.log(`[MATCHMAKING_TRANSACTION_COMMITTED] User: ${targetUserId} & Opponent: ${opponentId} matched successfully in Game: ${matchResult.id}`);
+        console.log(`[MATCH_CREATED] MatchId: ${matchResult.id}, Player1: ${opponentId}, Player2: ${targetUserId}, Mode: ${targetMode}, Stake: ${targetStake}`);
+        console.log(`[MATCHMAKING_CLIENT_NOTIFIED] User: ${targetUserId}, MatchId: ${matchResult.id}`);
+
+        return res.json({ 
+          success: true, 
+          status: "matched", 
+          matchId: matchResult.id,
+          game: sanitizeGameForUser(matchResult, targetUserId) 
+        });
+
+      } catch (transErr: any) {
+        failedTransactionsCount++;
+        console.warn(`[MATCHMAKING_ERROR] Transaction failed, falling back to creating waiting entry. Err: ${transErr.message}`);
+        // If transaction failed, fall through to creating our own waiting entry
       }
     }
 
-    // No existing waiting game, create a brand new lobby
-    const newGameRef = db.collection('games').doc();
-    const newGame = {
-      id: newGameRef.id,
+    // No compatible opponent found (or transaction failed/race condition). Enter queue.
+    const selfQueueRef = db.collection('matchmakingQueue').doc(targetUserId);
+    const newQueueEntry = {
+      queueEntryId: targetUserId,
+      telegramUserId: targetUserId,
+      playerId: targetUserId,
+      username: targetUsername,
+      gameMode: targetMode,
+      stake: targetStake,
+      region: null,
+      language: null,
+      status: "waiting",
+      createdAt: nowIso,
+      expiresAt: expiryIso,
+      matchedAt: null,
+      matchId: null,
+      sessionId: null,
+      clientConnectionId: null,
+      appVersion: null,
+      updatedAt: nowIso
+    };
+    await selfQueueRef.set(newQueueEntry);
+    console.log(`[MATCHMAKING_ENTRY_CREATED] User: ${targetUserId}, QueueId: ${targetUserId}, Mode: ${targetMode}, Stake: ${targetStake}, Expires: ${expiryIso}`);
+
+    // Create a compatibility-shim searching game doc in 'games' collection for older clients/flows
+    const fallbackGameRef = db.collection('games').doc(targetUserId);
+    const fallbackGame = {
+      id: targetUserId,
       player1Id: targetUserId,
-      player1Username: targetUsername || "Player 1",
+      player1Username: targetUsername,
       player2Id: "waiting",
       player2Username: "Matchmaking Queue...",
       player1Move: "",
@@ -1545,64 +1676,168 @@ app.post('/api/matchmaking/join', async (req, res) => {
       status: "searching",
       mode: targetMode,
       stake: targetStake,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      createdAt: nowIso,
+      updatedAt: nowIso
     };
-    await newGameRef.set(newGame);
-    res.json({ game: sanitizeGameForUser(newGame, targetUserId) });
+    await fallbackGameRef.set(fallbackGame);
+
+    return res.json({ 
+      success: true, 
+      status: "waiting", 
+      queueEntryId: targetUserId,
+      game: sanitizeGameForUser(fallbackGame, targetUserId)
+    });
+
   } catch (error: any) {
-    console.error("Matchmaking error:", error);
+    console.error(`[MATCHMAKING_ERROR] User: ${targetUserId}, Error: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
 });
 
 // 4a. Cancel Matchmaking
 app.post('/api/matchmaking/cancel', async (req, res) => {
+  let targetUserId = "";
   try {
-    const verifiedUser = getRequestUser(req);
-    const { gameId, userId } = req.body;
-    let targetUserId = userId || verifiedUser.userId;
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr) {
+      const verifiedUser = getRequestUser(req);
+      validatedUser = {
+        userId: verifiedUser.userId,
+        username: verifiedUser.username || ""
+      };
+    }
+
+    targetUserId = validatedUser.userId;
     if (!targetUserId) {
       return res.status(400).json({ error: "userId is required" });
     }
 
-    const gameRef = db.collection('games').doc(gameId);
-    const snap = await gameRef.get();
-    if (!snap.exists) {
-      return res.status(404).json({ error: "Game not found" });
+    console.log(`[MATCHMAKING_CANCELLED] User: ${targetUserId}`);
+
+    const queueRef = db.collection('matchmakingQueue').doc(targetUserId);
+    const snap = await queueRef.get();
+    
+    if (snap.exists) {
+      const qData = snap.data() || {};
+      
+      if (qData.status === 'waiting') {
+        await queueRef.update({
+          status: "cancelled",
+          updatedAt: new Date().toISOString()
+        });
+
+        // Refund stake if playing stake mode
+        if (qData.gameMode === 'stake' && qData.stake > 0) {
+          await adjustUserVViral(
+            targetUserId, 
+            qData.stake, 
+            'credit', 
+            'stake_duel_refund', 
+            targetUserId, 
+            `refund_cancel_${targetUserId}_${Date.now()}`
+          );
+        }
+      }
     }
 
-    const gData = snap.data() || {};
-    if (gData.player1Id !== targetUserId && gData.player2Id !== targetUserId) {
-      return res.status(403).json({ error: "Unauthorized" });
+    // Also cancel the compatibility search game
+    const gameRef = db.collection('games').doc(targetUserId);
+    const gameSnap = await gameRef.get();
+    if (gameSnap.exists) {
+      const gData = gameSnap.data() || {};
+      if (gData.status === 'searching' || gData.status === 'waiting') {
+        await gameRef.update({
+          status: "canceled",
+          updatedAt: new Date().toISOString()
+        });
+      }
     }
-
-    // Refund stake if canceling a real pending search
-    if (gData.status === 'searching' && gData.mode === 'stake' && gData.stake > 0) {
-      const refundTarget = gData.player1Id;
-      await adjustUserVViral(
-        refundTarget, 
-        gData.stake, 
-        'credit', 
-        'stake_duel_refund', 
-        gameId, 
-        `refund_cancel_${gameId}_${refundTarget}`
-      );
-    }
-
-    await gameRef.update({
-      status: "canceled",
-      updatedAt: new Date().toISOString()
-    });
 
     res.json({ success: true });
   } catch (error: any) {
-    console.error("Cancel matchmaking error:", error);
+    console.error(`[MATCHMAKING_ERROR] Cancel matchmaking error for user ${targetUserId}:`, error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// 4b. Forfeit / Leave Active Arena
+// 4b. Matchmaking Status Endpoint
+app.get('/api/matchmaking/status', async (req, res) => {
+  let targetUserId = "";
+  try {
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr) {
+      return res.status(401).json({ error: "Unauthorized. Valid Telegram login required." });
+    }
+
+    targetUserId = validatedUser.userId;
+    const queueRef = db.collection('matchmakingQueue').doc(targetUserId);
+    const snap = await queueRef.get();
+
+    if (!snap.exists) {
+      return res.json({ status: "idle" });
+    }
+
+    const qData = snap.data() || {};
+    let status = qData.status;
+
+    // Handle automated queue expiration
+    if (status === 'waiting') {
+      const expiresAtMs = qData.expiresAt ? new Date(qData.expiresAt).getTime() : 0;
+      if (Date.now() > expiresAtMs) {
+        status = 'expired';
+        await queueRef.update({
+          status: 'expired',
+          updatedAt: new Date().toISOString()
+        });
+        console.log(`[MATCHMAKING_EXPIRED] User: ${targetUserId}, QueueId: ${targetUserId}`);
+        
+        // Also cancel compatibility game
+        await db.collection('games').doc(targetUserId).update({
+          status: 'canceled',
+          updatedAt: new Date().toISOString()
+        }).catch(() => {});
+      }
+    }
+
+    // Fetch opponent info if matched
+    let opponent = null;
+    let game = null;
+    if (status === 'matched' && qData.matchId) {
+      const gameSnap = await db.collection('games').doc(qData.matchId).get();
+      if (gameSnap.exists) {
+        const gameData = gameSnap.data() || {};
+        const isPlayer1 = gameData.player1Id === targetUserId;
+        const oppId = isPlayer1 ? gameData.player2Id : gameData.player1Id;
+        const oppUsername = isPlayer1 ? gameData.player2Username : gameData.player1Username;
+        opponent = {
+          telegramUserId: oppId,
+          username: oppUsername
+        };
+        game = sanitizeGameForUser(gameData, targetUserId);
+      }
+    }
+
+    res.json({
+      status,
+      queueEntryId: qData.queueEntryId,
+      matchId: qData.matchId,
+      createdAt: qData.createdAt,
+      expiresAt: qData.expiresAt,
+      opponent,
+      game
+    });
+
+  } catch (error: any) {
+    console.error(`[MATCHMAKING_ERROR] Status fetch error for user ${targetUserId}:`, error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4c. Forfeit / Leave Active Arena
 app.post('/api/game/leave', async (req, res) => {
   try {
     const verifiedUser = getRequestUser(req);
@@ -2053,12 +2288,84 @@ app.get('/api/admin/metrics', async (req, res) => {
       totalReferrals: usersList.reduce((acc, u) => acc + (u.referralsCountL1 || 0) + (u.referralsCountL2 || 0), 0)
     };
 
+    // Fetch matchmakingQueue and compute detailed metrics
+    const queueSnap = await db.collection('matchmakingQueue').get();
+    const queueList: any[] = [];
+    queueSnap.forEach((d) => {
+      queueList.push(d.data());
+    });
+
+    const now = Date.now();
+    const waitingEntries = queueList.filter(q => q.status === 'waiting' && new Date(q.expiresAt).getTime() > now);
+    const matchedEntries = queueList.filter(q => q.status === 'matched');
+    const expiredEntries = queueList.filter(q => q.status === 'expired' || (q.status === 'waiting' && new Date(q.expiresAt).getTime() <= now));
+
+    let totalAge = 0;
+    waitingEntries.forEach(q => {
+      const ageSec = Math.max(0, (now - new Date(q.createdAt).getTime()) / 1000);
+      totalAge += ageSec;
+    });
+    const avgQueueAgeSec = waitingEntries.length > 0 ? Math.round(totalAge / waitingEntries.length) : 0;
+
+    const activeMatchesCount = gamesList.filter(g => ['searching', 'waiting', 'matched', 'countdown', 'move_selection', 'resolving'].includes(g.status)).length;
+
+    const matchmakingStats = {
+      usersWaiting: waitingEntries.length,
+      avgQueueAgeSec,
+      matchedPairsCount: matchedEntries.length,
+      activeMatchesCount,
+      expiredCount: expiredEntries.length,
+      failedTransactionsCount,
+      cloudRunRevision: process.env.K_REVISION || "local_dev"
+    };
+
     res.json({
       authorized: true,
       stats,
       users: usersList,
-      games: gamesList.slice(0, 50) // output last 50 games for high performance
+      games: gamesList.slice(0, 50), // output last 50 games for high performance
+      matchmakingQueue: queueList,
+      matchmakingStats
     });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 6b. Admin Matchmaking Manual Cleanup
+app.post('/api/admin/matchmaking/cleanup', async (req, res) => {
+  try {
+    const verifiedUser = getRequestUser(req);
+    const requestorId = verifiedUser.userId || req.query.requestorId || req.body.requestorId;
+
+    if (!requestorId) {
+      return res.status(403).json({ error: "Access Denied. Unauthorized admin identity." });
+    }
+
+    const idToCheck = String(requestorId).toLowerCase();
+    const isApprovedAdmin = ADMIN_TELEGRAM_IDS.includes(idToCheck);
+
+    if (!isApprovedAdmin) {
+      return res.status(403).json({ error: `Access Denied. User @${requestorId} is not an approved Telegram Admin.` });
+    }
+
+    const queueSnap = await db.collection('matchmakingQueue').get();
+    let cleanedCount = 0;
+    const now = Date.now();
+
+    for (const d of queueSnap.docs) {
+      const qData = d.data() || {};
+      const expiresAtMs = qData.expiresAt ? new Date(qData.expiresAt).getTime() : 0;
+      if (qData.status === 'waiting' && expiresAtMs <= now) {
+        await db.collection('matchmakingQueue').doc(d.id).update({
+          status: 'expired',
+          updatedAt: new Date().toISOString()
+        });
+        cleanedCount++;
+      }
+    }
+
+    res.json({ success: true, cleanedCount });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

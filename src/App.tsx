@@ -103,6 +103,16 @@ interface AdminMetrics {
   };
   users: UserProfile[];
   games: GameSession[];
+  matchmakingQueue?: any[];
+  matchmakingStats?: {
+    usersWaiting: number;
+    avgQueueAgeSec: number;
+    matchedPairsCount: number;
+    activeMatchesCount: number;
+    expiredCount: number;
+    failedTransactionsCount: number;
+    cloudRunRevision: string;
+  };
 }
 
 interface RankConfig {
@@ -482,6 +492,7 @@ function GameAppInner() {
   const [settingsAppName, setSettingsAppName] = useState<string>('');
   const [savingSettings, setSavingSettings] = useState<boolean>(false);
   const [settingsSaveSuccess, setSettingsSaveSuccess] = useState<string | null>(null);
+  const [adminSuccessMessage, setAdminSuccessMessage] = useState<string | null>(null);
   const [showInfoModal, setShowInfoModal] = useState<boolean>(false);
   const [showRankTiersModal, setShowRankTiersModal] = useState<boolean>(false);
   const [showReferralQrModal, setShowReferralQrModal] = useState<boolean>(false);
@@ -1062,17 +1073,40 @@ function GameAppInner() {
         if (initData) {
           headers['x-telegram-init-data'] = initData;
         }
-        const res = await fetch(`/api/game/${activeGame.id}?requestorId=${currentTgId}`, { headers });
-        const data = await res.json();
-        if (data && data.game) {
-          setActiveGame(data.game);
-          if (data.game.status === 'completed') {
-            syncProfile(); // refresh player profile immediately to see updated stats
-            clearInterval(interval);
+
+        if (activeGame.status === 'searching') {
+          // Poll matchmaking queue status using secure transaction status endpoint
+          const res = await fetch('/api/matchmaking/status', { headers });
+          const data = await res.json();
+          if (data) {
+            if (data.status === 'matched' && data.game) {
+              setActiveGame(data.game);
+              playMatchmakingPing(); // play start sound
+            } else if (data.status === 'expired') {
+              setErrorMessage("Matchmaking session expired. Please enter the queue again!");
+              setActiveGame(null);
+              setIsSearching(false);
+              clearInterval(interval);
+            } else if (data.status === 'cancelled') {
+              setActiveGame(null);
+              setIsSearching(false);
+              clearInterval(interval);
+            }
+          }
+        } else {
+          // Poll active game session
+          const res = await fetch(`/api/game/${activeGame.id}?requestorId=${currentTgId}`, { headers });
+          const data = await res.json();
+          if (data && data.game) {
+            setActiveGame(data.game);
+            if (data.game.status === 'completed') {
+              syncProfile(); // refresh player profile immediately to see updated stats
+              clearInterval(interval);
+            }
           }
         }
       } catch (err) {
-        console.error("Error polling game status:", err);
+        console.error("Error polling game or matchmaking status:", err);
       }
     }, 1500);
 
@@ -3224,6 +3258,81 @@ function GameAppInner() {
                   <span className="text-[10px] text-[#708499] block uppercase font-bold">Total Match Logs</span>
                   <span className="text-2xl font-mono font-bold text-amber-400 block mt-1">{adminData?.stats?.totalGames || 0}</span>
                 </div>
+              </div>
+
+              {/* Matchmaking Diagnostics */}
+              <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-5 space-y-4">
+                <div className="flex items-center justify-between border-b border-[#242f3d]/60 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <ShieldAlert className="w-4 h-4 text-emerald-400" />
+                    <span className="text-xs font-bold text-white uppercase tracking-wider">Matchmaking Diagnostics</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-[#708499]">{adminData?.matchmakingStats?.cloudRunRevision || 'N/A'}</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3.5 text-xs">
+                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
+                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Waiting Players</span>
+                    <span className="text-lg font-mono font-bold text-emerald-400 block mt-0.5">{adminData?.matchmakingStats?.usersWaiting ?? 0}</span>
+                  </div>
+                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
+                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Average Queue Age</span>
+                    <span className="text-lg font-mono font-bold text-blue-400 block mt-0.5">{adminData?.matchmakingStats?.avgQueueAgeSec ?? 0}s</span>
+                  </div>
+                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
+                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Matched Pairs</span>
+                    <span className="text-lg font-mono font-bold text-indigo-400 block mt-0.5">{adminData?.matchmakingStats?.matchedPairsCount ?? 0}</span>
+                  </div>
+                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
+                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Active PvP Matches</span>
+                    <span className="text-lg font-mono font-bold text-amber-400 block mt-0.5">{adminData?.matchmakingStats?.activeMatchesCount ?? 0}</span>
+                  </div>
+                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
+                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Expired Queue Records</span>
+                    <span className="text-lg font-mono font-bold text-red-400 block mt-0.5">{adminData?.matchmakingStats?.expiredCount ?? 0}</span>
+                  </div>
+                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
+                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Failed Transactions</span>
+                    <span className="text-lg font-mono font-bold text-rose-500 block mt-0.5">{adminData?.matchmakingStats?.failedTransactionsCount ?? 0}</span>
+                  </div>
+                </div>
+
+                {adminSuccessMessage && (
+                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-center text-xs text-emerald-400 font-medium">
+                    {adminSuccessMessage}
+                  </div>
+                )}
+
+                <button
+                  onClick={async () => {
+                    try {
+                      const headers: any = { 'Content-Type': 'application/json' };
+                      const initData = (window as any).Telegram?.WebApp?.initData;
+                      if (initData) {
+                        headers['x-telegram-init-data'] = initData;
+                      }
+                      const res = await fetch(`/api/admin/matchmaking/cleanup?requestorId=${currentTgId}`, {
+                        method: 'POST',
+                        headers
+                      });
+                      const rData = await res.json();
+                      if (rData.success) {
+                        setAdminSuccessMessage(`Cleared ${rData.cleanedCount} stale queue entries.`);
+                        setTimeout(() => setAdminSuccessMessage(null), 5000);
+                        fetchAdminMetrics();
+                      } else {
+                        setAdminSuccessMessage(`Cleanup failed: ${rData.error}`);
+                        setTimeout(() => setAdminSuccessMessage(null), 5000);
+                      }
+                    } catch (e: any) {
+                      setAdminSuccessMessage(`Error: ${e.message}`);
+                      setTimeout(() => setAdminSuccessMessage(null), 5000);
+                    }
+                  }}
+                  className="w-full bg-[#242f3d] hover:bg-[#2b3745] text-xs font-bold text-white uppercase py-3 rounded-xl border border-[#2b3745] transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  🧹 Clear Stale Queue Entries
+                </button>
               </div>
 
               {/* Bot Referral Link Customizer */}
