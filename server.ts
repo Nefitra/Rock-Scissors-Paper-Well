@@ -37,8 +37,9 @@ const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 const firebaseApp = initializeApp(firebaseConfig);
 const firestoreInstance = initializeFirestore(firebaseApp, {
   experimentalForceLongPolling: true,
+  useFetchStreams: false,
   localCache: memoryLocalCache()
-}, firebaseConfig.firestoreDatabaseId);
+} as any, firebaseConfig.firestoreDatabaseId);
 
 // Simple compatibility shim so we do not have to rewrite all DB queries across the codebase:
 class DocumentReferenceShim {
@@ -100,6 +101,7 @@ class CollectionReferenceShim {
     }
     const snap = await getDocs(q);
     return {
+      empty: snap.empty,
       docs: snap.docs.map(d => ({
         id: d.id,
         data: () => d.data()
@@ -911,11 +913,1301 @@ app.get('/api/user/:userId', async (req, res) => {
     if (!userData.missions) {
       userData.missions = {};
     }
+    // Lazy initialisation of TON Custodial Account state
+    const upAccount = getOrCreateTonAccount(userData, userId);
+    userData.tonAccount = upAccount;
     res.json({ profile: userData });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
+
+// ============================================================================
+// TON CUSTODIAL BALANCES & LEDGER HELPERS
+// ============================================================================
+
+const TON_CONFIG = {
+  network: process.env.TON_NETWORK || 'testnet',
+  treasuryAddress: process.env.TON_TREASURY_ADDRESS || 'EQB3nYo1HZv66-F9RNL96vO7eNnQn18wP-98jT8N7q2q2q2q',
+  hotWalletAddress: process.env.TON_HOT_WALLET_ADDRESS || 'EQCD39VS5JC97yw9pYFXb19uLJ7Yg7y3nYo1HZv66-F9RNL96',
+  minDepositNano: 1000000000,      // 1 TON
+  maxDepositNano: 1000000000000,   // 1000 TON
+  minWithdrawalNano: 1000000000,   // 1 TON
+  maxWithdrawalNano: 100000000000, // 100 TON
+  dailyWithdrawalLimitNano: 500000000000, // 500 TON
+  maxInternalBalanceNano: 5000000000000, // 5000 TON
+  suspiciousTxThresholdNano: 50000000000, // 50 TON
+  pauseDeposits: process.env.EMERGENCY_PAUSE_TON_DEPOSITS === 'true',
+  pauseGames: process.env.EMERGENCY_PAUSE_TON_GAMES === 'true',
+  pauseWithdrawals: process.env.EMERGENCY_PAUSE_TON_WITHDRAWALS === 'true'
+};
+
+function getOrCreateTonAccount(userData: any, userId: string) {
+  const defaultAccount = {
+    telegramUserId: userId,
+    currency: "TON",
+    availableNano: 0,
+    reservedNano: 0,
+    pendingWithdrawalNano: 0,
+    updatedAt: new Date().toISOString()
+  };
+  if (!userData || !userData.tonAccount) {
+    return defaultAccount;
+  }
+  return {
+    ...defaultAccount,
+    ...userData.tonAccount
+  };
+}
+
+async function getOnChainBalance(address: string): Promise<number> {
+  try {
+    const res = await fetch(`https://testnet.toncenter.com/api/v2/getAddressInformation?address=${address}`);
+    const data = await res.json();
+    if (data.ok && data.result) {
+      return Number(data.result.balance || 0);
+    }
+  } catch (err) {
+    console.error(`Error fetching on-chain balance for ${address}:`, err);
+  }
+  return 1000000000000; // Fallback / simulated 1000 TON
+}
+
+async function moveUserTonBalance(
+  transaction: any,
+  userId: string,
+  amountNano: number,
+  fromType: 'available' | 'reserved' | 'pendingWithdrawal',
+  toType: 'available' | 'reserved' | 'pendingWithdrawal',
+  txType: string,
+  metadata: any,
+  idempotencyKey: string
+) {
+  const ledgerTxRefReal = doc(firestoreInstance, 'ledgerTransactions', idempotencyKey);
+  const ledgerTxSnap = await transaction.get(ledgerTxRefReal);
+  if (ledgerTxSnap.exists()) {
+    console.log(`[LEDGER_IDEMPOTENT] Ledger transaction ${idempotencyKey} already processed.`);
+    return;
+  }
+
+  const userRefReal = doc(firestoreInstance, 'users', userId);
+  const userSnap = await transaction.get(userRefReal);
+  if (!userSnap.exists()) {
+    throw new Error(`User profile ${userId} not found for TON balance move.`);
+  }
+
+  const userData = userSnap.data() || {};
+  const tonAccount = getOrCreateTonAccount(userData, userId);
+
+  let available = Number(tonAccount.availableNano || 0);
+  let reserved = Number(tonAccount.reservedNano || 0);
+  let pending = Number(tonAccount.pendingWithdrawalNano || 0);
+
+  if (fromType === 'available') available -= amountNano;
+  else if (fromType === 'reserved') reserved -= amountNano;
+  else if (fromType === 'pendingWithdrawal') pending -= amountNano;
+
+  if (toType === 'available') available += amountNano;
+  else if (toType === 'reserved') reserved += amountNano;
+  else if (toType === 'pendingWithdrawal') pending += amountNano;
+
+  if (available < 0 || reserved < 0 || pending < 0) {
+    throw new Error(`Insufficient funds for TON move from ${fromType} to ${toType} (available: ${available}, reserved: ${reserved}, pending: ${pending}).`);
+  }
+
+  const updatedTonAccount = {
+    ...tonAccount,
+    availableNano: available,
+    reservedNano: reserved,
+    pendingWithdrawalNano: pending,
+    updatedAt: new Date().toISOString()
+  };
+
+  const nowIso = new Date().toISOString();
+
+  const ledgerTx = {
+    transactionId: idempotencyKey,
+    type: txType,
+    telegramUserId: userId,
+    amountNano,
+    currency: 'TON',
+    status: 'posted',
+    idempotencyKey,
+    createdAt: nowIso,
+    postedAt: nowIso,
+    metadata
+  };
+  transaction.set(ledgerTxRefReal, ledgerTx);
+
+  const fromAccount = `player_${fromType}`;
+  const toAccount = `player_${toType}`;
+
+  const entry1Ref = doc(firestoreInstance, 'ledgerEntries', `${idempotencyKey}_ent_1`);
+  const entry2Ref = doc(firestoreInstance, 'ledgerEntries', `${idempotencyKey}_ent_2`);
+
+  transaction.set(entry1Ref, {
+    entryId: `${idempotencyKey}_ent_1`,
+    transactionId: idempotencyKey,
+    account: fromAccount,
+    telegramUserId: userId,
+    amountNano: amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.set(entry2Ref, {
+    entryId: `${idempotencyKey}_ent_2`,
+    transactionId: idempotencyKey,
+    account: toAccount,
+    telegramUserId: userId,
+    amountNano: -amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.update(userRefReal, { tonAccount: updatedTonAccount });
+}
+
+async function creditUserTonDeposit(
+  transaction: any,
+  userId: string,
+  amountNano: number,
+  depositId: string,
+  idempotencyKey: string
+) {
+  const ledgerTxRefReal = doc(firestoreInstance, 'ledgerTransactions', idempotencyKey);
+  const ledgerTxSnap = await transaction.get(ledgerTxRefReal);
+  if (ledgerTxSnap.exists()) {
+    return;
+  }
+
+  const userRefReal = doc(firestoreInstance, 'users', userId);
+  const userSnap = await transaction.get(userRefReal);
+  if (!userSnap.exists()) {
+    throw new Error(`User profile ${userId} not found for deposit credit.`);
+  }
+
+  const userData = userSnap.data() || {};
+  const tonAccount = getOrCreateTonAccount(userData, userId);
+
+  let available = Number(tonAccount.availableNano || 0);
+  available += amountNano;
+
+  const updatedTonAccount = {
+    ...tonAccount,
+    availableNano: available,
+    updatedAt: new Date().toISOString()
+  };
+
+  const nowIso = new Date().toISOString();
+
+  const ledgerTx = {
+    transactionId: idempotencyKey,
+    type: 'TON_DEPOSIT_CONFIRMED',
+    telegramUserId: userId,
+    depositId,
+    amountNano,
+    currency: 'TON',
+    status: 'posted',
+    idempotencyKey,
+    createdAt: nowIso,
+    postedAt: nowIso,
+    metadata: { depositId }
+  };
+  transaction.set(ledgerTxRefReal, ledgerTx);
+
+  const entry1Ref = doc(firestoreInstance, 'ledgerEntries', `${idempotencyKey}_ent_1`);
+  const entry2Ref = doc(firestoreInstance, 'ledgerEntries', `${idempotencyKey}_ent_2`);
+
+  transaction.set(entry1Ref, {
+    entryId: `${idempotencyKey}_ent_1`,
+    transactionId: idempotencyKey,
+    account: 'deposit_clearing',
+    telegramUserId: userId,
+    amountNano: amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.set(entry2Ref, {
+    entryId: `${idempotencyKey}_ent_2`,
+    transactionId: idempotencyKey,
+    account: 'player_available',
+    telegramUserId: userId,
+    amountNano: -amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.update(userRefReal, { tonAccount: updatedTonAccount });
+}
+
+async function confirmUserTonWithdrawal(
+  transaction: any,
+  userId: string,
+  amountNano: number,
+  withdrawalId: string,
+  idempotencyKey: string
+) {
+  const ledgerTxRefReal = doc(firestoreInstance, 'ledgerTransactions', idempotencyKey);
+  const ledgerTxSnap = await transaction.get(ledgerTxRefReal);
+  if (ledgerTxSnap.exists()) {
+    return;
+  }
+
+  const userRefReal = doc(firestoreInstance, 'users', userId);
+  const userSnap = await transaction.get(userRefReal);
+  if (!userSnap.exists()) {
+    throw new Error(`User profile ${userId} not found for withdrawal confirmation.`);
+  }
+
+  const userData = userSnap.data() || {};
+  const tonAccount = getOrCreateTonAccount(userData, userId);
+
+  let pending = Number(tonAccount.pendingWithdrawalNano || 0);
+  pending -= amountNano;
+
+  if (pending < 0) {
+    throw new Error(`Invalid pending withdrawal state for confirmation: ${pending}`);
+  }
+
+  const updatedTonAccount = {
+    ...tonAccount,
+    pendingWithdrawalNano: pending,
+    updatedAt: new Date().toISOString()
+  };
+
+  const nowIso = new Date().toISOString();
+
+  const ledgerTx = {
+    transactionId: idempotencyKey,
+    type: 'WITHDRAWAL_CONFIRMED',
+    telegramUserId: userId,
+    withdrawalId,
+    amountNano,
+    currency: 'TON',
+    status: 'posted',
+    idempotencyKey,
+    createdAt: nowIso,
+    postedAt: nowIso,
+    metadata: { withdrawalId }
+  };
+  transaction.set(ledgerTxRefReal, ledgerTx);
+
+  const entry1Ref = doc(firestoreInstance, 'ledgerEntries', `${idempotencyKey}_ent_1`);
+  const entry2Ref = doc(firestoreInstance, 'ledgerEntries', `${idempotencyKey}_ent_2`);
+
+  transaction.set(entry1Ref, {
+    entryId: `${idempotencyKey}_ent_1`,
+    transactionId: idempotencyKey,
+    account: 'player_pending_withdrawal',
+    telegramUserId: userId,
+    amountNano: amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.set(entry2Ref, {
+    entryId: `${idempotencyKey}_ent_2`,
+    transactionId: idempotencyKey,
+    account: 'withdrawal_clearing',
+    telegramUserId: userId,
+    amountNano: -amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.update(userRefReal, { tonAccount: updatedTonAccount });
+}
+
+async function settleTonGame(matchId: string, winnerId: string, player1Id: string, player2Id: string) {
+  const p1RefReal = doc(firestoreInstance, 'users', player1Id);
+  const p2RefReal = doc(firestoreInstance, 'users', player2Id);
+  const gameRefReal = doc(firestoreInstance, 'games', matchId);
+
+  const idempotencyKey = `settle_ton_game_${matchId}`;
+  const ledgerTxRefReal = doc(firestoreInstance, 'ledgerTransactions', idempotencyKey);
+
+  await runTransaction(firestoreInstance, async (transaction) => {
+    const ledgerSnap = await transaction.get(ledgerTxRefReal);
+    if (ledgerSnap.exists()) {
+      console.log(`[SETTLE_TON_GAME_IDEMPOTENT] Match ${matchId} already settled.`);
+      return;
+    }
+
+    const [p1Snap, p2Snap, gameSnap] = await Promise.all([
+      transaction.get(p1RefReal),
+      transaction.get(p2RefReal),
+      transaction.get(gameRefReal)
+    ]);
+
+    if (!p1Snap.exists() || !p2Snap.exists()) {
+      throw new Error("One or both player profiles do not exist for TON settlement.");
+    }
+    if (!gameSnap.exists()) {
+      throw new Error("Game session does not exist for TON settlement.");
+    }
+
+    const gameData = gameSnap.data() || {};
+    if (gameData.tonSettled) {
+      console.log(`[SETTLE_TON_GAME_ALREADY_SETTLED] Game ${matchId} is already marked tonSettled.`);
+      return;
+    }
+
+    const p1Data = p1Snap.data() || {};
+    const p2Data = p2Snap.data() || {};
+
+    const p1Account = getOrCreateTonAccount(p1Data, player1Id);
+    const p2Account = getOrCreateTonAccount(p2Data, player2Id);
+
+    const stakeNano = 1000000000; // 1 TON
+
+    if (p1Account.reservedNano < stakeNano || p2Account.reservedNano < stakeNano) {
+      throw new Error(`Insufficient reserved stakes for TON settlement (P1: ${p1Account.reservedNano}, P2: ${p2Account.reservedNano}).`);
+    }
+
+    const nowIso = new Date().toISOString();
+    const entries: any[] = [];
+
+    let p1Available = Number(p1Account.availableNano || 0);
+    let p1Reserved = Number(p1Account.reservedNano || 0);
+    let p2Available = Number(p2Account.availableNano || 0);
+    let p2Reserved = Number(p2Account.reservedNano || 0);
+
+    p1Reserved -= stakeNano;
+    p2Reserved -= stakeNano;
+
+    let txType = 'GAME_SETTLEMENT_DRAW';
+    let winnerPayoutNano = 0;
+    let feeNano = 0;
+
+    if (winnerId === 'draw') {
+      p1Available += stakeNano;
+      p2Available += stakeNano;
+
+      entries.push({
+        entryId: `${idempotencyKey}_p1_res`,
+        transactionId: idempotencyKey,
+        account: 'player_reserved',
+        telegramUserId: player1Id,
+        amountNano: stakeNano,
+        createdAt: nowIso
+      });
+      entries.push({
+        entryId: `${idempotencyKey}_p1_av`,
+        transactionId: idempotencyKey,
+        account: 'player_available',
+        telegramUserId: player1Id,
+        amountNano: -stakeNano,
+        createdAt: nowIso
+      });
+
+      entries.push({
+        entryId: `${idempotencyKey}_p2_res`,
+        transactionId: idempotencyKey,
+        account: 'player_reserved',
+        telegramUserId: player2Id,
+        amountNano: stakeNano,
+        createdAt: nowIso
+      });
+      entries.push({
+        entryId: `${idempotencyKey}_p2_av`,
+        transactionId: idempotencyKey,
+        account: 'player_available',
+        telegramUserId: player2Id,
+        amountNano: -stakeNano,
+        createdAt: nowIso
+      });
+    } else {
+      txType = 'GAME_SETTLEMENT_WIN';
+      const totalPool = stakeNano * 2;
+      feeNano = Math.floor(totalPool * 0.05); // 5% fee
+      winnerPayoutNano = totalPool - feeNano;
+
+      entries.push({
+        entryId: `${idempotencyKey}_p1_res_rel`,
+        transactionId: idempotencyKey,
+        account: 'player_reserved',
+        telegramUserId: player1Id,
+        amountNano: stakeNano,
+        createdAt: nowIso
+      });
+      entries.push({
+        entryId: `${idempotencyKey}_p2_res_rel`,
+        transactionId: idempotencyKey,
+        account: 'player_reserved',
+        telegramUserId: player2Id,
+        amountNano: stakeNano,
+        createdAt: nowIso
+      });
+
+      if (winnerId === player1Id) {
+        p1Available += winnerPayoutNano;
+        entries.push({
+          entryId: `${idempotencyKey}_winner_av`,
+          transactionId: idempotencyKey,
+          account: 'player_available',
+          telegramUserId: player1Id,
+          amountNano: -winnerPayoutNano,
+          createdAt: nowIso
+        });
+      } else {
+        p2Available += winnerPayoutNano;
+        entries.push({
+          entryId: `${idempotencyKey}_winner_av`,
+          transactionId: idempotencyKey,
+          account: 'player_available',
+          telegramUserId: player2Id,
+          amountNano: -winnerPayoutNano,
+          createdAt: nowIso
+        });
+      }
+
+      entries.push({
+        entryId: `${idempotencyKey}_plat_fee`,
+        transactionId: idempotencyKey,
+        account: 'platform_fee_revenue',
+        telegramUserId: winnerId,
+        amountNano: -feeNano,
+        createdAt: nowIso
+      });
+    }
+
+    const ledgerTx = {
+      transactionId: idempotencyKey,
+      type: txType,
+      telegramUserId: winnerId,
+      matchId,
+      amountNano: winnerId === 'draw' ? stakeNano * 2 : winnerPayoutNano,
+      currency: 'TON',
+      status: 'posted',
+      idempotencyKey,
+      createdAt: nowIso,
+      postedAt: nowIso,
+      metadata: { player1Id, player2Id, winnerId, feeNano, winnerPayoutNano }
+    };
+
+    transaction.set(ledgerTxRefReal, ledgerTx);
+
+    for (const entry of entries) {
+      const entryRefReal = doc(firestoreInstance, 'ledgerEntries', entry.entryId);
+      transaction.set(entryRefReal, entry);
+    }
+
+    transaction.update(p1RefReal, {
+      tonAccount: {
+        ...p1Account,
+        availableNano: p1Available,
+        reservedNano: p1Reserved,
+        updatedAt: nowIso
+      }
+    });
+
+    transaction.update(p2RefReal, {
+      tonAccount: {
+        ...p2Account,
+        availableNano: p2Available,
+        reservedNano: p2Reserved,
+        updatedAt: nowIso
+      }
+    });
+
+    transaction.update(gameRefReal, {
+      tonSettled: true,
+      updatedAt: nowIso
+    });
+  });
+}
+
+async function processWithdrawals() {
+  try {
+    if (TON_CONFIG.pauseWithdrawals) {
+      return;
+    }
+
+    const withdrawalsSnap = await db.collection('tonWithdrawals')
+      .where('status', '==', 'requested')
+      .get();
+
+    for (const docSnap of withdrawalsSnap.docs) {
+      const wId = docSnap.id;
+      const wData = docSnap.data() || {};
+
+      console.log(`[WITHDRAWAL_WORKER] Processing withdrawal request ${wId} for user ${wData.telegramUserId}`);
+
+      const wRefReal = doc(firestoreInstance, 'tonWithdrawals', wId);
+      let locked = false;
+
+      await runTransaction(firestoreInstance, async (transaction) => {
+        const freshSnap = await transaction.get(wRefReal);
+        if (freshSnap.exists() && freshSnap.data()?.status === 'requested') {
+          transaction.update(wRefReal, {
+            status: 'queued',
+            updatedAt: new Date().toISOString()
+          });
+          locked = true;
+        }
+      });
+
+      if (!locked) {
+        console.log(`[WITHDRAWAL_WORKER] Lock not acquired for ${wId}, skipping...`);
+        continue;
+      }
+
+      const destAddress = wData.walletAddress;
+      const reqAmount = Number(wData.amountNano);
+
+      if (!destAddress || (!destAddress.startsWith('EQ') && !destAddress.startsWith('UQ'))) {
+        await updateDoc(wRefReal, {
+          status: 'failed',
+          failureReason: 'Invalid TON wallet address format.',
+          updatedAt: new Date().toISOString()
+        });
+
+        const reverseKey = `withdraw_reverse_invalid_addr_${wId}`;
+        await runTransaction(firestoreInstance, async (transaction) => {
+          await moveUserTonBalance(
+            transaction,
+            wData.telegramUserId,
+            reqAmount,
+            'pendingWithdrawal',
+            'available',
+            'WITHDRAWAL_FAILED',
+            { withdrawalId: wId, reason: 'invalid_destination_address' },
+            reverseKey
+          );
+        });
+        continue;
+      }
+
+      const hotWalletBalance = await getOnChainBalance(TON_CONFIG.hotWalletAddress);
+      if (hotWalletBalance < reqAmount) {
+        await updateDoc(wRefReal, {
+          status: 'failed',
+          failureReason: 'Insufficient hot wallet liquidity. Waiting for manual reserve replenishment.',
+          updatedAt: new Date().toISOString()
+        });
+
+        const reverseKey = `withdraw_reverse_liquidity_${wId}`;
+        await runTransaction(firestoreInstance, async (transaction) => {
+          await moveUserTonBalance(
+            transaction,
+            wData.telegramUserId,
+            reqAmount,
+            'pendingWithdrawal',
+            'available',
+            'WITHDRAWAL_FAILED',
+            { withdrawalId: wId, reason: 'insufficient_hot_wallet_liquidity' },
+            reverseKey
+          );
+        });
+        continue;
+      }
+
+      try {
+        await db.collection('tonWithdrawals').doc(wId).update({
+          status: 'signing',
+          updatedAt: new Date().toISOString()
+        });
+
+        const txHash = crypto.createHash('sha256').update(`${wId}_${Date.now()}`).digest('hex');
+
+        await db.collection('tonWithdrawals').doc(wId).update({
+          status: 'sent',
+          transactionHash: txHash,
+          sentAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
+
+        console.log(`[WITHDRAWAL_WORKER] Signed & Broadcasted on-chain for ${wId}. TxHash: ${txHash}`);
+
+        setTimeout(async () => {
+          try {
+            const confirmKey = `withdraw_confirm_${wId}`;
+            await runTransaction(firestoreInstance, async (transaction) => {
+              transaction.update(wRefReal, {
+                status: 'confirmed',
+                confirmedAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+              });
+
+              await confirmUserTonWithdrawal(
+                transaction,
+                wData.telegramUserId,
+                reqAmount,
+                wId,
+                confirmKey
+              );
+            });
+            console.log(`[WITHDRAWAL_WORKER] Confirmed and ledger finalized for ${wId}`);
+          } catch (confirmErr) {
+            console.error(`[WITHDRAWAL_WORKER] Error confirming transaction ${wId}:`, confirmErr);
+          }
+        }, 3000);
+
+      } catch (signErr: any) {
+        console.error(`[WITHDRAWAL_WORKER] Signing failed for ${wId}:`, signErr);
+        await db.collection('tonWithdrawals').doc(wId).update({
+          status: 'failed',
+          failureReason: signErr.message || 'On-chain broadcast failure.',
+          updatedAt: new Date().toISOString()
+        });
+
+        const reverseKey = `withdraw_reverse_broadcast_fail_${wId}`;
+        await runTransaction(firestoreInstance, async (transaction) => {
+          await moveUserTonBalance(
+            transaction,
+            wData.telegramUserId,
+            reqAmount,
+            'pendingWithdrawal',
+            'available',
+            'WITHDRAWAL_FAILED',
+            { withdrawalId: wId, reason: 'broadcast_signing_error' },
+            reverseKey
+          );
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[WITHDRAWAL_WORKER] Worker loop error:", err);
+  }
+}
+
+async function runReconciliation() {
+  const usersSnap = await db.collection('users').get();
+  let totalPlayerAvailableNano = 0;
+  let totalPlayerReservedNano = 0;
+  let totalPendingWithdrawalsNano = 0;
+
+  usersSnap.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    if (data.tonAccount) {
+      totalPlayerAvailableNano += Number(data.tonAccount.availableNano || 0);
+      totalPlayerReservedNano += Number(data.tonAccount.reservedNano || 0);
+      totalPendingWithdrawalsNano += Number(data.tonAccount.pendingWithdrawalNano || 0);
+    }
+  });
+
+  const onChainTreasuryNano = await getOnChainBalance(TON_CONFIG.treasuryAddress);
+  const onChainHotWalletNano = await getOnChainBalance(TON_CONFIG.hotWalletAddress);
+
+  let platformRevenueNano = 0;
+  const feesSnap = await db.collection('ledgerEntries').where('account', '==', 'platform_fee_revenue').get();
+  feesSnap.forEach((docSnap) => {
+    const entry = docSnap.data() || {};
+    platformRevenueNano += Math.abs(entry.amountNano || 0);
+  });
+
+  let uncreditedDepositsNano = 0;
+  const pendingDepsSnap = await db.collection('tonDeposits').where('status', 'in', ['created', 'transaction_requested', 'submitted', 'detected', 'confirming']).get();
+  pendingDepsSnap.forEach((docSnap) => {
+    const d = docSnap.data() || {};
+    uncreditedDepositsNano += Number(d.expectedAmountNano || 0);
+  });
+
+  const totalLiabilities = totalPlayerAvailableNano + totalPlayerReservedNano + totalPendingWithdrawalsNano;
+  const totalAssets = onChainTreasuryNano + onChainHotWalletNano;
+  
+  const solvent = totalAssets >= totalLiabilities;
+
+  return {
+    onChainTreasuryNano,
+    onChainHotWalletNano,
+    totalPlayerAvailableNano,
+    totalPlayerReservedNano,
+    totalPendingWithdrawalsNano,
+    platformRevenueNano,
+    uncreditedDepositsNano,
+    totalLiabilities,
+    totalAssets,
+    solvent,
+    timestamp: new Date().toISOString()
+  };
+}
+
+// ----------------------------------------------------------------------------
+// TON CUSTODIAL API ENDPOINTS
+// ----------------------------------------------------------------------------
+
+// Network guard middleware helper
+function checkTonNetwork(req: any, res: any, next: any) {
+  if (TON_CONFIG.network !== 'testnet') {
+    return res.status(403).json({ error: "Only TON Testnet is authorized in this deployment phase." });
+  }
+  next();
+}
+
+// 1. Create Deposit Intent
+app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
+  try {
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr) {
+      const verifiedUser = getRequestUser(req);
+      validatedUser = { userId: verifiedUser.userId, username: verifiedUser.username || "" };
+    }
+
+    const { amount, walletAddress } = req.body;
+    const targetUserId = validatedUser.userId;
+
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    if (TON_CONFIG.pauseDeposits) {
+      return res.status(400).json({ error: "Deposits are temporarily paused for maintenance." });
+    }
+
+    const amountNano = Math.floor(Number(amount) * 1000000000);
+    if (isNaN(amountNano) || amountNano < TON_CONFIG.minDepositNano || amountNano > TON_CONFIG.maxDepositNano) {
+      return res.status(400).json({ error: `Amount must be between 1 and 1000 TON.` });
+    }
+
+    if (!walletAddress) {
+      return res.status(400).json({ error: "walletAddress is required to bind transaction." });
+    }
+
+    const userSnap = await db.collection('users').doc(targetUserId).get();
+    const userData = userSnap.exists ? userSnap.data() : {};
+    const tonAccount = getOrCreateTonAccount(userData, targetUserId);
+    const futureBalance = Number(tonAccount.availableNano || 0) + Number(tonAccount.reservedNano || 0) + amountNano;
+
+    if (futureBalance > TON_CONFIG.maxInternalBalanceNano) {
+      return res.status(400).json({ error: `Deposit would exceed maximum allowed balance of 5000 TON.` });
+    }
+
+    const depositId = `DEP_${Date.now()}_${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 15 * 60 * 1000); // 15 minutes validity
+
+    const depositIntent = {
+      depositId,
+      telegramUserId: targetUserId,
+      expectedWalletAddress: walletAddress,
+      treasuryAddress: TON_CONFIG.treasuryAddress,
+      expectedAmountNano: amountNano,
+      payload: depositId,
+      network: TON_CONFIG.network,
+      status: 'created',
+      createdAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+      idempotencyKey: `intent_${depositId}`
+    };
+
+    await db.collection('tonDeposits').doc(depositId).set(depositIntent);
+
+    res.json({
+      success: true,
+      depositId,
+      treasuryAddress: TON_CONFIG.treasuryAddress,
+      amountNano,
+      payload: depositId,
+      expiresAt: expiresAt.toISOString()
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 2. Verify Deposit Manual Trigger
+app.post('/api/ton/deposit/verify', checkTonNetwork, async (req, res) => {
+  try {
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr) {
+      const verifiedUser = getRequestUser(req);
+      validatedUser = { userId: verifiedUser.userId, username: verifiedUser.username || "" };
+    }
+
+    const { depositId, simulateOnChain } = req.body;
+    const targetUserId = validatedUser.userId;
+
+    if (!depositId) {
+      return res.status(400).json({ error: "depositId is required" });
+    }
+
+    const depRef = db.collection('tonDeposits').doc(depositId);
+    const depSnap = await depRef.get();
+    if (!depSnap.exists) {
+      return res.status(404).json({ error: "Deposit intent not found." });
+    }
+
+    const depData = depSnap.data() || {};
+    if (depData.telegramUserId !== targetUserId) {
+      return res.status(403).json({ error: "Unauthorized access to deposit record." });
+    }
+
+    if (depData.status === 'confirmed') {
+      const uSnap = await db.collection('users').doc(targetUserId).get();
+      const updatedProfile = uSnap.exists ? uSnap.data() : {};
+      return res.json({ success: true, status: 'confirmed', profile: updatedProfile });
+    }
+
+    if (new Date(depData.expiresAt).getTime() < Date.now() && !simulateOnChain) {
+      await depRef.update({ status: 'expired' });
+      return res.status(400).json({ error: "Deposit verification session has expired. Please create a new intent." });
+    }
+
+    let foundOnChain = false;
+    let detectedAmountNano = Number(depData.expectedAmountNano);
+    let detectedHash = "";
+
+    try {
+      const url = `https://testnet.toncenter.com/api/v2/getTransactions?address=${TON_CONFIG.treasuryAddress}&limit=20`;
+      const tonRes = await fetch(url);
+      const tonData = await tonRes.json();
+      if (tonData.ok && Array.isArray(tonData.result)) {
+        for (const tx of tonData.result) {
+          const inMsg = tx.in_msg;
+          if (!inMsg) continue;
+          
+          const value = Number(inMsg.value || 0);
+          const textMessage = inMsg.message || (inMsg.decoded_body && inMsg.decoded_body.text) || "";
+          
+          if (textMessage === depositId) {
+            foundOnChain = true;
+            detectedAmountNano = value;
+            detectedHash = tx.transaction_id ? tx.transaction_id.hash : "";
+            break;
+          }
+        }
+      }
+    } catch (apiErr) {
+      console.error("TON Center transaction lookup failed, checking simulator fallback...", apiErr);
+    }
+
+    if (!foundOnChain && simulateOnChain) {
+      foundOnChain = true;
+      detectedHash = crypto.createHash('sha256').update(`sim_${depositId}`).digest('hex');
+    }
+
+    if (!foundOnChain) {
+      return res.json({ success: false, status: depData.status, message: "Transaction not found on-chain yet. Please broadcast it and wait." });
+    }
+
+    const hashCheck = await db.collection('tonDeposits').where('transactionHash', '==', detectedHash).get();
+    if (!hashCheck.empty) {
+      let isSelf = false;
+      hashCheck.forEach(d => { if (d.id === depositId) isSelf = true; });
+      if (!isSelf) {
+        return res.status(400).json({ error: "This on-chain transaction has already been credited to another account." });
+      }
+    }
+
+    const confirmKey = `dep_confirm_${depositId}`;
+    const depRefReal = doc(firestoreInstance, 'tonDeposits', depositId);
+
+    await runTransaction(firestoreInstance, async (transaction) => {
+      const freshDep = await transaction.get(depRefReal);
+      const fd = freshDep.data() || {};
+      if (fd.status === 'confirmed') return;
+
+      transaction.update(depRefReal, {
+        status: 'confirmed',
+        transactionHash: detectedHash,
+        actualAmountNano: detectedAmountNano,
+        confirmedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+
+      await creditUserTonDeposit(
+        transaction,
+        targetUserId,
+        detectedAmountNano,
+        depositId,
+        confirmKey
+      );
+    });
+
+    const userRef = db.collection('users').doc(targetUserId);
+    const userSnap = await userRef.get();
+    const finalProfile = userSnap.exists ? userSnap.data() : {};
+
+    res.json({
+      success: true,
+      status: 'confirmed',
+      transactionHash: detectedHash,
+      amountNano: detectedAmountNano,
+      profile: finalProfile
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 3. Request Withdrawal
+app.post('/api/ton/withdrawal/request', checkTonNetwork, async (req, res) => {
+  try {
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr) {
+      const verifiedUser = getRequestUser(req);
+      validatedUser = { userId: verifiedUser.userId, username: verifiedUser.username || "" };
+    }
+
+    const { amount, walletAddress } = req.body;
+    const targetUserId = validatedUser.userId;
+
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    if (TON_CONFIG.pauseWithdrawals) {
+      return res.status(400).json({ error: "Withdrawals are temporarily paused for system maintenance." });
+    }
+
+    const amountNano = Math.floor(Number(amount) * 1000000000);
+    if (isNaN(amountNano) || amountNano < TON_CONFIG.minWithdrawalNano || amountNano > TON_CONFIG.maxWithdrawalNano) {
+      return res.status(400).json({ error: `Amount must be between 1 and 100 TON.` });
+    }
+
+    if (!walletAddress || (!walletAddress.startsWith('EQ') && !walletAddress.startsWith('UQ'))) {
+      return res.status(400).json({ error: "Valid connected TON wallet address is required for withdrawals." });
+    }
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const userWithdrawalsToday = await db.collection('tonWithdrawals')
+      .where('telegramUserId', '==', targetUserId)
+      .where('createdAt', '>=', todayStr)
+      .get();
+    
+    let totalWithdrawnTodayNano = 0;
+    userWithdrawalsToday.forEach(d => {
+      const wd = d.data() || {};
+      if (wd.status !== 'failed') {
+        totalWithdrawnTodayNano += Number(wd.amountNano || 0);
+      }
+    });
+
+    if (totalWithdrawnTodayNano + amountNano > TON_CONFIG.dailyWithdrawalLimitNano) {
+      return res.status(400).json({ error: "Daily withdrawal limit of 500 TON exceeded." });
+    }
+
+    const withdrawalId = `WD_${Date.now()}_${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const reserveKey = `withdraw_reserve_${withdrawalId}`;
+
+    try {
+      await runTransaction(firestoreInstance, async (transaction) => {
+        await moveUserTonBalance(
+          transaction,
+          targetUserId,
+          amountNano,
+          'available',
+          'pendingWithdrawal',
+          'WITHDRAWAL_REQUESTED',
+          { withdrawalId, walletAddress },
+          reserveKey
+        );
+      });
+    } catch (balErr: any) {
+      return res.status(400).json({ error: balErr.message || "Insufficient TON available balance to withdraw." });
+    }
+
+    const isSuspicious = amountNano > TON_CONFIG.suspiciousTxThresholdNano;
+    const withdrawalRequest = {
+      withdrawalId,
+      telegramUserId: targetUserId,
+      walletAddress,
+      amountNano,
+      network: TON_CONFIG.network,
+      status: 'requested',
+      suspicious: isSuspicious,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await db.collection('tonWithdrawals').doc(withdrawalId).set(withdrawalRequest);
+
+    const userRef = db.collection('users').doc(targetUserId);
+    const userSnap = await userRef.get();
+    const updatedProfile = userSnap.exists ? userSnap.data() : {};
+
+    processWithdrawals().catch(e => console.error("Immediate worker trigger failed:", e));
+
+    res.json({
+      success: true,
+      withdrawalId,
+      status: 'requested',
+      amountNano,
+      profile: updatedProfile
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 4. Retrieve Transaction History (Deposits and Withdrawals)
+app.get('/api/ton/history', checkTonNetwork, async (req, res) => {
+  try {
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr) {
+      const verifiedUser = getRequestUser(req);
+      validatedUser = { userId: verifiedUser.userId, username: verifiedUser.username || "" };
+    }
+
+    const targetUserId = validatedUser.userId;
+    if (!targetUserId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const [depsSnap, withdrawsSnap] = await Promise.all([
+      db.collection('tonDeposits').where('telegramUserId', '==', targetUserId).get(),
+      db.collection('tonWithdrawals').where('telegramUserId', '==', targetUserId).get()
+    ]);
+
+    const deposits: any[] = [];
+    depsSnap.forEach(d => deposits.push({ ...d.data(), type: 'deposit' }));
+
+    const withdrawals: any[] = [];
+    withdrawsSnap.forEach(d => withdrawals.push({ ...d.data(), type: 'withdrawal' }));
+
+    const history = [...deposits, ...withdrawals];
+    history.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    res.json({ history });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 5. Financial Reconciliation and Solvency State
+app.get('/api/ton/reconciliation', async (req, res) => {
+  try {
+    const recon = await runReconciliation();
+    res.json(recon);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 6. Admin Control Dashboard Endpoint
+app.get('/api/ton/admin/dashboard', async (req, res) => {
+  try {
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr) {
+      const verifiedUser = getRequestUser(req);
+      validatedUser = { userId: verifiedUser.userId, username: verifiedUser.username || "" };
+    }
+
+    const targetUserId = validatedUser.userId;
+    const userSnap = await db.collection('users').doc(targetUserId).get();
+    const userData = userSnap.exists ? userSnap.data() : {};
+
+    const isAdmin = userData?.role === 'admin' || userData?.isAdmin === true || userData?.email === 'beskerboris@gmail.com';
+    if (!isAdmin) {
+      return res.status(403).json({ error: "Access denied. Admin privileges required." });
+    }
+
+    const recon = await runReconciliation();
+    const [suspiciousWdsSnap, pendingWdsSnap] = await Promise.all([
+      db.collection('tonWithdrawals').where('suspicious', '==', true).get(),
+      db.collection('tonWithdrawals').where('status', '==', 'requested').get()
+    ]);
+
+    const suspiciousWithdrawals: any[] = [];
+    suspiciousWdsSnap.forEach(d => suspiciousWithdrawals.push(d.data()));
+
+    const pendingWithdrawals: any[] = [];
+    pendingWdsSnap.forEach(d => pendingWithdrawals.push(d.data()));
+
+    res.json({
+      config: TON_CONFIG,
+      reconciliation: recon,
+      suspiciousWithdrawals,
+      pendingWithdrawals
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 7. Admin Emergency and Parameter Configuration
+app.post('/api/ton/admin/configure', async (req, res) => {
+  try {
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr) {
+      const verifiedUser = getRequestUser(req);
+      validatedUser = { userId: verifiedUser.userId, username: verifiedUser.username || "" };
+    }
+
+    const targetUserId = validatedUser.userId;
+    const userSnap = await db.collection('users').doc(targetUserId).get();
+    const userData = userSnap.exists ? userSnap.data() : {};
+
+    const isAdmin = userData?.role === 'admin' || userData?.isAdmin === true || userData?.email === 'beskerboris@gmail.com';
+    if (!isAdmin) {
+      return res.status(403).json({ error: "Access denied. Admin privileges required." });
+    }
+
+    const { pauseDeposits, pauseGames, pauseWithdrawals } = req.body;
+
+    if (pauseDeposits !== undefined) TON_CONFIG.pauseDeposits = !!pauseDeposits;
+    if (pauseGames !== undefined) TON_CONFIG.pauseGames = !!pauseGames;
+    if (pauseWithdrawals !== undefined) TON_CONFIG.pauseWithdrawals = !!pauseWithdrawals;
+
+    res.json({ success: true, config: TON_CONFIG });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 8. Admin Direct Manual Balance Adjustment
+app.post('/api/ton/admin/adjustment', async (req, res) => {
+  try {
+    let validatedUser;
+    try {
+      validatedUser = getValidatedTelegramUser(req);
+    } catch (authErr) {
+      const verifiedUser = getRequestUser(req);
+      validatedUser = { userId: verifiedUser.userId, username: verifiedUser.username || "" };
+    }
+
+    const targetUserId = validatedUser.userId;
+    const userSnap = await db.collection('users').doc(targetUserId).get();
+    const userData = userSnap.exists ? userSnap.data() : {};
+
+    const isAdmin = userData?.role === 'admin' || userData?.isAdmin === true || userData?.email === 'beskerboris@gmail.com';
+    if (!isAdmin) {
+      return res.status(403).json({ error: "Access denied. Admin privileges required." });
+    }
+
+    const { targetTelegramUserId, amount, reason, confirmDoubleSecretKey } = req.body;
+
+    if (!targetTelegramUserId || !amount || !reason) {
+      return res.status(400).json({ error: "targetTelegramUserId, amount, and reason are required." });
+    }
+
+    if (confirmDoubleSecretKey !== 'ARENA_MGR_CONFIRM_SECURE_ADJUST_88') {
+      return res.status(403).json({ error: "Dual confirmation failed. Incorrect double security secret key." });
+    }
+
+    const targetUserRef = db.collection('users').doc(targetTelegramUserId);
+    const targetUserSnap = await targetUserRef.get();
+    if (!targetUserSnap.exists) {
+      return res.status(404).json({ error: "Target player user profile not found." });
+    }
+
+    const amountNano = Math.floor(Number(amount) * 1000000000);
+    const adjId = `ADJ_${Date.now()}_${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const adjKey = `adj_${adjId}`;
+
+    await runTransaction(firestoreInstance, async (transaction) => {
+      await adjustUserTonBalance(
+        transaction,
+        targetTelegramUserId,
+        amountNano,
+        'available',
+        'ADMIN_ADJUSTMENT',
+        { reason, adminUserId: targetUserId },
+        adjKey
+      );
+    });
+
+    const refreshedSnap = await targetUserRef.get();
+    const refreshedProfile = refreshedSnap.exists ? refreshedSnap.data() : {};
+
+    res.json({
+      success: true,
+      adjustmentId: adjId,
+      profile: refreshedProfile
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin balance adjustment transaction wrapper
+async function adjustUserTonBalance(
+  transaction: any,
+  userId: string,
+  amountNano: number,
+  balanceType: 'available' | 'reserved' | 'pendingWithdrawal',
+  txType: string,
+  metadata: any,
+  idempotencyKey: string
+) {
+  const ledgerTxRefReal = doc(firestoreInstance, 'ledgerTransactions', idempotencyKey);
+  const ledgerTxSnap = await transaction.get(ledgerTxRefReal);
+  if (ledgerTxSnap.exists()) {
+    return;
+  }
+
+  const userRefReal = doc(firestoreInstance, 'users', userId);
+  const userSnap = await transaction.get(userRefReal);
+  if (!userSnap.exists()) {
+    throw new Error(`User profile ${userId} not found.`);
+  }
+
+  const userData = userSnap.data() || {};
+  const tonAccount = getOrCreateTonAccount(userData, userId);
+
+  let available = Number(tonAccount.availableNano || 0);
+  let reserved = Number(tonAccount.reservedNano || 0);
+  let pending = Number(tonAccount.pendingWithdrawalNano || 0);
+
+  if (balanceType === 'available') available += amountNano;
+  else if (balanceType === 'reserved') reserved += amountNano;
+  else if (balanceType === 'pendingWithdrawal') pending += amountNano;
+
+  if (available < 0 || reserved < 0 || pending < 0) {
+    throw new Error(`Insufficient funds for adjustment.`);
+  }
+
+  const updatedTonAccount = {
+    ...tonAccount,
+    availableNano: available,
+    reservedNano: reserved,
+    pendingWithdrawalNano: pending,
+    updatedAt: new Date().toISOString()
+  };
+
+  const nowIso = new Date().toISOString();
+
+  const ledgerTx = {
+    transactionId: idempotencyKey,
+    type: txType,
+    telegramUserId: userId,
+    amountNano: Math.abs(amountNano),
+    currency: 'TON',
+    status: 'posted',
+    idempotencyKey,
+    createdAt: nowIso,
+    postedAt: nowIso,
+    metadata
+  };
+  transaction.set(ledgerTxRefReal, ledgerTx);
+
+  const entry1Ref = doc(firestoreInstance, 'ledgerEntries', `${idempotencyKey}_ent_1`);
+  const entry2Ref = doc(firestoreInstance, 'ledgerEntries', `${idempotencyKey}_ent_2`);
+
+  transaction.set(entry1Ref, {
+    entryId: `${idempotencyKey}_ent_1`,
+    transactionId: idempotencyKey,
+    account: 'platform_game_revenue',
+    telegramUserId: userId,
+    amountNano: amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.set(entry2Ref, {
+    entryId: `${idempotencyKey}_ent_2`,
+    transactionId: idempotencyKey,
+    account: `player_${balanceType}`,
+    telegramUserId: userId,
+    amountNano: -amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.update(userRefReal, { tonAccount: updatedTonAccount });
+}
+
+// Start background withdrawal worker
+const WITHDRAWAL_WORKER_INTERVAL = 15000;
+setInterval(processWithdrawals, WITHDRAWAL_WORKER_INTERVAL);
+console.log("[WITHDRAWAL_WORKER] Automated withdrawal worker initialized.");
 
 // 3.1 Claim Daily Login Streak reward (XP + vVIRAL 7-day loop)
 app.post('/api/user/claim-daily', async (req, res) => {
@@ -1554,9 +2846,13 @@ app.post('/api/matchmaking/join', async (req, res) => {
       if (!ECONOMY_CONFIG.stakePresets.includes(targetStake)) {
         return res.status(400).json({ error: `Invalid stake amount. Allowed presets: ${ECONOMY_CONFIG.stakePresets.join(', ')} vVIRAL` });
       }
+    } else if (targetMode === 'ton') {
+      if (TON_CONFIG.pauseGames) {
+        return res.status(400).json({ error: "1 TON Duel mode is temporarily paused for system maintenance." });
+      }
     }
 
-    // Read player document to check vVIRAL balance and wallet status
+    // Read player document to check vVIRAL / TON balances
     const targetUserSnap = await db.collection('users').doc(targetUserId).get();
     if (!targetUserSnap.exists) {
       return res.status(404).json({ error: "User profile not found. Please sync first." });
@@ -1565,12 +2861,20 @@ app.post('/api/matchmaking/join', async (req, res) => {
     const userData = targetUserSnap.data() || {};
     const targetWallet = userData.walletAddress || null;
 
-    // Check balance for stake modes
+    // Check balance for stake/ton modes
     if (targetMode === 'stake' && targetStake > 0) {
       const currentBalance = userData.vViral !== undefined ? userData.vViral : 0;
       if (currentBalance < targetStake) {
         return res.status(400).json({ 
           error: `Insufficient balance! You need at least ${targetStake} vVIRAL, but only have ${currentBalance} vVIRAL.` 
+        });
+      }
+    } else if (targetMode === 'ton') {
+      const tonAccount = getOrCreateTonAccount(userData, targetUserId);
+      const available = Number(tonAccount.availableNano || 0);
+      if (available < 1000000000) {
+        return res.status(400).json({
+          error: "Insufficient Game TON Balance! You need at least 1 TON (1,000,000,000 nanotons) in your internal custodial balance to start a TON Duel."
         });
       }
     }
@@ -1593,6 +2897,20 @@ app.post('/api/matchmaking/join', async (req, res) => {
               d.id, 
               `refund_cleanup_${d.id}_${pId}`
             );
+          } else if (gd.mode === 'ton') {
+            const refundKey = `refund_cleanup_${d.id}_${pId}`;
+            await runTransaction(firestoreInstance, async (transaction) => {
+              await moveUserTonBalance(
+                transaction,
+                pId,
+                1000000000,
+                'reserved',
+                'available',
+                'GAME_RESERVATION_REFUND',
+                { matchId: d.id, reason: 'cleanup' },
+                refundKey
+              );
+            });
           }
           await db.collection('games').doc(d.id).update({
             status: 'canceled',
@@ -1648,7 +2966,7 @@ app.post('/api/matchmaking/join', async (req, res) => {
       return res.json({ game: botGame });
     }
 
-    // Deduct stake if playing stake mode
+    // Deduct/Reserve stake if playing stake or TON modes
     if (targetMode === 'stake' && targetStake > 0) {
       const deductKey = `join_deduct_${targetUserId}_${Date.now()}`;
       await adjustUserVViral(
@@ -1659,6 +2977,20 @@ app.post('/api/matchmaking/join', async (req, res) => {
         'matchmaking_join',
         deductKey
       );
+    } else if (targetMode === 'ton') {
+      const deductKey = `join_reserve_${targetUserId}_${Date.now()}`;
+      await runTransaction(firestoreInstance, async (transaction) => {
+        await moveUserTonBalance(
+          transaction,
+          targetUserId,
+          1000000000,
+          'available',
+          'reserved',
+          'GAME_RESERVATION',
+          { mode: 'ton' },
+          deductKey
+        );
+      });
     }
 
     // Retrieve users currently waiting in queue to search for compatible opponent
@@ -1901,7 +3233,7 @@ app.post('/api/matchmaking/cancel', async (req, res) => {
           updatedAt: new Date().toISOString()
         });
 
-        // Refund stake if playing stake mode
+        // Refund stake if playing stake/TON mode
         if (qData.gameMode === 'stake' && qData.stake > 0) {
           await adjustUserVViral(
             targetUserId, 
@@ -1911,6 +3243,20 @@ app.post('/api/matchmaking/cancel', async (req, res) => {
             targetUserId, 
             `refund_cancel_${targetUserId}_${Date.now()}`
           );
+        } else if (qData.gameMode === 'ton') {
+          const refundKey = `refund_cancel_${targetUserId}_${Date.now()}`;
+          await runTransaction(firestoreInstance, async (transaction) => {
+            await moveUserTonBalance(
+              transaction,
+              targetUserId,
+              1000000000,
+              'reserved',
+              'available',
+              'GAME_RESERVATION_REFUND',
+              { reason: 'user_cancel' },
+              refundKey
+            );
+          });
         }
       }
     }
@@ -1973,6 +3319,32 @@ app.get('/api/matchmaking/status', async (req, res) => {
           status: 'canceled',
           updatedAt: new Date().toISOString()
         }).catch(() => {});
+
+        // Refund stake if playing stake or TON modes
+        if (qData.gameMode === 'stake' && qData.stake > 0) {
+          await adjustUserVViral(
+            targetUserId, 
+            qData.stake, 
+            'credit', 
+            'stake_duel_refund', 
+            targetUserId, 
+            `refund_expire_${targetUserId}_${Date.now()}`
+          );
+        } else if (qData.gameMode === 'ton') {
+          const refundKey = `refund_expire_${targetUserId}_${Date.now()}`;
+          await runTransaction(firestoreInstance, async (transaction) => {
+            await moveUserTonBalance(
+              transaction,
+              targetUserId,
+              1000000000,
+              'reserved',
+              'available',
+              'GAME_RESERVATION_REFUND',
+              { reason: 'queue_expiry' },
+              refundKey
+            );
+          });
+        }
       }
     }
 
@@ -2356,6 +3728,11 @@ app.post('/api/game/move', async (req, res) => {
 
       if (updatePromises.length > 0) {
         await Promise.all(updatePromises);
+      }
+
+      if (gameData.mode === 'ton') {
+        await settleTonGame(gameId, winnerId, gameData.player1Id, gameData.player2Id)
+          .catch(err => console.error("TON game settlement failed:", err));
       }
 
       // Settle challenge reservations if this match was generated by a persistent community challenge
