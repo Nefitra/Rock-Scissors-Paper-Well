@@ -1169,11 +1169,9 @@ function GameAppInner() {
 
   // Helper to generate dynamic canonical referral links
   const getReferralUrl = () => {
-    if (globalSettings.botUsername) {
-      const cleanBot = globalSettings.botUsername.replace('@', '').trim();
-      return `https://t.me/${cleanBot}?startapp=${currentTgId}`;
-    }
-    return `${window.location.origin}?startapp=${currentTgId}`;
+    const bot = globalSettings.botUsername || '@CyberDuellitebot';
+    const cleanBot = bot.replace('@', '').trim();
+    return `https://t.me/${cleanBot}?startapp=${currentTgId}`;
   };
 
   // Copy Referral link
@@ -1552,6 +1550,55 @@ function GameAppInner() {
     setSelectedMove('');
     setIsSearching(false);
   };
+
+  if (!isInsideTMA && !isDevelopEnvironment) {
+    return (
+      <div className="min-h-screen bg-[#0e1621] text-white flex flex-col items-center justify-center font-sans selection:bg-[#3390ec] selection:text-white px-6 py-12 relative overflow-hidden">
+        {/* Abstract futuristic background decorations */}
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-[#3390ec]/5 blur-[120px] pointer-events-none" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-500/5 blur-[120px] pointer-events-none" />
+
+        <div className="max-w-md w-full text-center space-y-8 relative z-10">
+          <div className="flex flex-col items-center">
+            {/* Elegant App Logo Badge */}
+            <div className="w-20 h-20 bg-gradient-to-tr from-[#3390ec] to-[#2b7ad0] rounded-3xl flex items-center justify-center font-black text-4xl text-white shadow-2xl shadow-[#3390ec]/20 border border-[#3390ec]/30 mb-6 relative">
+              R
+              <span className="absolute -bottom-1.5 -right-1.5 bg-emerald-500 text-[10px] text-black font-black uppercase tracking-wider py-0.5 px-1.5 rounded-md border border-emerald-400">
+                PvP
+              </span>
+            </div>
+            <h1 className="text-3xl font-black text-white uppercase tracking-tight">VIRAL ARENA</h1>
+            <p className="text-[#708499] text-sm mt-2 font-medium">Rock Paper Scissors Well Duals</p>
+          </div>
+
+          <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-6 space-y-4 shadow-xl">
+            <h2 className="text-sm font-bold text-white uppercase tracking-wider">Telegram-Only PvP Arena</h2>
+            <p className="text-xs text-[#708499] leading-relaxed">
+              This arena uses encrypted cryptographic signatures directly from the official Telegram app to prevent bots and verify secure duels. 
+            </p>
+            <p className="text-xs text-[#708499] leading-relaxed font-semibold text-emerald-400">
+              To challenge real players, wager vVIRAL, and secure your wins, please launch this Mini App inside Telegram.
+            </p>
+          </div>
+
+          <div className="space-y-4">
+            <a
+              href="https://t.me/CyberDuellitebot"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold py-4 px-6 rounded-2xl transition-all shadow-lg shadow-[#3390ec]/15 hover:shadow-[#3390ec]/25 flex items-center justify-center gap-2 border border-[#3390ec]/45 hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <span>🚀 Launch in Telegram Bot</span>
+            </a>
+            <div className="text-[10px] text-[#708499] font-medium uppercase tracking-widest flex items-center justify-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+              <span>@CyberDuellitebot</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0e1621] text-white flex flex-col font-sans selection:bg-[#3390ec] selection:text-white max-w-full overflow-x-hidden">
@@ -2207,38 +2254,114 @@ function GameAppInner() {
                         </motion.div>
                       )}
 
-                      {getArenaState() === 'countdown' && (
-                        <motion.div
-                          key="countdown"
-                          initial={{ opacity: 0, scale: 0.9, y: 15 }}
-                          animate={{ opacity: 1, scale: 1, y: 0 }}
-                          exit={{ opacity: 0, scale: 0.9, y: -15 }}
-                          transition={{ duration: 0.22 }}
-                          className="space-y-6 py-6"
-                        >
-                          <span className="bg-[#3390ec]/10 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/30 px-3 py-1 rounded-full animate-pulse">
-                            Match Starts In...
-                          </span>
-                          
-                          <div className="relative py-4">
-                            <motion.div
-                              key={getCountdownSecondsLeft()}
-                              initial={{ scale: 0.3, opacity: 0 }}
-                              animate={{ scale: 1.2, opacity: 1 }}
-                              exit={{ scale: 1.5, opacity: 0 }}
-                              transition={{ duration: 0.45 }}
-                              className="text-7xl font-sans font-black tracking-tighter text-[#3390ec] drop-shadow-[0_0_25px_rgba(51,144,236,0.3)]"
-                            >
-                              {getCountdownSecondsLeft() > 0 ? getCountdownSecondsLeft() : "GO!"}
-                            </motion.div>
-                          </div>
+                      {getArenaState() === 'countdown' && (() => {
+                        const isP1 = activeGame?.player1Id === currentTgId;
+                        const myUsername = isP1 ? (activeGame?.player1Username || currentUsername) : (activeGame?.player2Username || currentUsername);
+                        const oppUsername = isP1 ? (activeGame?.player2Username || "Opponent") : (activeGame?.player1Username || "Opponent");
 
-                          <div>
-                            <p className="text-white text-sm font-semibold">Prepare your stance carefully!</p>
-                            <p className="text-[#708499] text-xs mt-0.5">Weapons are being unlocked shortly.</p>
-                          </div>
-                        </motion.div>
-                      )}
+                        const myWins = isP1 ? (activeGame?.player1Profile?.wins ?? profile?.wins ?? 0) : (activeGame?.player2Profile?.wins ?? profile?.wins ?? 0);
+                        const oppWins = isP1 ? (activeGame?.player2Profile?.wins ?? 12) : (activeGame?.player1Profile?.wins ?? 12);
+
+                        const myRank = getPlayerRank(myWins);
+                        const oppRank = getPlayerRank(oppWins);
+
+                        const secondsLeft = getCountdownSecondsLeft();
+
+                        return (
+                          <motion.div
+                            key="countdown"
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            transition={{ duration: 0.28 }}
+                            className="space-y-6 py-4"
+                          >
+                            {/* Title Banner */}
+                            <div className="relative">
+                              <span className="bg-[#242f3d]/80 text-[#3390ec] text-[10px] uppercase font-black tracking-widest border border-[#3390ec]/30 px-4 py-1.5 rounded-full animate-pulse">
+                                ⚔️ Battle Initiated ⚔️
+                              </span>
+                            </div>
+
+                            {/* Opponent Reveal Grid */}
+                            <div className="grid grid-cols-7 items-center gap-2 bg-[#242f3d]/20 p-5 rounded-3xl border border-[#242f3d]/50 relative overflow-hidden">
+                              <div className="absolute inset-0 bg-gradient-to-r from-[#3390ec]/5 via-transparent to-indigo-500/5 pointer-events-none" />
+
+                              {/* Player Left: YOU */}
+                              <div className="col-span-3 flex flex-col items-center space-y-2.5 text-center">
+                                <div className="relative">
+                                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#3390ec]/20 to-[#3390ec]/40 border-2 border-[#3390ec] flex items-center justify-center font-bold text-2xl text-[#3390ec] shadow-lg shadow-[#3390ec]/15 relative">
+                                    {myUsername ? myUsername.charAt(0).toUpperCase() : 'Y'}
+                                    <span className="absolute -bottom-1 -right-1 text-base">{myRank.badgeEmoji}</span>
+                                  </div>
+                                </div>
+                                <div className="space-y-0.5">
+                                  <span className="text-[10px] font-black text-[#708499] uppercase tracking-wider block">You</span>
+                                  <span className="text-xs font-bold text-white block truncate max-w-[90px]">@{myUsername}</span>
+                                  <span className={`text-[9px] font-bold ${myRank.color} block`}>{getLocalizedRankName(myRank.name, currentLanguage)}</span>
+                                </div>
+                              </div>
+
+                              {/* Center: VS Emblem */}
+                              <div className="col-span-1 flex flex-col items-center justify-center">
+                                <div className="w-9 h-9 rounded-full bg-[#17212b] border border-[#242f3d] flex items-center justify-center font-black text-[11px] text-[#708499] shadow-inner relative z-10">
+                                  VS
+                                </div>
+                              </div>
+
+                              {/* Player Right: OPPONENT */}
+                              <div className="col-span-3 flex flex-col items-center space-y-2.5 text-center">
+                                <div className="relative">
+                                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-500/20 to-indigo-500/40 border-2 border-indigo-500 flex items-center justify-center font-bold text-2xl text-indigo-400 shadow-lg shadow-indigo-500/15 relative animate-pulse">
+                                    {oppUsername ? oppUsername.replace('@', '').charAt(0).toUpperCase() : 'O'}
+                                    <span className="absolute -bottom-1 -right-1 text-base">{oppRank.badgeEmoji}</span>
+                                  </div>
+                                </div>
+                                <div className="space-y-0.5">
+                                  <span className="text-[10px] font-black text-[#708499] uppercase tracking-wider block">Opponent</span>
+                                  <span className="text-xs font-bold text-indigo-300 block truncate max-w-[90px]">@{oppUsername}</span>
+                                  <span className={`text-[9px] font-bold ${oppRank.color} block`}>{getLocalizedRankName(oppRank.name, currentLanguage)}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Massive 3-2-1-FIGHT Countdown Screen */}
+                            <div className="bg-[#17212b]/60 border border-[#242f3d]/60 rounded-2xl p-5 space-y-3 relative overflow-hidden">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-[#3390ec] animate-ping" />
+                                <span className="text-[10px] text-[#708499] font-black uppercase tracking-widest">Pre-Round Countdown</span>
+                              </div>
+
+                              <div className="relative h-24 flex items-center justify-center">
+                                <AnimatePresence mode="wait">
+                                  <motion.div
+                                    key={secondsLeft}
+                                    initial={{ scale: 0.3, opacity: 0, rotate: -5 }}
+                                    animate={{ scale: 1.15, opacity: 1, rotate: 0 }}
+                                    exit={{ scale: 1.6, opacity: 0, rotate: 5 }}
+                                    transition={{ duration: 0.38, ease: "easeOut" }}
+                                    className="absolute font-sans font-black select-none tracking-tighter animate-bounce"
+                                  >
+                                    {secondsLeft > 0 ? (
+                                      <span className="text-6xl text-[#3390ec] drop-shadow-[0_0_20px_rgba(51,144,236,0.4)]">
+                                        {secondsLeft}
+                                      </span>
+                                    ) : (
+                                      <span className="text-5xl text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-orange-500 to-red-500 drop-shadow-[0_0_30px_rgba(245,158,11,0.5)] tracking-widest uppercase">
+                                        FIGHT! ⚔️
+                                      </span>
+                                    )}
+                                  </motion.div>
+                                </AnimatePresence>
+                              </div>
+
+                              <p className="text-[#708499] text-[10px] leading-relaxed max-w-[280px] mx-auto">
+                                Hold steady! Select your strategic move as soon as the battle begins.
+                              </p>
+                            </div>
+                          </motion.div>
+                        );
+                      })()}
 
                       {getArenaState() === 'move_selection' && (
                         <motion.div

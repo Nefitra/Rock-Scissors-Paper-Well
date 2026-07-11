@@ -1199,11 +1199,16 @@ function getValidatedTelegramUser(req: express.Request): { userId: string; usern
         username: String(verification.user.username || verification.user.first_name || `User_${verification.user.id}`)
       };
     } else {
-      console.warn("[MATCHMAKING_WARNING] Telegram cryptographic verification failed. Falling back graciously for sandbox/testing.");
+      console.warn("[MATCHMAKING_WARNING] Telegram cryptographic verification failed.");
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error("unauthorized_invalid_telegram_signature");
+      }
     }
+  } else if (process.env.NODE_ENV === 'production') {
+    throw new Error("unauthorized_missing_init_data");
   }
 
-  // Falls back graciously for development, testing, or sandbox environments
+  // Falls back graciously ONLY for development, testing, or sandbox environments
   const fallbackUser = getRequestUser(req);
   if (!fallbackUser.userId) {
     throw new Error("unauthorized_invalid_fallback_user");
@@ -1571,6 +1576,7 @@ app.post('/api/matchmaking/join', async (req, res) => {
             winnerId: "",
             winnerTelegramId: "",
             status: "matched", // For frontend compatibility
+            matchedAt: nowIso,
             matchStatus: "ready", // For Requirement 12 compatibility
             mode: targetMode,
             gameMode: targetMode,
