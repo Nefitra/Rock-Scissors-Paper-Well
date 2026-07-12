@@ -1145,26 +1145,30 @@ function normalizeTonAddress(address: string): string {
   return trimmed.toLowerCase();
 }
 
+function isDepositComment(text: string): boolean {
+  return text.startsWith('VIRAL_ARENA_DEP_') || text.startsWith('VIRAL_GAME_DEP_') || text.startsWith('DEP_');
+}
+
 function extractMessageText(inMsg: any): string {
   if (!inMsg) return "";
   
   // Try raw message field
   if (typeof inMsg.message === 'string' && inMsg.message.trim() !== '') {
     const msg = inMsg.message.trim();
-    if (msg.startsWith('DEP_')) {
+    if (isDepositComment(msg)) {
       return msg;
     }
     // Check if it's base64 encoded text
     try {
       const decoded = Buffer.from(msg, 'base64').toString('utf8').trim();
-      if (decoded.startsWith('DEP_')) {
+      if (isDepositComment(decoded)) {
         return decoded;
       }
     } catch {}
     // Check if it's hex-encoded text
     try {
       const decoded = Buffer.from(msg, 'hex').toString('utf8').trim();
-      if (decoded.startsWith('DEP_')) {
+      if (isDepositComment(decoded)) {
         return decoded;
       }
     } catch {}
@@ -1174,21 +1178,21 @@ function extractMessageText(inMsg: any): string {
   if (inMsg.decoded_body) {
     if (typeof inMsg.decoded_body === 'string') {
       const text = inMsg.decoded_body.trim();
-      if (text.startsWith('DEP_')) return text;
+      if (isDepositComment(text)) return text;
     } else if (typeof inMsg.decoded_body.text === 'string') {
       const text = inMsg.decoded_body.text.trim();
-      if (text.startsWith('DEP_')) return text;
+      if (isDepositComment(text)) return text;
     }
   }
 
   // Check if there is msg_data or other fields
   if (inMsg.msg_data && typeof inMsg.msg_data.text === 'string') {
     const text = inMsg.msg_data.text.trim();
-    if (text.startsWith('DEP_')) return text;
+    if (isDepositComment(text)) return text;
     // Check base64 in msg_data
     try {
       const decoded = Buffer.from(text, 'base64').toString('utf8').trim();
-      if (decoded.startsWith('DEP_')) {
+      if (isDepositComment(decoded)) {
         return decoded;
       }
     } catch {}
@@ -2167,7 +2171,7 @@ app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
       return res.status(400).json({ error: `Deposit would exceed maximum allowed balance of 5000 TON.` });
     }
 
-    const depositId = `DEP_${Date.now()}_${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const depositId = `VIRAL_ARENA_DEP_${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 15 * 60 * 1000); // 15 minutes validity
 

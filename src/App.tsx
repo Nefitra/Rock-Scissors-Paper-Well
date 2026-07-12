@@ -438,6 +438,14 @@ function GameAppInner() {
     }
   }, [currentLanguage]);
 
+  useEffect(() => {
+    return () => {
+      if (depositIntervalRef.current) {
+        clearInterval(depositIntervalRef.current);
+      }
+    };
+  }, []);
+
   const t = (key: string, params?: Record<string, any>) => getTranslation(currentLanguage, key, params);
   
   // Tabs: 'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows' | 'missions'
@@ -469,6 +477,9 @@ function GameAppInner() {
   const [depositMessage, setDepositMessage] = useState<string>('');
   const [depositTreasuryAddress, setDepositTreasuryAddress] = useState<string>('');
   const [depositAmountNano, setDepositAmountNano] = useState<string>('');
+  const [depositPolling, setDepositPolling] = useState<boolean>(false);
+  const [floatingNotification, setFloatingNotification] = useState<string | null>(null);
+  const depositIntervalRef = useRef<any>(null);
   
   const [withdrawAmount, setWithdrawAmount] = useState<string>('');
   const [withdrawLoading, setWithdrawLoading] = useState<boolean>(false);
@@ -675,6 +686,75 @@ function GameAppInner() {
     }
   };
 
+  const startDepositPolling = (pendingId: string, amount: string) => {
+    if (depositIntervalRef.current) {
+      clearInterval(depositIntervalRef.current);
+    }
+
+    setDepositPolling(true);
+    setDepositVerifyError(null);
+    setDepositPendingStatus('verifying');
+
+    const startTime = Date.now();
+    const durationLimit = 2 * 60 * 1000; // 2 minutes
+
+    depositIntervalRef.current = setInterval(async () => {
+      if (Date.now() - startTime >= durationLimit) {
+        if (depositIntervalRef.current) {
+          clearInterval(depositIntervalRef.current);
+          depositIntervalRef.current = null;
+        }
+        setDepositPolling(false);
+        setDepositPendingStatus('');
+        setDepositVerifyError(
+          "⚠ Deposit not detected yet.\nYour funds are safe.\nPlease wait a little longer or contact support."
+        );
+        return;
+      }
+
+      try {
+        const headers: any = { 'Content-Type': 'application/json' };
+        const initData = (window as any).Telegram?.WebApp?.initData;
+        if (initData) {
+          headers['x-telegram-init-data'] = initData;
+        }
+        const url = `/api/ton/deposits/${pendingId}/verify`;
+        const res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ simulateOnChain: false })
+        });
+        const data = await res.json();
+        
+        if (data.success && (data.status === 'confirmed' || data.status === 'credited' || data.status === 'completed')) {
+          if (depositIntervalRef.current) {
+            clearInterval(depositIntervalRef.current);
+            depositIntervalRef.current = null;
+          }
+          setDepositPolling(false);
+          setDepositPendingStatus('completed');
+          playNotificationSound();
+          playRewardXPSound();
+          syncProfile();
+          
+          // Close deposit dialog automatically
+          setShowDepositModal(false);
+          setDepositPendingId(null);
+          
+          // Display success notification
+          setFloatingNotification(
+            `✅ Deposit successful!\nYour Game Wallet has been credited with ${amount} TON.`
+          );
+          setTimeout(() => {
+            setFloatingNotification(null);
+          }, 6000);
+        }
+      } catch (err: any) {
+        console.error("Polling verify error:", err);
+      }
+    }, 2500);
+  };
+
   const handleVerifyDeposit = async (simulateOnChain = false) => {
     if (!depositPendingId) {
       setDepositVerifyError("No pending deposit to verify.");
@@ -700,13 +780,43 @@ function GameAppInner() {
       if (data.error) {
         setDepositVerifyError(data.error);
       } else if (data.success && (data.status === 'confirmed' || data.status === 'credited' || data.status === 'completed')) {
+        if (depositIntervalRef.current) {
+          clearInterval(depositIntervalRef.current);
+          depositIntervalRef.current = null;
+        }
+        setDepositPolling(false);
         setDepositPendingStatus('completed');
+        playNotificationSound();
         playRewardXPSound();
         syncProfile();
+        
+        setShowDepositModal(false);
+        setDepositPendingId(null);
+        setFloatingNotification(
+          `✅ Deposit successful!\nYour Game Wallet has been credited with ${depositAmount} TON.`
+        );
+        setTimeout(() => {
+          setFloatingNotification(null);
+        }, 6000);
       } else if (data.status === 'completed' || data.status === 'confirmed' || data.status === 'credited') {
+        if (depositIntervalRef.current) {
+          clearInterval(depositIntervalRef.current);
+          depositIntervalRef.current = null;
+        }
+        setDepositPolling(false);
         setDepositPendingStatus('completed');
+        playNotificationSound();
         playRewardXPSound();
         syncProfile();
+        
+        setShowDepositModal(false);
+        setDepositPendingId(null);
+        setFloatingNotification(
+          `✅ Deposit successful!\nYour Game Wallet has been credited with ${depositAmount} TON.`
+        );
+        setTimeout(() => {
+          setFloatingNotification(null);
+        }, 6000);
       } else if (data.ok && data.status === 'pending') {
         setDepositVerifyError(data.message || "Transaction not detected yet.");
       } else {
@@ -1902,6 +2012,32 @@ function GameAppInner() {
   return (
     <div className="min-h-screen bg-[#0e1621] text-white flex flex-col font-sans selection:bg-[#3390ec] selection:text-white max-w-full overflow-x-hidden">
       
+      {/* Floating Global Success Notification */}
+      <AnimatePresence>
+        {floatingNotification && (
+          <motion.div
+            initial={{ opacity: 0, y: -50, scale: 0.9, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
+            exit={{ opacity: 0, y: -50, scale: 0.9, x: '-50%' }}
+            transition={{ type: 'spring', damping: 25, stiffness: 350 }}
+            className="fixed top-5 left-1/2 -translate-x-1/2 z-[9999] w-[90%] max-w-sm bg-[#17212b] border-2 border-emerald-500/80 rounded-2xl p-4 shadow-[0_10px_30px_rgba(16,185,129,0.25)] flex items-start gap-3"
+          >
+            <span className="text-xl shrink-0">✅</span>
+            <div className="flex-1">
+              <p className="text-xs text-white leading-relaxed font-bold whitespace-pre-line">
+                {floatingNotification}
+              </p>
+            </div>
+            <button 
+              onClick={() => setFloatingNotification(null)} 
+              className="text-[#708499] hover:text-white font-bold text-xs shrink-0 cursor-pointer p-0.5"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Dynamic Sandbox Controller for Testing (Only shown in Normal Web Browser / Outside Telegram for authorized developers/reviewers) */}
       {!isInsideTMA && isDevelopEnvironment && (
         <div className="bg-[#17212b] border-b border-[#242f3d] px-4 py-2.5 text-xs text-[#708499] md:flex md:items-center md:justify-between space-y-2 md:space-y-0 relative z-50 overflow-x-auto">
@@ -4736,15 +4872,22 @@ function GameAppInner() {
                     <p>You MUST include the exact unique comment above in your transaction, or your deposit will not be credited.</p>
                   </div>
 
+                  {depositPolling && (
+                    <div className="bg-[#3390ec]/15 border border-[#3390ec]/30 p-3 rounded-2xl flex items-center justify-center gap-2 text-xs text-[#3390ec] font-bold">
+                      <RefreshCw className="animate-spin w-4 h-4 text-[#3390ec]" />
+                      <span>Automatically detecting on-chain transaction...</span>
+                    </div>
+                  )}
+
                   {depositVerifyError && (
-                    <div className="bg-red-500/10 border border-red-500/25 p-2.5 rounded-xl text-[10.5px] text-red-400 leading-normal">
+                    <div className="bg-red-500/10 border border-red-500/25 p-2.5 rounded-xl text-[10.5px] text-red-400 leading-normal whitespace-pre-line">
                       ⚠️ {depositVerifyError}
                     </div>
                   )}
 
                   <div className="space-y-2 pt-1.5 border-t border-[#242f3d]">
                     <button
-                      disabled={depositLoading}
+                      disabled={depositLoading || depositPolling}
                       onClick={async () => {
                         playClickSound();
                         setDepositVerifyError(null);
@@ -4771,8 +4914,11 @@ function GameAppInner() {
                           };
                           console.log("TON Connect sendTransaction parameters:", JSON.stringify(txParams, null, 2));
                           await tonConnectUI.sendTransaction(txParams);
-                          // After transaction is signed, we automatically wait 10 seconds and auto-trigger on-chain verification
-                          setDepositVerifyError("Transaction signed successfully! Wait 10 seconds and click VERIFY below.");
+                          
+                          // After transaction is signed, we automatically start polling the backend
+                          if (depositPendingId) {
+                            startDepositPolling(depositPendingId, depositAmount);
+                          }
                         } catch (err: any) {
                           console.error(err);
                           setDepositVerifyError("Transaction aborted or failed: " + err.message);
@@ -4782,22 +4928,7 @@ function GameAppInner() {
                       }}
                       className="w-full py-3 bg-[#3390ec] hover:bg-[#2879c8] disabled:opacity-40 disabled:cursor-not-allowed text-[#0e1621] font-black rounded-xl text-xs tracking-wider uppercase transition cursor-pointer flex items-center justify-center gap-1.5"
                     >
-                      PAY VIA TON CONNECT
-                    </button>
-
-                    <button
-                      disabled={depositLoading}
-                      onClick={() => handleVerifyDeposit(false)}
-                      className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold rounded-xl text-xs tracking-wider uppercase transition cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      {depositLoading ? (
-                        <>
-                          <RefreshCw className="animate-spin w-3 h-3" />
-                          VERIFYING ON-CHAIN...
-                        </>
-                      ) : (
-                        "VERIFY TRANSACTION"
-                      )}
+                      {depositPolling ? "POLLING TRANSACTION..." : "PAY VIA TON CONNECT"}
                     </button>
 
                     {isDevelopEnvironment && (
@@ -4810,7 +4941,15 @@ function GameAppInner() {
                     )}
 
                     <button
-                      onClick={() => { playClickSound(); setDepositPendingId(null); }}
+                      onClick={() => { 
+                        playClickSound(); 
+                        if (depositIntervalRef.current) {
+                          clearInterval(depositIntervalRef.current);
+                          depositIntervalRef.current = null;
+                        }
+                        setDepositPolling(false);
+                        setDepositPendingId(null); 
+                      }}
                       className="w-full py-1.5 text-[#708499] hover:text-white transition text-[10px] uppercase font-bold text-center cursor-pointer"
                     >
                       START OVER / CHOOSE DIFFERENT AMOUNT
