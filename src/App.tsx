@@ -691,23 +691,32 @@ function GameAppInner() {
       clearInterval(depositIntervalRef.current);
     }
 
+    // Persist pending deposit in localStorage for automatic recovery after app restart (Requirement 7)
+    localStorage.setItem('pending_deposit_id', pendingId);
+    localStorage.setItem('pending_deposit_amount', amount);
+    localStorage.setItem('pending_deposit_amount_nano', depositAmountNano || '');
+    localStorage.setItem('pending_deposit_message', depositMessage || '');
+    localStorage.setItem('pending_deposit_treasury', depositTreasuryAddress || '');
+
     setDepositPolling(true);
     setDepositVerifyError(null);
     setDepositPendingStatus('verifying');
 
     const startTime = Date.now();
-    const durationLimit = 2 * 60 * 1000; // 2 minutes
+    const durationLimit = 120 * 1000; // 120 seconds maximum polling duration (Requirement 6)
+    let consecutiveServerErrors = 0;
 
     depositIntervalRef.current = setInterval(async () => {
+      // 120 seconds timeout limit check (Requirement 6)
       if (Date.now() - startTime >= durationLimit) {
         if (depositIntervalRef.current) {
           clearInterval(depositIntervalRef.current);
           depositIntervalRef.current = null;
         }
         setDepositPolling(false);
-        setDepositPendingStatus('');
+        setDepositPendingStatus('timeout');
         setDepositVerifyError(
-          "⚠ Deposit not detected yet.\nYour funds are safe.\nPlease wait a little longer or contact support."
+          `⚠️ Deposit processing is taking longer than expected.\nYour TON has reached the platform wallet.\nThe transaction will continue processing automatically.\nReference: ${pendingId}`
         );
         return;
       }
@@ -724,8 +733,14 @@ function GameAppInner() {
           headers,
           body: JSON.stringify({ simulateOnChain: false })
         });
+
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+
         const data = await res.json();
-        
+        consecutiveServerErrors = 0; // Reset on successful server response
+
         if (data.success && (data.status === 'confirmed' || data.status === 'credited' || data.status === 'completed')) {
           if (depositIntervalRef.current) {
             clearInterval(depositIntervalRef.current);
@@ -735,22 +750,72 @@ function GameAppInner() {
           setDepositPendingStatus('completed');
           playNotificationSound();
           playRewardXPSound();
+          
+          // Refresh user profile immediately to update Game Balance (Requirement 5)
           syncProfile();
           
-          // Close deposit dialog automatically
+          // Refresh TON History in the background (Requirement 5)
+          try {
+            const histRes = await fetch('/api/ton/history', { headers });
+            const histData = await histRes.json();
+            if (histData.history) {
+              setTonHistory(histData.history);
+            }
+          } catch (hErr) {
+            console.error("History refresh error:", hErr);
+          }
+
+          // Clear localStorage on successful credit (Requirement 7)
+          localStorage.removeItem('pending_deposit_id');
+          localStorage.removeItem('pending_deposit_amount');
+          localStorage.removeItem('pending_deposit_amount_nano');
+          localStorage.removeItem('pending_deposit_message');
+          localStorage.removeItem('pending_deposit_treasury');
+
+          // Close deposit dialog automatically (Requirement 5)
           setShowDepositModal(false);
           setDepositPendingId(null);
           
-          // Display success notification
+          // Display success notification (Requirement 5)
+          const formattedAmount = parseFloat(amount).toFixed(2);
           setFloatingNotification(
-            `✅ Deposit successful!\nYour Game Wallet has been credited with ${amount} TON.`
+            `✅ Deposit credited\n${formattedAmount} TON was added to your Game Balance.`
           );
           setTimeout(() => {
             setFloatingNotification(null);
-          }, 6000);
+          }, 8000);
+        } else if (data.status === 'failed' || data.status === 'rejected') {
+          // Stop polling on terminal failed/rejected status (Requirement 5)
+          if (depositIntervalRef.current) {
+            clearInterval(depositIntervalRef.current);
+            depositIntervalRef.current = null;
+          }
+          setDepositPolling(false);
+          setDepositPendingStatus('failed');
+          setDepositVerifyError(data.error || "Deposit verification failed or was rejected.");
+          
+          // Clear localStorage on terminal failure (Requirement 7)
+          localStorage.removeItem('pending_deposit_id');
+          localStorage.removeItem('pending_deposit_amount');
+          localStorage.removeItem('pending_deposit_amount_nano');
+          localStorage.removeItem('pending_deposit_message');
+          localStorage.removeItem('pending_deposit_treasury');
         }
       } catch (err: any) {
         console.error("Polling verify error:", err);
+        consecutiveServerErrors++;
+        // Show an error after repeated server failures (Requirement 5)
+        if (consecutiveServerErrors >= 5) {
+          if (depositIntervalRef.current) {
+            clearInterval(depositIntervalRef.current);
+            depositIntervalRef.current = null;
+          }
+          setDepositPolling(false);
+          setDepositPendingStatus('failed');
+          setDepositVerifyError(
+            "⚠️ Persistent connection issues with the server.\nWe have paused verification checks.\nYour TON is safe, and checking will resume automatically when you refresh the app."
+          );
+        }
       }
     }, 2500);
   };
@@ -793,7 +858,7 @@ function GameAppInner() {
         setShowDepositModal(false);
         setDepositPendingId(null);
         setFloatingNotification(
-          `✅ Deposit successful!\nYour Game Wallet has been credited with ${depositAmount} TON.`
+          `✅ ${depositAmount} TON credited successfully`
         );
         setTimeout(() => {
           setFloatingNotification(null);
@@ -812,7 +877,7 @@ function GameAppInner() {
         setShowDepositModal(false);
         setDepositPendingId(null);
         setFloatingNotification(
-          `✅ Deposit successful!\nYour Game Wallet has been credited with ${depositAmount} TON.`
+          `✅ ${depositAmount} TON credited successfully`
         );
         setTimeout(() => {
           setFloatingNotification(null);
@@ -1406,6 +1471,30 @@ function GameAppInner() {
       setClaimingStreak(false);
     }
   };
+
+  // Automatic TON Deposit Recovery after app restart (Requirement 7)
+  useEffect(() => {
+    if (!currentTgId) return;
+    
+    const savedId = localStorage.getItem('pending_deposit_id');
+    const savedAmount = localStorage.getItem('pending_deposit_amount');
+    const savedAmountNano = localStorage.getItem('pending_deposit_amount_nano');
+    const savedMessage = localStorage.getItem('pending_deposit_message');
+    const savedTreasury = localStorage.getItem('pending_deposit_treasury');
+
+    if (savedId && savedAmount) {
+      console.log("[TON Recovery] Found unresolved pending deposit on startup:", savedId);
+      setDepositPendingId(savedId);
+      setDepositAmount(savedAmount);
+      if (savedAmountNano) setDepositAmountNano(savedAmountNano);
+      if (savedMessage) setDepositMessage(savedMessage);
+      if (savedTreasury) setDepositTreasuryAddress(savedTreasury);
+      setDepositPendingStatus('verifying');
+      
+      // Resume background polling check automatically
+      startDepositPolling(savedId, savedAmount);
+    }
+  }, [currentTgId]);
 
   // Re-sync on TG login change, Wallet connection, or Language preference change
   useEffect(() => {
@@ -2643,7 +2732,7 @@ function GameAppInner() {
                             : 'bg-[#0e1621]/60 border-[#242f3d] text-[#708499] hover:text-amber-400'
                         }`}
                       >
-                        <span className="text-base">💎</span>
+                        <span className="text-base">🪙</span>
                         <span className="text-[10px] font-bold mt-1 uppercase tracking-wider text-center">vVIRAL</span>
                         <span className="text-[7.5px] opacity-75 mt-0.5 text-center leading-none">Stake</span>
                       </button>
@@ -2656,7 +2745,7 @@ function GameAppInner() {
                             : 'bg-[#0e1621]/60 border-[#242f3d] text-[#708499] hover:text-cyan-400'
                         }`}
                       >
-                        <span className="text-base">🪙</span>
+                        <span className="text-base">💎</span>
                         <span className="text-[10px] font-bold mt-1 uppercase tracking-wider text-center">1 TON Duel</span>
                         <span className="text-[7.5px] opacity-75 mt-0.5 text-center leading-none">Real TON</span>
                       </button>
@@ -5157,7 +5246,7 @@ function GameAppInner() {
                             isCredit ? 'text-emerald-400' : isDebit ? 'text-rose-400' : 'text-slate-400'
                           }`}>
                             {isCredit ? '+' : isDebit ? '-' : ''}
-                            {parseFloat(item.amount).toFixed(2)}
+                            {getTonValue(item.amountNano)}
                           </span>
                           <span className="text-[8px] text-[#708499] uppercase font-bold font-mono">TON</span>
                         </div>

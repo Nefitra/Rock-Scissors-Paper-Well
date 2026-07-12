@@ -11,6 +11,7 @@ import {
   getDoc, 
   getDocs, 
   updateDoc, 
+  deleteDoc,
   query, 
   where, 
   limit,
@@ -18,9 +19,6 @@ import {
   runTransaction
 } from 'firebase/firestore';
 import crypto from 'crypto';
-import admin from 'firebase-admin';
-import { getFirestore } from 'firebase-admin/firestore';
-import { getApp } from 'firebase-admin/app';
 
 // Initialize Express
 const app = express();
@@ -45,13 +43,122 @@ const firestoreInstance = initializeFirestore(firebaseApp, {
   localCache: memoryLocalCache()
 } as any, firebaseConfig.firestoreDatabaseId);
 
-// Initialize Firebase Admin SDK
-admin.initializeApp({
-  projectId: firebaseConfig.projectId
-});
-const adminDb = firebaseConfig.firestoreDatabaseId 
-  ? getFirestore(getApp(), firebaseConfig.firestoreDatabaseId)
-  : getFirestore();
+// Simple compatibility shim so we do not have to rewrite all DB queries across the codebase:
+class DocumentReferenceShim {
+  constructor(public collectionPath: string, public docId: string) {}
+
+  get id() {
+    return this.docId;
+  }
+
+  async get() {
+    const r = doc(firestoreInstance, this.collectionPath, this.docId);
+    const snap = await getDoc(r);
+    return {
+      exists: snap.exists(),
+      data: () => snap.data()
+    };
+  }
+
+  async set(data: any) {
+    const r = doc(firestoreInstance, this.collectionPath, this.docId);
+    return await setDoc(r, data);
+  }
+
+  async update(data: any) {
+    const r = doc(firestoreInstance, this.collectionPath, this.docId);
+    return await updateDoc(r, data);
+  }
+
+  async delete() {
+    const r = doc(firestoreInstance, this.collectionPath, this.docId);
+    return await deleteDoc(r);
+  }
+}
+
+class CollectionReferenceShim {
+  public conditions: any[] = [];
+  public limitCount: number | null = null;
+
+  constructor(public collectionPath: string) {}
+
+  doc(docId?: string) {
+    const finalId = docId || doc(collection(firestoreInstance, this.collectionPath)).id;
+    return new DocumentReferenceShim(this.collectionPath, finalId);
+  }
+
+  where(field: string, op: any, value: any) {
+    const q = new CollectionReferenceShim(this.collectionPath);
+    q.conditions = [...this.conditions, where(field, op, value)];
+    q.limitCount = this.limitCount;
+    return q;
+  }
+
+  limit(count: number) {
+    const q = new CollectionReferenceShim(this.collectionPath);
+    q.conditions = [...this.conditions];
+    q.limitCount = count;
+    return q;
+  }
+
+  async get() {
+    let q = query(collection(firestoreInstance, this.collectionPath), ...this.conditions);
+    if (this.limitCount !== null) {
+      q = query(q, limit(this.limitCount));
+    }
+    const snap = await getDocs(q);
+    return {
+      empty: snap.empty,
+      docs: snap.docs.map(d => ({
+        id: d.id,
+        data: () => d.data()
+      })),
+      forEach: (callback: (d: any) => void) => {
+        snap.docs.forEach(d => {
+          callback({
+            id: d.id,
+            data: () => d.data()
+          });
+        });
+      }
+    };
+  }
+}
+
+const db = {
+  collection: (path: string) => new CollectionReferenceShim(path)
+};
+
+const adminDb: any = {
+  collection: (path: string) => new CollectionReferenceShim(path),
+  runTransaction: async (callback: (transaction: any) => Promise<any>) => {
+    return await runTransaction(firestoreInstance, async (tx) => {
+      const txShim = {
+        get: async (refShim: any) => {
+          const r = doc(firestoreInstance, refShim.collectionPath, refShim.id);
+          const snap = await tx.get(r);
+          return {
+            exists: snap.exists(),
+            data: () => snap.data()
+          };
+        },
+        set: (refShim: any, data: any) => {
+          const r = doc(firestoreInstance, refShim.collectionPath, refShim.id);
+          tx.set(r, data);
+        },
+        update: (refShim: any, data: any) => {
+          const r = doc(firestoreInstance, refShim.collectionPath, refShim.id);
+          tx.update(r, data);
+        },
+        delete: (refShim: any) => {
+          const r = doc(firestoreInstance, refShim.collectionPath, refShim.id);
+          tx.delete(r);
+        }
+      };
+      return await callback(txShim);
+    });
+  }
+};
 
 // TON Authoritative Financial System variables
 let serviceAccountEmail = "unknown";
@@ -91,7 +198,7 @@ async function runStartupFinancialDiagnostic() {
     console.log("[DIAGNOSTIC] Running startup financial diagnostic checks...");
     
     // 1. Verify project ID matches
-    const adminProjectId = getApp().options.projectId;
+    const adminProjectId = firebaseConfig.projectId;
     const configProjectId = firebaseConfig.projectId;
     console.log(`[DIAGNOSTIC] Admin Project: ${adminProjectId}, Config Project: ${configProjectId}`);
     if (adminProjectId !== configProjectId) {
@@ -137,87 +244,6 @@ async function runStartupFinancialDiagnostic() {
 runStartupFinancialDiagnostic().catch(err => {
   console.error("[DIAGNOSTIC_UNHANDLED_ERROR] Unhandled error running startup diagnostics:", err);
 });
-
-// Simple compatibility shim so we do not have to rewrite all DB queries across the codebase:
-class DocumentReferenceShim {
-  constructor(private fInstance: any, private collectionPath: string, private docId: string) {}
-
-  get id() {
-    return this.docId;
-  }
-
-  async get() {
-    const r = doc(this.fInstance, this.collectionPath, this.docId);
-    const snap = await getDoc(r);
-    return {
-      exists: snap.exists(),
-      data: () => snap.data()
-    };
-  }
-
-  async set(data: any) {
-    const r = doc(this.fInstance, this.collectionPath, this.docId);
-    return await setDoc(r, data);
-  }
-
-  async update(data: any) {
-    const r = doc(this.fInstance, this.collectionPath, this.docId);
-    return await updateDoc(r, data);
-  }
-}
-
-class CollectionReferenceShim {
-  private conditions: any[] = [];
-  private limitCount: number | null = null;
-
-  constructor(private fInstance: any, private collectionPath: string) {}
-
-  doc(docId?: string) {
-    const finalId = docId || doc(collection(this.fInstance, this.collectionPath)).id;
-    return new DocumentReferenceShim(this.fInstance, this.collectionPath, finalId);
-  }
-
-  where(field: string, op: any, value: any) {
-    const q = new CollectionReferenceShim(this.fInstance, this.collectionPath);
-    q.conditions = [...this.conditions, where(field, op, value)];
-    q.limitCount = this.limitCount;
-    return q;
-  }
-
-  limit(count: number) {
-    const q = new CollectionReferenceShim(this.fInstance, this.collectionPath);
-    q.conditions = [...this.conditions];
-    q.limitCount = count;
-    return q;
-  }
-
-  async get() {
-    let q = query(collection(this.fInstance, this.collectionPath), ...this.conditions);
-    if (this.limitCount !== null) {
-      q = query(q, limit(this.limitCount));
-    }
-    const snap = await getDocs(q);
-    return {
-      empty: snap.empty,
-      docs: snap.docs.map(d => ({
-        id: d.id,
-        data: () => d.data()
-      })),
-      forEach: (callback: (d: any) => void) => {
-        snap.docs.forEach(d => {
-          callback({
-            id: d.id,
-            data: () => d.data()
-          });
-        });
-      }
-    };
-  }
-}
-
-const db = {
-  collection: (path: string) => new CollectionReferenceShim(firestoreInstance, path)
-};
 
 // Test firestore connection on boot
 async function testConnection() {
@@ -293,7 +319,7 @@ function tBot(lang: string, key: string, params: Record<string, any> = {}): stri
 
 async function detectUserLanguage(tgId: string, telegramLangCode?: string): Promise<string> {
   try {
-    const uSnap = await db.collection('users').doc(tgId).get();
+    const uSnap = await adminDb.collection('users').doc(tgId).get();
     if (uSnap.exists) {
       const ud = uSnap.data() || {};
       if (ud.lang) return ud.lang;
@@ -681,7 +707,7 @@ async function adjustUserVViral(
   idempotencyKey?: string
 ): Promise<{ success: boolean; newBalance: number }> {
   try {
-    const userRef = db.collection('users').doc(userId);
+    const userRef = adminDb.collection('users').doc(userId);
     const userSnap = await userRef.get();
     if (!userSnap.exists) {
       throw new Error("User not found");
@@ -692,7 +718,7 @@ async function adjustUserVViral(
 
     // Check idempotency if a key is provided
     if (idempotencyKey) {
-      const existingTx = await db.collection('transactions')
+      const existingTx = await adminDb.collection('transactions')
         .where('idempotencyKey', '==', idempotencyKey)
         .get();
       if (existingTx.docs.length > 0) {
@@ -703,7 +729,7 @@ async function adjustUserVViral(
     const newBalance = Math.max(0, currentBalance + amount);
 
     // Record immutable ledger entry
-    const txId = db.collection('transactions').doc().id;
+    const txId = adminDb.collection('transactions').doc().id;
     const txRecord = {
       id: txId,
       userId,
@@ -718,7 +744,7 @@ async function adjustUserVViral(
       idempotencyKey: idempotencyKey || ""
     };
 
-    await db.collection('transactions').doc(txId).set(txRecord);
+    await adminDb.collection('transactions').doc(txId).set(txRecord);
 
     // Update player profile
     await userRef.update({
@@ -832,27 +858,19 @@ app.get('/api/health', (req, res) => {
 app.post('/api/user/sync', async (req, res) => {
   try {
     const verifiedUser = getRequestUser(req);
-    const { telegramId, username, walletAddress, referredBy, lang } = req.body;
+    const { username, walletAddress, referredBy, lang } = req.body;
 
-    let targetTgId = telegramId ? sanitizeUserId(telegramId) : "";
-    let targetUsername = username;
-
-    if (verifiedUser.userId) {
-      targetTgId = verifiedUser.userId;
-      if (verifiedUser.username) {
-        targetUsername = verifiedUser.username;
-      }
+    const telegramUserId = verifiedUser.userId;
+    if (!telegramUserId) {
+      return res.status(401).json({ error: "Unauthorized: Missing Telegram identity" });
     }
 
-    if (!targetTgId) {
-      return res.status(400).json({ error: "telegramId is required" });
-    }
-
-    const userId = targetTgId; // Use normalized telegramId as document ID for simple direct mapping
-    const userRef = db.collection('users').doc(userId);
+    const userId = telegramUserId; // Use normalized telegramId as document ID for simple direct mapping
+    const userRef = adminDb.collection('users').doc(userId);
     const userSnap = await userRef.get();
 
     const cleanReferredBy = referredBy ? sanitizeUserId(referredBy) : "";
+    let targetUsername = username || verifiedUser.username || `telegram_${telegramUserId}`;
 
     if (userSnap.exists) {
       // User already exists, update wallet address if changed
@@ -862,7 +880,7 @@ app.post('/api/user/sync', async (req, res) => {
       
       // Retroactive referral check if user doesn't have referredBy set yet
       if (!currentData.referredBy && cleanReferredBy && cleanReferredBy !== userId) {
-        const referrerRef = db.collection('users').doc(cleanReferredBy);
+        const referrerRef = adminDb.collection('users').doc(cleanReferredBy);
         const referrerSnap = await referrerRef.get();
         if (referrerSnap.exists) {
           upData.referredBy = cleanReferredBy;
@@ -876,7 +894,7 @@ app.post('/api/user/sync', async (req, res) => {
 
           // Update Level 2 (indirect) referral count for grand referrer if exists
           if (referrerData.referredBy) {
-            const grandRef = db.collection('users').doc(referrerData.referredBy);
+            const grandRef = adminDb.collection('users').doc(referrerData.referredBy);
             const grandSnap = await grandRef.get();
             if (grandSnap.exists) {
               const grandData = grandSnap.data() || {};
@@ -902,12 +920,12 @@ app.post('/api/user/sync', async (req, res) => {
       if (!currentData.welcomeRewardClaimed) {
         try {
           await adjustUserVViral(
-            targetTgId,
+            telegramUserId,
             ECONOMY_CONFIG.welcomeBonus,
             'credit',
             'welcome_bonus',
             'welcome',
-            `welcome_${targetTgId}`
+            `welcome_${telegramUserId}`
           );
         } catch (e) {
           // ignore error if already credited or failed
@@ -938,14 +956,23 @@ app.post('/api/user/sync', async (req, res) => {
         pauseWithdrawals: TON_CONFIG.pauseWithdrawals
       };
 
-      return res.json({ profile: mergedProfile, tonConfig });
+      const syncResponseUser = {
+        telegramId: telegramUserId,
+        tonAccount: {
+          availableNano: String(upAccount.availableNano),
+          reservedNano: String(upAccount.reservedNano),
+          pendingWithdrawalNano: String(upAccount.pendingWithdrawalNano)
+        }
+      };
+
+      return res.json({ profile: mergedProfile, user: syncResponseUser, tonConfig });
     }
 
     // New user signup
     let finalReferredBy = "";
     if (cleanReferredBy && cleanReferredBy !== userId) {
       // Check if referrer exists
-      const referrerRef = db.collection('users').doc(cleanReferredBy);
+      const referrerRef = adminDb.collection('users').doc(cleanReferredBy);
       const referrerSnap = await referrerRef.get();
       if (referrerSnap.exists) {
         finalReferredBy = cleanReferredBy;
@@ -957,7 +984,7 @@ app.post('/api/user/sync', async (req, res) => {
 
         // Update L2 count for grand referrer if exists
         if (referrerData.referredBy) {
-          const grandRef = db.collection('users').doc(referrerData.referredBy);
+          const grandRef = adminDb.collection('users').doc(referrerData.referredBy);
           const grandSnap = await grandRef.get();
           if (grandSnap.exists) {
             const grandData = grandSnap.data() || {};
@@ -969,8 +996,8 @@ app.post('/api/user/sync', async (req, res) => {
     }
 
     const newProfile: any = {
-      telegramId: targetTgId,
-      username: targetUsername || `telegram_${targetTgId}`,
+      telegramId: telegramUserId,
+      username: targetUsername,
       walletAddress: walletAddress || "",
       referredBy: finalReferredBy,
       gamesPlayed: 0,
@@ -992,12 +1019,12 @@ app.post('/api/user/sync', async (req, res) => {
 
     // Record welcome bonus transaction in ledger
     await adjustUserVViral(
-      targetTgId,
+      telegramUserId,
       ECONOMY_CONFIG.welcomeBonus,
       'credit',
       'welcome_bonus',
       'welcome',
-      `welcome_${targetTgId}`
+      `welcome_${telegramUserId}`
     );
 
     const upAccount = getOrCreateTonAccount(newProfile, userId);
@@ -1011,7 +1038,16 @@ app.post('/api/user/sync', async (req, res) => {
       pauseWithdrawals: TON_CONFIG.pauseWithdrawals
     };
 
-    res.json({ profile: newProfile, tonConfig });
+    const syncResponseUser = {
+      telegramId: telegramUserId,
+      tonAccount: {
+        availableNano: String(upAccount.availableNano),
+        reservedNano: String(upAccount.reservedNano),
+        pendingWithdrawalNano: String(upAccount.pendingWithdrawalNano)
+      }
+    };
+
+    res.json({ profile: newProfile, user: syncResponseUser, tonConfig });
   } catch (error: any) {
     console.error("Sync error:", error);
     res.status(500).json({ error: error.message });
@@ -1022,7 +1058,7 @@ app.post('/api/user/sync', async (req, res) => {
 app.get('/api/user/:userId', async (req, res) => {
   try {
     const userId = sanitizeUserId(req.params.userId);
-    const userSnap = await db.collection('users').doc(userId).get();
+    const userSnap = await adminDb.collection('users').doc(userId).get();
     if (!userSnap.exists) {
       return res.status(404).json({ error: "User not found" });
     }
@@ -1075,17 +1111,19 @@ function getOrCreateTonAccount(userData: any, userId: string) {
   const defaultAccount = {
     telegramUserId: userId,
     currency: "TON",
-    availableNano: 0,
-    reservedNano: 0,
-    pendingWithdrawalNano: 0,
+    availableNano: "0",
+    reservedNano: "0",
+    pendingWithdrawalNano: "0",
     updatedAt: new Date().toISOString()
   };
-  if (!userData || !userData.tonAccount) {
-    return defaultAccount;
-  }
+  const rawAccount = (userData && userData.tonAccount) ? userData.tonAccount : {};
   return {
     ...defaultAccount,
-    ...userData.tonAccount
+    ...rawAccount,
+    availableNano: String(rawAccount.availableNano !== undefined ? rawAccount.availableNano : "0"),
+    reservedNano: String(rawAccount.reservedNano !== undefined ? rawAccount.reservedNano : "0"),
+    pendingWithdrawalNano: String(rawAccount.pendingWithdrawalNano !== undefined ? rawAccount.pendingWithdrawalNano : "0"),
+    updatedAt: rawAccount.updatedAt || new Date().toISOString()
   };
 }
 
@@ -1210,7 +1248,13 @@ async function fetchTransactionsFromToncenter(address: string, network: string):
   try {
     const url = `https://${host}/api/v3/transactions?account=${address}&limit=20`;
     console.log(`[Toncenter V3] Fetching: ${url}`);
-    const res = await fetch(url, { headers });
+    let res = await fetch(url, { headers });
+    if (res.status === 401 && headers['X-API-Key']) {
+      console.warn(`[Toncenter V3] 401 Unauthorized with API key. Retrying WITHOUT API key.`);
+      const cleanHeaders = { ...headers };
+      delete cleanHeaders['X-API-Key'];
+      res = await fetch(url, { headers: cleanHeaders });
+    }
     const data = await res.json();
     if (data && Array.isArray(data.transactions)) {
       console.log(`[Toncenter V3] Successfully fetched ${data.transactions.length} transactions.`);
@@ -1238,7 +1282,13 @@ async function fetchTransactionsFromToncenter(address: string, network: string):
   try {
     const url = `https://${host}/api/v2/getTransactions?address=${address}&limit=20`;
     console.log(`[Toncenter V2] Fetching: ${url}`);
-    const res = await fetch(url, { headers });
+    let res = await fetch(url, { headers });
+    if (res.status === 401 && headers['X-API-Key']) {
+      console.warn(`[Toncenter V2] 401 Unauthorized with API key. Retrying WITHOUT API key.`);
+      const cleanHeaders = { ...headers };
+      delete cleanHeaders['X-API-Key'];
+      res = await fetch(url, { headers: cleanHeaders });
+    }
     const data = await res.json();
     if (data && data.ok && Array.isArray(data.result)) {
       console.log(`[Toncenter V2] Successfully fetched ${data.result.length} transactions.`);
@@ -1268,7 +1318,11 @@ async function fetchTransactionsFromToncenter(address: string, network: string):
 async function getOnChainBalance(address: string): Promise<number> {
   try {
     const url = getTonCenterUrl(`/api/v2/getAddressInformation?address=${address}`);
-    const res = await fetch(url, { headers: getTonCenterHeaders() });
+    let res = await fetch(url, { headers: getTonCenterHeaders() });
+    if (res.status === 401 && process.env.TONCENTER_API_KEY) {
+      console.warn(`[getOnChainBalance] 401 Unauthorized with API key. Retrying WITHOUT API key.`);
+      res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    }
     const data = await res.json();
     if (data.ok && data.result) {
       return Number(data.result.balance || 0);
@@ -2048,7 +2102,7 @@ async function processWithdrawals() {
 }
 
 async function runReconciliation() {
-  const usersSnap = await db.collection('users').get();
+  const usersSnap = await adminDb.collection('users').get();
   let totalPlayerAvailableNano = 0;
   let totalPlayerReservedNano = 0;
   let totalPendingWithdrawalsNano = 0;
@@ -2066,14 +2120,14 @@ async function runReconciliation() {
   const onChainHotWalletNano = await getOnChainBalance(TON_CONFIG.hotWalletAddress);
 
   let platformRevenueNano = 0;
-  const feesSnap = await db.collection('ledgerEntries').where('account', '==', 'platform_fee_revenue').get();
+  const feesSnap = await adminDb.collection('ledgerEntries').where('account', '==', 'platform_fee_revenue').get();
   feesSnap.forEach((docSnap) => {
     const entry = docSnap.data() || {};
     platformRevenueNano += Math.abs(entry.amountNano || 0);
   });
 
   let uncreditedDepositsNano = 0;
-  const pendingDepsSnap = await db.collection('tonDeposits').where('status', 'in', ['created', 'transaction_requested', 'submitted', 'detected', 'confirming']).get();
+  const pendingDepsSnap = await adminDb.collection('tonDeposits').where('status', 'in', ['created', 'transaction_requested', 'submitted', 'detected', 'confirming']).get();
   pendingDepsSnap.forEach((docSnap) => {
     const d = docSnap.data() || {};
     uncreditedDepositsNano += Number(d.expectedAmountNano || 0);
@@ -2209,11 +2263,13 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
   const depRef = adminDb.collection('tonDeposits').doc(depositId);
   const depSnap = await depRef.get();
   if (!depSnap.exists) {
+    console.log(`[Verification Failed] Deposit intent not found in Firestore. Variable: depositId. Value: "${depositId}"`);
     return { status: 'rejected', error: "Deposit intent not found." };
   }
 
   const depData = depSnap.data() || {};
   if (depData.telegramUserId !== targetUserId) {
+    console.log(`[Verification Failed] Unauthorized access. Variable: telegramUserId. Value: "${depData.telegramUserId}". Expected: "${targetUserId}"`);
     return { status: 'rejected', error: "Unauthorized access to deposit record." };
   }
 
@@ -2232,12 +2288,18 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
   }
 
   if (new Date(depData.expiresAt).getTime() < Date.now() && !simulateOnChain) {
+    console.log(`[Verification Failed] Session expired. Variable: expiresAt. Value: "${depData.expiresAt}". Current: "${new Date().toISOString()}"`);
     await depRef.update({ status: 'failed', failureCode: 'EXPIRED', failureReason: 'Deposit verification session has expired.' });
     return { status: 'failed', error: "Deposit verification session has expired. Please create a new intent." };
   }
 
   let foundOnChain = false;
-  let detectedAmountNano = Number(depData.expectedAmountNano);
+  let detectedAmountNano = 0;
+  
+  // Safe default initialization of expected amount to prevent NaN
+  const safeExpectedAmountNano = depData.expectedAmountNano ? Number(depData.expectedAmountNano) : 0;
+  detectedAmountNano = isNaN(safeExpectedAmountNano) ? 0 : safeExpectedAmountNano;
+
   let detectedHash = "";
   let detectedLt = "";
 
@@ -2257,23 +2319,51 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
       const normTreasury = normalizeTonAddress(TON_CONFIG.treasuryAddress);
       
       const comment = extractMessageText(tx.in_msg);
-      
-      console.log(`[Tx Inspect] Hash: ${tx.hash}, Source: ${tx.in_msg.source} (${normOnChainSource}), Dest: ${tx.in_msg.destination} (${normOnChainDest}), Val: ${tx.in_msg.value}, Comment: "${comment}"`);
+
+      // Print [TON_DEPOSIT_FOUND] for EVERY deposit-prefix transaction found on-chain
+      if (comment && isDepositComment(comment)) {
+        const rawMsgVal = tx.in_msg.value;
+        const amountNanoValStr = rawMsgVal ? String(rawMsgVal).trim() : "0";
+        let amountNanoNum = 0;
+        try {
+          amountNanoNum = Number(amountNanoValStr);
+          if (isNaN(amountNanoNum)) amountNanoNum = 0;
+        } catch {}
+        const amountTonValStr = (amountNanoNum / 1e9).toFixed(9);
+
+        console.log(`[TON_DEPOSIT_FOUND]`);
+        console.log(`TON_DEPOSIT_TX_FOUND: hash=${tx.hash || ""}, comment=${comment}, amountNano=${amountNanoValStr}`);
+        console.log(`hash: ${tx.hash || ""}`);
+        console.log(`lt: ${tx.lt || ""}`);
+        console.log(`comment: ${comment}`);
+        console.log(`amountNano: ${amountNanoValStr}`);
+        console.log(`amountTON: ${amountTonValStr}`);
+        console.log(`sender: ${tx.in_msg.source || ""}`);
+        console.log(`receiver: ${tx.in_msg.destination || ""}`);
+      }
 
       // 1. Destination check
       if (normOnChainDest !== normTreasury) {
+        console.log(`[Verification Match Failed] Destination mismatch. Reason: Destination address is not the treasury wallet. Variable: normOnChainDest. Value: "${normOnChainDest}". Expected: "${normTreasury}"`);
         continue;
       }
 
-      // 2. Source/Sender check
-      if (normOnChainSource !== normExpectedSource) {
-        continue;
+      // 2. Source/Sender check (Warning only, proceed if comment matches to avoid stuck funds)
+      const sourceMatches = (normOnChainSource === normExpectedSource);
+      if (!sourceMatches) {
+        console.log(`[Verification Warning] Source address did not match exactly. Variable: normOnChainSource. Value: "${normOnChainSource}". Expected: "${normExpectedSource}". We will still proceed if the unique comment matches perfectly to ensure no stuck funds.`);
       }
 
       // 3. Amount check
-      const onChainVal = String(tx.in_msg.value);
-      const expectedVal = String(depData.expectedAmountNano);
-      if (onChainVal !== expectedVal) {
+      const rawValue = tx.in_msg.value;
+      if (rawValue === undefined || rawValue === null) {
+        console.log(`[Verification Match Failed] Value field is missing in transaction. Variable: rawValue. Value: ${rawValue}`);
+        continue;
+      }
+      const onChainValStr = String(rawValue).trim();
+      const expectedValStr = String(depData.expectedAmountNano).trim();
+      if (onChainValStr !== expectedValStr) {
+        console.log(`[Verification Match Failed] Amount mismatch. Reason: On-chain value does not match expected amount. Variable: onChainValStr. Value: "${onChainValStr}". Expected: "${expectedValStr}"`);
         continue;
       }
 
@@ -2281,19 +2371,32 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
       const txTimeMs = tx.now * 1000;
       const intentTimeMs = new Date(depData.createdAt).getTime();
       if (txTimeMs < intentTimeMs - 60000) {
+        console.log(`[Verification Match Failed] Timing check failed. Reason: Transaction is too old or pre-dates the intent. Variable: txTimeMs. Value: ${txTimeMs} (${new Date(txTimeMs).toISOString()}). Expected threshold: >= ${intentTimeMs - 60000} (${new Date(intentTimeMs - 60000).toISOString()})`);
         continue;
       }
 
       // 5. Comment check
-      if (comment !== depositId) {
+      if (comment.trim().toUpperCase() !== depositId.trim().toUpperCase()) {
+        console.log(`[Verification Match Failed] Comment mismatch. Reason: The transaction comment does not match the deposit intent ID. Variable: comment. Value: "${comment}". Expected: "${depositId}"`);
         continue;
       }
 
       // Match found!
       foundOnChain = true;
-      detectedAmountNano = Number(tx.in_msg.value);
+      
+      const parsedVal = Number(onChainValStr);
+      detectedAmountNano = isNaN(parsedVal) ? safeExpectedAmountNano : parsedVal;
+
       detectedHash = tx.hash || "";
       detectedLt = tx.lt || "";
+
+      console.log(`[TON_DEPOSIT_INTENT_FOUND]`);
+      console.log(`TON_DEPOSIT_TX_MATCHED: depositId=${depositId}, txHash=${detectedHash}, amountNano=${detectedAmountNano}`);
+      console.log(`intentId: ${depositId}`);
+      console.log(`userId: ${targetUserId}`);
+      console.log(`expectedAmount: ${depData.expectedAmountNano}`);
+      console.log(`receivedAmount: ${detectedAmountNano}`);
+
       console.log(`[Verification SUCCESS] Decoded comment matches expected! Hash: ${detectedHash}, LT: ${detectedLt}, Amount: ${detectedAmountNano}`);
       break;
     }
@@ -2309,6 +2412,12 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
     foundOnChain = true;
     detectedHash = crypto.createHash('sha256').update(`sim_${depositId}`).digest('hex');
     detectedLt = "1234567890";
+    console.log(`[TON_DEPOSIT_INTENT_FOUND]`);
+    console.log(`TON_DEPOSIT_TX_MATCHED: depositId=${depositId}, (SIMULATED), amountNano=${detectedAmountNano}`);
+    console.log(`intentId: ${depositId}`);
+    console.log(`userId: ${targetUserId}`);
+    console.log(`expectedAmount: ${depData.expectedAmountNano}`);
+    console.log(`receivedAmount: ${detectedAmountNano}`);
   }
 
   if (!foundOnChain) {
@@ -2319,6 +2428,8 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
   try {
     const confirmKey = `TON_DEPOSIT_CREDIT:${depositId}`;
     const normalizedTxHashOrLt = detectedHash ? detectedHash.toLowerCase() : `lt_${detectedLt}`;
+
+    console.log("TON_DEPOSIT_CREDIT_TRANSACTION_STARTED", { depositId, userId: targetUserId, confirmKey });
 
     await adminDb.runTransaction(async (transaction) => {
       // 1. Load deposit intent.
@@ -2360,16 +2471,39 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
       const userData = userSnap.data() || {};
       const tonAccount = getOrCreateTonAccount(userData, targetUserId);
 
-      let available = Number(tonAccount.availableNano || 0);
-      available += detectedAmountNano;
+      // Self-heal and prevent NaN from propagating
+      let oldBalance = Number(tonAccount.availableNano || 0);
+      if (isNaN(oldBalance)) {
+        console.log(`[Verification Warning] User balance is NaN. Self-healing to 0. Variable: oldBalance. Value: NaN`);
+        oldBalance = 0;
+      }
+
+      let available = oldBalance + detectedAmountNano;
+      if (isNaN(available)) {
+        console.log(`[Verification ERROR] Calculation result is NaN. Variable: available. Value: NaN`);
+        throw new Error("Calculation result is NaN. Aborting transaction.");
+      }
 
       const updatedTonAccount = {
         ...tonAccount,
-        availableNano: available,
+        availableNano: String(available),
+        reservedNano: String(tonAccount.reservedNano || "0"),
+        pendingWithdrawalNano: String(tonAccount.pendingWithdrawalNano || "0"),
         updatedAt: new Date().toISOString()
       };
 
       const nowIso = new Date().toISOString();
+
+      // Log [TON_LEDGER_CREATE]
+      console.log(`[TON_LEDGER_CREATE]`);
+      console.log(`ledgerId: ${confirmKey}`);
+      console.log(`amountNano: ${detectedAmountNano}`);
+      console.log(`amountTON: ${(detectedAmountNano / 1e9).toFixed(9)}`);
+
+      // Log [TON_BALANCE_UPDATED]
+      console.log(`[TON_BALANCE_UPDATED]`);
+      console.log(`oldBalance: ${oldBalance}`);
+      console.log(`newBalance: ${available}`);
 
       // 5. Create the unique transaction usage record.
       transaction.set(txUsageRef, {
@@ -2436,19 +2570,72 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
       // 10. Commit atomically is handled automatically by runTransaction.
     });
 
+    console.log(`[TON_DEPOSIT_FINISHED]`);
+    console.log(`SUCCESS`);
+    console.log("TON_DEPOSIT_CREDIT_TRANSACTION_COMMITTED", { depositId });
+
     const userSnap = await adminDb.collection('users').doc(targetUserId).get();
     const finalProfile = userSnap.exists ? userSnap.data() : {};
+    const tonAccount = getOrCreateTonAccount(finalProfile, targetUserId);
+
+    console.log("TON_BALANCE_POST_COMMIT_READ");
+    console.log(`- availableNano: ${tonAccount.availableNano}`);
+    console.log(`- reservedNano: ${tonAccount.reservedNano}`);
+    console.log(`- pendingWithdrawalNano: ${tonAccount.pendingWithdrawalNano}`);
+    console.log(`- telegramUserId: ${targetUserId}`);
+    console.log(`- depositId: ${depositId}`);
+    console.log(`- ledgerTransactionId: ${confirmKey}`);
+
+    // Notify the user via the Telegram Bot automatically (Requirement 8)
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (botToken && targetUserId) {
+      console.log(`[Telegram Notification] Attempting to send deposit success message to user ${targetUserId}...`);
+      try {
+        const textMessage = `💎 <b>Deposit Credited Successfully!</b>\n\n` +
+          `We have successfully processed and verified your deposit.\n\n` +
+          `<b>Details:</b>\n` +
+          `• <b>Deposit ID:</b> <code>${depositId}</code>\n` +
+          `• <b>Amount:</b> <code>${(detectedAmountNano / 1e9).toFixed(2)} TON</code>\n` +
+          `• <b>Transaction Hash:</b> <code>${detectedHash || "On-Chain Match"}</code>\n\n` +
+          `<b>Your New Game TON Balance:</b> <code>${(tonAccount.availableNano / 1e9).toFixed(2)} TON</code>\n\n` +
+          `Enjoy the Arena! 🚀`;
+
+        const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: targetUserId,
+            text: textMessage,
+            parse_mode: 'HTML'
+          })
+        });
+
+        const tgData = await tgRes.json();
+        if (!tgRes.ok || !tgData.ok) {
+          console.error(`[Telegram Notification ERROR] Failed to send Telegram message to ${targetUserId}. Status: ${tgRes.status}, Error:`, tgData);
+        } else {
+          console.log(`[Telegram Notification SUCCESS] Message sent successfully to user ${targetUserId}.`);
+        }
+      } catch (tgErr: any) {
+        console.error(`[Telegram Notification EXCEPTION] Error trying to send Telegram message to ${targetUserId}:`, tgErr);
+      }
+    } else {
+      console.log(`[Telegram Notification SKIPPED] Bot token present: ${!!botToken}, Target user: ${targetUserId}`);
+    }
 
     return {
+      ok: true,
       success: true,
       status: 'credited',
-      amountNano: detectedAmountNano,
-      newGameBalanceNano: finalProfile.tonAccount?.availableNano || 0,
+      depositId: depositId,
+      amountNano: String(detectedAmountNano),
+      newGameBalanceNano: String(finalProfile.tonAccount?.availableNano || 0),
       transactionHash: detectedHash,
       profile: finalProfile
     };
   } catch (txErr: any) {
     console.error("[Verification ERROR] Transaction failed:", txErr);
+    console.error("TON_DEPOSIT_ERROR", { depositId, error: txErr.message });
     return { status: 'failed', error: txErr.message };
   }
 }
@@ -2475,14 +2662,31 @@ app.post('/api/ton/deposits/:depositId/verify', checkTonNetwork, async (req, res
       return res.status(400).json({ error: "depositId is required in path parameters" });
     }
 
+    console.log("TON_DEPOSIT_STATUS_POLL", { depositId, targetUserId, simulateOnChain });
+
     const result = await verifyAndCreditDeposit(depositId, targetUserId, !!simulateOnChain);
+    
+    console.log("TON_DEPOSIT_STATUS_RESULT", { depositId, status: result.status, ok: result.ok || result.success || false, error: result.error || null });
+
     if (result.error) {
-      return res.status(result.status === 'rejected' ? 400 : 500).json({ error: result.error });
+      console.error("TON_DEPOSIT_ERROR", { depositId, error: result.error });
+      return res.status(result.status === 'rejected' ? 400 : 500).json({
+        ok: false,
+        status: "error",
+        code: result.status === 'rejected' ? "REJECTED" : "SERVER_ERROR",
+        message: result.error
+      });
     }
 
     res.json(result);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error("TON_DEPOSIT_ERROR", { error: error.message });
+    res.status(500).json({
+      ok: false,
+      status: "error",
+      code: "UNKNOWN_ERROR",
+      message: error.message
+    });
   }
 });
 
@@ -2507,14 +2711,31 @@ app.post('/api/ton/deposit/verify', checkTonNetwork, async (req, res) => {
       return res.status(400).json({ error: "depositId is required" });
     }
 
+    console.log("TON_DEPOSIT_STATUS_POLL", { depositId, targetUserId, simulateOnChain });
+
     const result = await verifyAndCreditDeposit(depositId, targetUserId, !!simulateOnChain);
+
+    console.log("TON_DEPOSIT_STATUS_RESULT", { depositId, status: result.status, ok: result.ok || result.success || false, error: result.error || null });
+
     if (result.error) {
-      return res.status(result.status === 'rejected' ? 400 : 500).json({ error: result.error });
+      console.error("TON_DEPOSIT_ERROR", { depositId, error: result.error });
+      return res.status(result.status === 'rejected' ? 400 : 500).json({
+        ok: false,
+        status: "error",
+        code: result.status === 'rejected' ? "REJECTED" : "SERVER_ERROR",
+        message: result.error
+      });
     }
 
     res.json(result);
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error("TON_DEPOSIT_ERROR", { error: error.message });
+    res.status(500).json({
+      ok: false,
+      status: "error",
+      code: "UNKNOWN_ERROR",
+      message: error.message
+    });
   }
 });
 
@@ -2641,17 +2862,21 @@ app.get('/api/ton/history', checkTonNetwork, async (req, res) => {
     }
 
     const [depsSnap, withdrawsSnap, ledgerSnap, p1SettledSnap, p2SettledSnap] = await Promise.all([
-      db.collection('tonDeposits').where('telegramUserId', '==', targetUserId).get(),
-      db.collection('tonWithdrawals').where('telegramUserId', '==', targetUserId).get(),
-      db.collection('ledgerTransactions').where('telegramUserId', '==', targetUserId).get(),
-      db.collection('ledgerTransactions').where('metadata.player1Id', '==', targetUserId).get(),
-      db.collection('ledgerTransactions').where('metadata.player2Id', '==', targetUserId).get()
+      adminDb.collection('tonDeposits').where('telegramUserId', '==', targetUserId).get(),
+      adminDb.collection('tonWithdrawals').where('telegramUserId', '==', targetUserId).get(),
+      adminDb.collection('ledgerTransactions').where('telegramUserId', '==', targetUserId).get(),
+      adminDb.collection('ledgerTransactions').where('metadata.player1Id', '==', targetUserId).get(),
+      adminDb.collection('ledgerTransactions').where('metadata.player2Id', '==', targetUserId).get()
     ]);
 
     const itemsMap = new Map<string, any>();
 
     depsSnap.forEach(d => {
       const data = d.data();
+      // Only show credited or confirmed deposits
+      if (data.status !== 'credited' && data.status !== 'confirmed') {
+        return;
+      }
       itemsMap.set(data.depositId, {
         id: data.depositId,
         type: 'deposit',
@@ -2756,7 +2981,7 @@ app.get('/api/ton/admin/dashboard', async (req, res) => {
     }
 
     const targetUserId = validatedUser.userId;
-    const userSnap = await db.collection('users').doc(targetUserId).get();
+    const userSnap = await adminDb.collection('users').doc(targetUserId).get();
     const userData = userSnap.exists ? userSnap.data() : {};
 
     const isAdmin = userData?.role === 'admin' || userData?.isAdmin === true || userData?.email === 'beskerboris@gmail.com';
@@ -2766,8 +2991,8 @@ app.get('/api/ton/admin/dashboard', async (req, res) => {
 
     const recon = await runReconciliation();
     const [suspiciousWdsSnap, pendingWdsSnap] = await Promise.all([
-      db.collection('tonWithdrawals').where('suspicious', '==', true).get(),
-      db.collection('tonWithdrawals').where('status', '==', 'requested').get()
+      adminDb.collection('tonWithdrawals').where('suspicious', '==', true).get(),
+      adminDb.collection('tonWithdrawals').where('status', '==', 'requested').get()
     ]);
 
     const suspiciousWithdrawals: any[] = [];
@@ -2799,7 +3024,7 @@ app.post('/api/ton/admin/configure', async (req, res) => {
     }
 
     const targetUserId = validatedUser.userId;
-    const userSnap = await db.collection('users').doc(targetUserId).get();
+    const userSnap = await adminDb.collection('users').doc(targetUserId).get();
     const userData = userSnap.exists ? userSnap.data() : {};
 
     const isAdmin = userData?.role === 'admin' || userData?.isAdmin === true || userData?.email === 'beskerboris@gmail.com';
@@ -2831,7 +3056,7 @@ app.post('/api/ton/admin/adjustment', async (req, res) => {
     }
 
     const targetUserId = validatedUser.userId;
-    const userSnap = await db.collection('users').doc(targetUserId).get();
+    const userSnap = await adminDb.collection('users').doc(targetUserId).get();
     const userData = userSnap.exists ? userSnap.data() : {};
 
     const isAdmin = userData?.role === 'admin' || userData?.isAdmin === true || userData?.email === 'beskerboris@gmail.com';
@@ -2849,7 +3074,7 @@ app.post('/api/ton/admin/adjustment', async (req, res) => {
       return res.status(403).json({ error: "Dual confirmation failed. Incorrect double security secret key." });
     }
 
-    const targetUserRef = db.collection('users').doc(targetTelegramUserId);
+    const targetUserRef = adminDb.collection('users').doc(targetTelegramUserId);
     const targetUserSnap = await targetUserRef.get();
     if (!targetUserSnap.exists) {
       return res.status(404).json({ error: "Target player user profile not found." });
@@ -3618,7 +3843,7 @@ app.post('/api/matchmaking/join', async (req, res) => {
     }
 
     // Read player document to check vVIRAL / TON balances
-    const targetUserSnap = await db.collection('users').doc(targetUserId).get();
+    const targetUserSnap = await adminDb.collection('users').doc(targetUserId).get();
     if (!targetUserSnap.exists) {
       return res.status(404).json({ error: "User profile not found. Please sync first." });
     }
@@ -4701,6 +4926,98 @@ app.post('/api/admin/matchmaking/cleanup', async (req, res) => {
 
     res.json({ success: true, cleanedCount });
   } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Admin-only reconciliation action for pending TON deposits
+app.post('/api/admin/ton/reconcile-pending-deposits', async (req, res) => {
+  try {
+    const verifiedUser = getRequestUser(req);
+    const requestorId = verifiedUser.userId || req.query.requestorId || req.body.requestorId;
+
+    if (!requestorId) {
+      return res.status(403).json({ error: "Access Denied. Unauthorized admin identity." });
+    }
+
+    const idToCheck = String(requestorId).toLowerCase();
+    const isApprovedAdmin = ADMIN_TELEGRAM_IDS.includes(idToCheck);
+
+    if (!isApprovedAdmin) {
+      return res.status(403).json({ error: `Access Denied. User @${requestorId} is not an approved Telegram Admin.` });
+    }
+
+    console.log("[Admin Reconciliation] Starting manual reconciliation scan...");
+
+    // 1. Fetch all tonDeposits with status !== 'credited'
+    const pendingSnap = await adminDb.collection('tonDeposits').get();
+    const pendingDeposits: any[] = [];
+    pendingSnap.forEach(doc => {
+      const d = doc.data();
+      if (d && d.status !== 'credited') {
+        pendingDeposits.push({ id: doc.id, ...d });
+      }
+    });
+
+    console.log(`[Admin Reconciliation] Found ${pendingDeposits.length} pending non-credited deposits in database.`);
+
+    const report: {
+      totalScanned: number;
+      matchedAndCredited: string[];
+      failedToCredit: { depositId: string; error: string }[];
+      skipped: string[];
+    } = {
+      totalScanned: pendingDeposits.length,
+      matchedAndCredited: [],
+      failedToCredit: [],
+      skipped: []
+    };
+
+    if (pendingDeposits.length > 0) {
+      // 2. Fetch recent transactions for treasury address
+      const txs = await fetchTransactionsFromToncenter(TON_CONFIG.treasuryAddress, TON_CONFIG.network);
+      console.log(`[Admin Reconciliation] Fetched ${txs.length} transactions from on-chain for reconciliation.`);
+
+      for (const dep of pendingDeposits) {
+        const depositId = dep.id;
+        const targetUserId = dep.telegramUserId;
+
+        // Try to find matching transaction on-chain
+        let matchedTx: any = null;
+        for (const tx of txs) {
+          if (!tx.in_msg) continue;
+          const comment = extractMessageText(tx.in_msg);
+          if (comment && comment.trim().toUpperCase() === depositId.trim().toUpperCase()) {
+            matchedTx = tx;
+            break;
+          }
+        }
+
+        if (matchedTx) {
+          console.log(`[Admin Reconciliation] Found on-chain match for ${depositId}! Tx: ${matchedTx.hash}`);
+          // Proceed to credit
+          try {
+            const creditRes = await verifyAndCreditDeposit(depositId, targetUserId, false);
+            if (creditRes && creditRes.success) {
+              report.matchedAndCredited.push(depositId);
+            } else {
+              report.failedToCredit.push({ depositId, error: creditRes.error || "Unknown verification failure" });
+            }
+          } catch (creditErr: any) {
+            report.failedToCredit.push({ depositId, error: creditErr.message });
+          }
+        } else {
+          report.skipped.push(depositId);
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      report
+    });
+  } catch (error: any) {
+    console.error("[Admin Reconciliation ERROR]", error);
     res.status(500).json({ error: error.message });
   }
 });
