@@ -1,10 +1,50 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Permissive Firestore rules for the developer sandbox integration.
-    // All client transactions are securely proxied through the Express API layer.
-    match /{document=**} {
+    // Non-financial collections can be read/written by users
+    match /users/{userId} {
       allow read, write: if true;
+    }
+    match /games/{gameId} {
+      allow read, write: if true;
+    }
+    match /challenges/{challengeId} {
+      allow read, write: if true;
+    }
+    match /reports/{reportId} {
+      allow read, write: if true;
+    }
+
+    // STRICTLY DENY client writes to sensitive financial collections to protect integrity
+    match /tonDeposits/{depositId} {
+      allow read: if true;
+      allow write: if false; // Deny all client writes
+    }
+    match /tonWithdrawals/{withdrawalId} {
+      allow read: if true;
+      allow write: if false; // Deny all client writes
+    }
+    match /ledgerTransactions/{txId} {
+      allow read: if true;
+      allow write: if false; // Deny all client writes
+    }
+    match /ledgerEntries/{entryId} {
+      allow read: if true;
+      allow write: if false; // Deny all client writes
+    }
+    match /tonProcessedTransactions/{txHash} {
+      allow read: if true;
+      allow write: if false; // Deny all client writes
+    }
+    match /tonReconciliation/{recId} {
+      allow read: if true;
+      allow write: if false; // Deny all client writes
+    }
+    
+    // Default fallback rule
+    match /{document=**} {
+      allow read: if true;
+      allow write: if false; // Deny writes to anything else by default
     }
   }
 }

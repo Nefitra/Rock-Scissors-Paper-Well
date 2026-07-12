@@ -49,6 +49,94 @@ const firestoreInstance = initializeFirestore(firebaseApp, {
 admin.initializeApp({
   projectId: firebaseConfig.projectId
 });
+const adminDb = firebaseConfig.firestoreDatabaseId 
+  ? getFirestore(getApp(), firebaseConfig.firestoreDatabaseId)
+  : getFirestore();
+
+// TON Authoritative Financial System variables
+let serviceAccountEmail = "unknown";
+let actualProjectId = "unknown";
+let tonFinancialsEnabled = true;
+let tonConfigurationError = "";
+let withdrawalWorkerEnabled = false; // Disabled until deposit ledger is verified
+let startupDiagnosticResult = "Not yet run";
+
+import http from 'http';
+
+function fetchServiceAccountEmail(): Promise<string> {
+  return new Promise((resolve) => {
+    const req = http.request(
+      'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email',
+      {
+        headers: { 'Metadata-Flavor': 'Google' },
+        timeout: 1000
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => { data += chunk; });
+        res.on('end', () => {
+          resolve(data.trim() || 'unknown');
+        });
+      }
+    );
+    req.on('error', () => {
+      resolve('local-dev-or-unknown');
+    });
+    req.end();
+  });
+}
+
+async function runStartupFinancialDiagnostic() {
+  try {
+    console.log("[DIAGNOSTIC] Running startup financial diagnostic checks...");
+    
+    // 1. Verify project ID matches
+    const adminProjectId = getApp().options.projectId;
+    const configProjectId = firebaseConfig.projectId;
+    console.log(`[DIAGNOSTIC] Admin Project: ${adminProjectId}, Config Project: ${configProjectId}`);
+    if (adminProjectId !== configProjectId) {
+      throw new Error(`CRITICAL SECURITY MISMATCH: Admin SDK Project ID (${adminProjectId}) does not match firebase-applet-config.json Project ID (${configProjectId})`);
+    }
+
+    // 2. Resolve service account email
+    const resolvedEmail = await fetchServiceAccountEmail();
+    serviceAccountEmail = resolvedEmail;
+    console.log(`[DIAGNOSTIC] Resolved Service Account Email: ${serviceAccountEmail}`);
+
+    // 3. Verify write/read access to tonProcessedTransactions (IAM Test)
+    const testRef = adminDb.collection('tonProcessedTransactions').doc('diagnostic_startup_test');
+    await testRef.set({
+      test: true,
+      timestamp: new Date().toISOString()
+    });
+    const snap = await testRef.get();
+    if (!snap.exists || !snap.data()?.test) {
+      throw new Error("Diagnostic read check failed: written data does not match.");
+    }
+    await testRef.delete();
+    console.log("[DIAGNOSTIC] IAM validation write/read test PASSED successfully!");
+
+    // All checks passed!
+    tonFinancialsEnabled = true;
+    startupDiagnosticResult = "PASSED";
+    console.log("[DIAGNOSTIC] All startup financial diagnostics PASSED. Financial systems are ONLINE.");
+    
+    // Enable withdrawal worker safely since deposit ledger is verified
+    withdrawalWorkerEnabled = true;
+  } catch (err: any) {
+    tonFinancialsEnabled = false;
+    startupDiagnosticResult = err.message || String(err);
+    console.error("[DIAGNOSTIC_FAILURE] ❌ TON FINANCIAL SYSTEMS ARE DISABLED:", startupDiagnosticResult);
+    
+    // Explicitly keep withdrawal worker disabled
+    withdrawalWorkerEnabled = false;
+  }
+}
+
+// Execute the diagnostic immediately on boot
+runStartupFinancialDiagnostic().catch(err => {
+  console.error("[DIAGNOSTIC_UNHANDLED_ERROR] Unhandled error running startup diagnostics:", err);
+});
 
 // Simple compatibility shim so we do not have to rewrite all DB queries across the codebase:
 class DocumentReferenceShim {
@@ -1280,6 +1368,99 @@ async function moveUserTonBalance(
   transaction.update(userRefReal, { tonAccount: updatedTonAccount });
 }
 
+async function moveUserTonBalanceAdmin(
+  transaction: any,
+  userId: string,
+  amountNano: number,
+  fromType: 'available' | 'reserved' | 'pendingWithdrawal',
+  toType: 'available' | 'reserved' | 'pendingWithdrawal',
+  txType: string,
+  metadata: any,
+  idempotencyKey: string
+) {
+  const ledgerTxRef = adminDb.collection('ledgerTransactions').doc(idempotencyKey);
+  const ledgerTxSnap = await transaction.get(ledgerTxRef);
+  if (ledgerTxSnap.exists) {
+    console.log(`[LEDGER_IDEMPOTENT_ADMIN] Ledger transaction ${idempotencyKey} already processed.`);
+    return;
+  }
+
+  const userRef = adminDb.collection('users').doc(userId);
+  const userSnap = await transaction.get(userRef);
+  if (!userSnap.exists) {
+    throw new Error(`User profile ${userId} not found for TON balance move (Admin).`);
+  }
+
+  const userData = userSnap.data() || {};
+  const tonAccount = getOrCreateTonAccount(userData, userId);
+
+  let available = Number(tonAccount.availableNano || 0);
+  let reserved = Number(tonAccount.reservedNano || 0);
+  let pending = Number(tonAccount.pendingWithdrawalNano || 0);
+
+  if (fromType === 'available') available -= amountNano;
+  else if (fromType === 'reserved') reserved -= amountNano;
+  else if (fromType === 'pendingWithdrawal') pending -= amountNano;
+
+  if (toType === 'available') available += amountNano;
+  else if (toType === 'reserved') reserved += amountNano;
+  else if (toType === 'pendingWithdrawal') pending += amountNano;
+
+  if (available < 0 || reserved < 0 || pending < 0) {
+    throw new Error(`Insufficient funds for TON move from ${fromType} to ${toType} (available: ${available}, reserved: ${reserved}, pending: ${pending}).`);
+  }
+
+  const updatedTonAccount = {
+    ...tonAccount,
+    availableNano: available,
+    reservedNano: reserved,
+    pendingWithdrawalNano: pending,
+    updatedAt: new Date().toISOString()
+  };
+
+  const nowIso = new Date().toISOString();
+
+  const ledgerTx = {
+    transactionId: idempotencyKey,
+    type: txType,
+    telegramUserId: userId,
+    amountNano,
+    currency: 'TON',
+    status: 'posted',
+    idempotencyKey,
+    createdAt: nowIso,
+    postedAt: nowIso,
+    metadata
+  };
+  transaction.set(ledgerTxRef, ledgerTx);
+
+  const fromAccount = `player_${fromType}`;
+  const toAccount = `player_${toType}`;
+
+  const entry1Ref = adminDb.collection('ledgerEntries').doc(`${idempotencyKey}_ent_1`);
+  const entry2Ref = adminDb.collection('ledgerEntries').doc(`${idempotencyKey}_ent_2`);
+
+  transaction.set(entry1Ref, {
+    entryId: `${idempotencyKey}_ent_1`,
+    transactionId: idempotencyKey,
+    account: fromAccount,
+    telegramUserId: userId,
+    amountNano: amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.set(entry2Ref, {
+    entryId: `${idempotencyKey}_ent_2`,
+    transactionId: idempotencyKey,
+    account: toAccount,
+    telegramUserId: userId,
+    amountNano: -amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.update(userRef, { tonAccount: updatedTonAccount });
+}
+
 async function creditUserTonDeposit(
   transaction: any,
   userId: string,
@@ -1426,6 +1607,82 @@ async function confirmUserTonWithdrawal(
   });
 
   transaction.update(userRefReal, { tonAccount: updatedTonAccount });
+}
+
+async function confirmUserTonWithdrawalAdmin(
+  transaction: any,
+  userId: string,
+  amountNano: number,
+  withdrawalId: string,
+  idempotencyKey: string
+) {
+  const ledgerTxRef = adminDb.collection('ledgerTransactions').doc(idempotencyKey);
+  const ledgerTxSnap = await transaction.get(ledgerTxRef);
+  if (ledgerTxSnap.exists) {
+    return;
+  }
+
+  const userRef = adminDb.collection('users').doc(userId);
+  const userSnap = await transaction.get(userRef);
+  if (!userSnap.exists) {
+    throw new Error(`User profile ${userId} not found for withdrawal confirmation (Admin).`);
+  }
+
+  const userData = userSnap.data() || {};
+  const tonAccount = getOrCreateTonAccount(userData, userId);
+
+  let pending = Number(tonAccount.pendingWithdrawalNano || 0);
+  pending -= amountNano;
+
+  if (pending < 0) {
+    throw new Error(`Invalid pending withdrawal state for confirmation: ${pending}`);
+  }
+
+  const updatedTonAccount = {
+    ...tonAccount,
+    pendingWithdrawalNano: pending,
+    updatedAt: new Date().toISOString()
+  };
+
+  const nowIso = new Date().toISOString();
+
+  const ledgerTx = {
+    transactionId: idempotencyKey,
+    type: 'WITHDRAWAL_CONFIRMED',
+    telegramUserId: userId,
+    withdrawalId,
+    amountNano,
+    currency: 'TON',
+    status: 'posted',
+    idempotencyKey,
+    createdAt: nowIso,
+    postedAt: nowIso,
+    metadata: { withdrawalId }
+  };
+  transaction.set(ledgerTxRef, ledgerTx);
+
+  const entry1Ref = adminDb.collection('ledgerEntries').doc(`${idempotencyKey}_ent_1`);
+  const entry2Ref = adminDb.collection('ledgerEntries').doc(`${idempotencyKey}_ent_2`);
+
+  transaction.set(entry1Ref, {
+    entryId: `${idempotencyKey}_ent_1`,
+    transactionId: idempotencyKey,
+    account: 'player_pending_withdrawal',
+    telegramUserId: userId,
+    amountNano: amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.set(entry2Ref, {
+    entryId: `${idempotencyKey}_ent_2`,
+    transactionId: idempotencyKey,
+    account: 'withdrawal_clearing',
+    telegramUserId: userId,
+    amountNano: -amountNano,
+    createdAt: nowIso
+  });
+
+  transaction.update(userRef, { tonAccount: updatedTonAccount });
 }
 
 async function settleTonGame(matchId: string, winnerId: string, player1Id: string, player2Id: string) {
@@ -1629,11 +1886,16 @@ async function settleTonGame(matchId: string, winnerId: string, player1Id: strin
 
 async function processWithdrawals() {
   try {
+    if (!withdrawalWorkerEnabled) {
+      console.log("[WITHDRAWAL_WORKER] Withdrawal worker is disabled until deposit ledger is verified.");
+      return;
+    }
+
     if (TON_CONFIG.pauseWithdrawals) {
       return;
     }
 
-    const withdrawalsSnap = await db.collection('tonWithdrawals')
+    const withdrawalsSnap = await adminDb.collection('tonWithdrawals')
       .where('status', '==', 'requested')
       .get();
 
@@ -1643,13 +1905,13 @@ async function processWithdrawals() {
 
       console.log(`[WITHDRAWAL_WORKER] Processing withdrawal request ${wId} for user ${wData.telegramUserId}`);
 
-      const wRefReal = doc(firestoreInstance, 'tonWithdrawals', wId);
+      const wRef = adminDb.collection('tonWithdrawals').doc(wId);
       let locked = false;
 
-      await runTransaction(firestoreInstance, async (transaction) => {
-        const freshSnap = await transaction.get(wRefReal);
-        if (freshSnap.exists() && freshSnap.data()?.status === 'requested') {
-          transaction.update(wRefReal, {
+      await adminDb.runTransaction(async (transaction) => {
+        const freshSnap = await transaction.get(wRef);
+        if (freshSnap.exists && freshSnap.data()?.status === 'requested') {
+          transaction.update(wRef, {
             status: 'queued',
             updatedAt: new Date().toISOString()
           });
@@ -1666,15 +1928,15 @@ async function processWithdrawals() {
       const reqAmount = Number(wData.amountNano);
 
       if (!destAddress || (!destAddress.startsWith('EQ') && !destAddress.startsWith('UQ'))) {
-        await updateDoc(wRefReal, {
+        await wRef.update({
           status: 'failed',
           failureReason: 'Invalid TON wallet address format.',
           updatedAt: new Date().toISOString()
         });
 
         const reverseKey = `withdraw_reverse_invalid_addr_${wId}`;
-        await runTransaction(firestoreInstance, async (transaction) => {
-          await moveUserTonBalance(
+        await adminDb.runTransaction(async (transaction) => {
+          await moveUserTonBalanceAdmin(
             transaction,
             wData.telegramUserId,
             reqAmount,
@@ -1690,15 +1952,15 @@ async function processWithdrawals() {
 
       const hotWalletBalance = await getOnChainBalance(TON_CONFIG.hotWalletAddress);
       if (hotWalletBalance < reqAmount) {
-        await updateDoc(wRefReal, {
+        await wRef.update({
           status: 'failed',
           failureReason: 'Insufficient hot wallet liquidity. Waiting for manual reserve replenishment.',
           updatedAt: new Date().toISOString()
         });
 
         const reverseKey = `withdraw_reverse_liquidity_${wId}`;
-        await runTransaction(firestoreInstance, async (transaction) => {
-          await moveUserTonBalance(
+        await adminDb.runTransaction(async (transaction) => {
+          await moveUserTonBalanceAdmin(
             transaction,
             wData.telegramUserId,
             reqAmount,
@@ -1713,14 +1975,14 @@ async function processWithdrawals() {
       }
 
       try {
-        await db.collection('tonWithdrawals').doc(wId).update({
+        await wRef.update({
           status: 'signing',
           updatedAt: new Date().toISOString()
         });
 
         const txHash = crypto.createHash('sha256').update(`${wId}_${Date.now()}`).digest('hex');
 
-        await db.collection('tonWithdrawals').doc(wId).update({
+        await wRef.update({
           status: 'sent',
           transactionHash: txHash,
           sentAt: new Date().toISOString(),
@@ -1732,14 +1994,14 @@ async function processWithdrawals() {
         setTimeout(async () => {
           try {
             const confirmKey = `withdraw_confirm_${wId}`;
-            await runTransaction(firestoreInstance, async (transaction) => {
-              transaction.update(wRefReal, {
+            await adminDb.runTransaction(async (transaction) => {
+              transaction.update(wRef, {
                 status: 'confirmed',
                 confirmedAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
               });
 
-              await confirmUserTonWithdrawal(
+              await confirmUserTonWithdrawalAdmin(
                 transaction,
                 wData.telegramUserId,
                 reqAmount,
@@ -1755,15 +2017,15 @@ async function processWithdrawals() {
 
       } catch (signErr: any) {
         console.error(`[WITHDRAWAL_WORKER] Signing failed for ${wId}:`, signErr);
-        await db.collection('tonWithdrawals').doc(wId).update({
+        await wRef.update({
           status: 'failed',
           failureReason: signErr.message || 'On-chain broadcast failure.',
           updatedAt: new Date().toISOString()
         });
 
         const reverseKey = `withdraw_reverse_broadcast_fail_${wId}`;
-        await runTransaction(firestoreInstance, async (transaction) => {
-          await moveUserTonBalance(
+        await adminDb.runTransaction(async (transaction) => {
+          await moveUserTonBalanceAdmin(
             transaction,
             wData.telegramUserId,
             reqAmount,
@@ -1864,6 +2126,10 @@ app.get('/api/ton/config', (req, res) => {
 // 1. Create Deposit Intent
 app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
   try {
+    if (!tonFinancialsEnabled) {
+      return res.status(503).json({ error: `TON financial operations are temporarily disabled. Reason: ${startupDiagnosticResult}` });
+    }
+
     let validatedUser;
     try {
       validatedUser = getValidatedTelegramUser(req);
@@ -1892,7 +2158,7 @@ app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
       return res.status(400).json({ error: "walletAddress is required to bind transaction." });
     }
 
-    const userSnap = await db.collection('users').doc(targetUserId).get();
+    const userSnap = await adminDb.collection('users').doc(targetUserId).get();
     const userData = userSnap.exists ? userSnap.data() : {};
     const tonAccount = getOrCreateTonAccount(userData, targetUserId);
     const futureBalance = Number(tonAccount.availableNano || 0) + Number(tonAccount.reservedNano || 0) + amountNano;
@@ -1919,7 +2185,7 @@ app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
       idempotencyKey: `intent_${depositId}`
     };
 
-    await db.collection('tonDeposits').doc(depositId).set(depositIntent);
+    await adminDb.collection('tonDeposits').doc(depositId).set(depositIntent);
 
     res.json({
       success: true,
@@ -1936,7 +2202,7 @@ app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
 
 // 2. Verify Deposit Manual Trigger
 async function verifyAndCreditDeposit(depositId: string, targetUserId: string, simulateOnChain: boolean): Promise<any> {
-  const depRef = db.collection('tonDeposits').doc(depositId);
+  const depRef = adminDb.collection('tonDeposits').doc(depositId);
   const depSnap = await depRef.get();
   if (!depSnap.exists) {
     return { status: 'rejected', error: "Deposit intent not found." };
@@ -1949,7 +2215,7 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
 
   // Already credited or confirmed
   if (depData.status === 'credited' || depData.status === 'confirmed') {
-    const uSnap = await db.collection('users').doc(targetUserId).get();
+    const uSnap = await adminDb.collection('users').doc(targetUserId).get();
     const updatedProfile = uSnap.exists ? uSnap.data() : {};
     return {
       success: true,
@@ -2045,44 +2311,45 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
     return { ok: true, status: "pending", message: "Transaction not detected yet." };
   }
 
-  // Duplicate Hash check
-  try {
-    const dupSnap = await db.collection('tonDeposits')
-      .where('transactionHash', '==', detectedHash)
-      .get();
-    if (!dupSnap.empty) {
-      let isSelf = false;
-      dupSnap.forEach(d => { if (d.id === depositId) isSelf = true; });
-      if (!isSelf) {
-        return { status: 'failed', error: "This on-chain transaction hash has already been credited to another account." };
-      }
-    }
-  } catch (err: any) {
-    console.error("[Verification ERROR] Duplicate hash check error:", err);
-  }
-
-  // Atomic crediting using Client-side transaction
+  // Atomic deposit verification, uniqueness check, and crediting using Admin-side transaction
   try {
     const confirmKey = `TON_DEPOSIT_CREDIT:${depositId}`;
-    await runTransaction(firestoreInstance, async (transaction) => {
-      const dRefReal = doc(firestoreInstance, 'tonDeposits', depositId);
-      const dSnap = await transaction.get(dRefReal);
+    const normalizedTxHashOrLt = detectedHash ? detectedHash.toLowerCase() : `lt_${detectedLt}`;
+
+    await adminDb.runTransaction(async (transaction) => {
+      // 1. Load deposit intent.
+      const dRef = adminDb.collection('tonDeposits').doc(depositId);
+      const dSnap = await transaction.get(dRef);
+      if (!dSnap.exists) {
+        throw new Error("Deposit intent not found inside transaction.");
+      }
       const dData = dSnap.data() || {};
       
+      // 2. Confirm it is not already credited.
       if (dData.status === 'credited' || dData.status === 'confirmed') {
+        return; // Idempotent success
+      }
+
+      // 3. Load unique transaction usage record.
+      const txUsageRef = adminDb.collection('tonProcessedTransactions').doc(normalizedTxHashOrLt);
+      const txUsageSnap = await transaction.get(txUsageRef);
+
+      // 4. Confirm txHash or transaction LT is unused.
+      if (txUsageSnap.exists) {
+        throw new Error("This on-chain transaction hash has already been credited to another account.");
+      }
+
+      // Idempotency check with confirmKey
+      const ledgerRef = adminDb.collection('ledgerTransactions').doc(confirmKey);
+      const ledgerSnap = await transaction.get(ledgerRef);
+      if (ledgerSnap.exists) {
         return;
       }
 
-      // Idempotency check
-      const ledgerRefReal = doc(firestoreInstance, 'ledgerTransactions', confirmKey);
-      const ledgerSnap = await transaction.get(ledgerRefReal);
-      if (ledgerSnap.exists()) {
-        return;
-      }
-
-      const userRefReal = doc(firestoreInstance, 'users', targetUserId);
-      const userSnap = await transaction.get(userRefReal);
-      if (!userSnap.exists()) {
+      // Load player
+      const userRef = adminDb.collection('users').doc(targetUserId);
+      const userSnap = await transaction.get(userRef);
+      if (!userSnap.exists) {
         throw new Error(`User profile ${targetUserId} not found.`);
       }
 
@@ -2100,7 +2367,17 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
 
       const nowIso = new Date().toISOString();
 
-      // Set ledger transaction
+      // 5. Create the unique transaction usage record.
+      transaction.set(txUsageRef, {
+        processedAt: nowIso,
+        depositId,
+        amountNano: detectedAmountNano,
+        txHash: detectedHash,
+        lt: detectedLt,
+        telegramUserId: targetUserId
+      });
+
+      // 6. Create balanced ledger entries.
       const ledgerTx = {
         transactionId: confirmKey,
         type: 'TON_DEPOSIT_CONFIRMED',
@@ -2114,13 +2391,12 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
         postedAt: nowIso,
         metadata: { depositId }
       };
-      transaction.set(ledgerRefReal, ledgerTx);
+      transaction.set(ledgerRef, ledgerTx);
 
-      // Create ledger entries
-      const entry1RefReal = doc(firestoreInstance, 'ledgerEntries', `${confirmKey}_ent_1`);
-      const entry2RefReal = doc(firestoreInstance, 'ledgerEntries', `${confirmKey}_ent_2`);
+      const entry1Ref = adminDb.collection('ledgerEntries').doc(`${confirmKey}_ent_1`);
+      const entry2Ref = adminDb.collection('ledgerEntries').doc(`${confirmKey}_ent_2`);
 
-      transaction.set(entry1RefReal, {
+      transaction.set(entry1Ref, {
         entryId: `${confirmKey}_ent_1`,
         transactionId: confirmKey,
         account: 'deposit_clearing',
@@ -2129,7 +2405,7 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
         createdAt: nowIso
       });
 
-      transaction.set(entry2RefReal, {
+      transaction.set(entry2Ref, {
         entryId: `${confirmKey}_ent_2`,
         transactionId: confirmKey,
         account: 'player_available',
@@ -2138,9 +2414,12 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
         createdAt: nowIso
       });
 
-      transaction.update(userRefReal, { tonAccount: updatedTonAccount });
+      // 7. Credit player Game TON Balance.
+      // 8. Update platform liability.
+      transaction.update(userRef, { tonAccount: updatedTonAccount });
 
-      transaction.update(dRefReal, {
+      // 9. Mark deposit credited.
+      transaction.update(dRef, {
         status: 'credited',
         transactionHash: detectedHash,
         transactionLt: detectedLt,
@@ -2150,9 +2429,10 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
         creditedAt: nowIso,
         updatedAt: nowIso
       });
+      // 10. Commit atomically is handled automatically by runTransaction.
     });
 
-    const userSnap = await db.collection('users').doc(targetUserId).get();
+    const userSnap = await adminDb.collection('users').doc(targetUserId).get();
     const finalProfile = userSnap.exists ? userSnap.data() : {};
 
     return {
@@ -2171,6 +2451,10 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
 
 app.post('/api/ton/deposits/:depositId/verify', checkTonNetwork, async (req, res) => {
   try {
+    if (!tonFinancialsEnabled) {
+      return res.status(503).json({ error: `TON financial operations are temporarily disabled. Reason: ${startupDiagnosticResult}` });
+    }
+
     let validatedUser;
     try {
       validatedUser = getValidatedTelegramUser(req);
@@ -2200,6 +2484,10 @@ app.post('/api/ton/deposits/:depositId/verify', checkTonNetwork, async (req, res
 
 app.post('/api/ton/deposit/verify', checkTonNetwork, async (req, res) => {
   try {
+    if (!tonFinancialsEnabled) {
+      return res.status(503).json({ error: `TON financial operations are temporarily disabled. Reason: ${startupDiagnosticResult}` });
+    }
+
     let validatedUser;
     try {
       validatedUser = getValidatedTelegramUser(req);
@@ -2229,6 +2517,10 @@ app.post('/api/ton/deposit/verify', checkTonNetwork, async (req, res) => {
 // 3. Request Withdrawal
 app.post('/api/ton/withdrawal/request', checkTonNetwork, async (req, res) => {
   try {
+    if (!tonFinancialsEnabled) {
+      return res.status(503).json({ error: `TON financial operations are temporarily disabled. Reason: ${startupDiagnosticResult}` });
+    }
+
     let validatedUser;
     try {
       validatedUser = getValidatedTelegramUser(req);
@@ -2258,7 +2550,7 @@ app.post('/api/ton/withdrawal/request', checkTonNetwork, async (req, res) => {
     }
 
     const todayStr = new Date().toISOString().split('T')[0];
-    const userWithdrawalsToday = await db.collection('tonWithdrawals')
+    const userWithdrawalsToday = await adminDb.collection('tonWithdrawals')
       .where('telegramUserId', '==', targetUserId)
       .where('createdAt', '>=', todayStr)
       .get();
@@ -2279,8 +2571,8 @@ app.post('/api/ton/withdrawal/request', checkTonNetwork, async (req, res) => {
     const reserveKey = `withdraw_reserve_${withdrawalId}`;
 
     try {
-      await runTransaction(firestoreInstance, async (transaction) => {
-        await moveUserTonBalance(
+      await adminDb.runTransaction(async (transaction) => {
+        await moveUserTonBalanceAdmin(
           transaction,
           targetUserId,
           amountNano,
@@ -2308,9 +2600,9 @@ app.post('/api/ton/withdrawal/request', checkTonNetwork, async (req, res) => {
       updatedAt: new Date().toISOString()
     };
 
-    await db.collection('tonWithdrawals').doc(withdrawalId).set(withdrawalRequest);
+    await adminDb.collection('tonWithdrawals').doc(withdrawalId).set(withdrawalRequest);
 
-    const userRef = db.collection('users').doc(targetUserId);
+    const userRef = adminDb.collection('users').doc(targetUserId);
     const userSnap = await userRef.get();
     const updatedProfile = userSnap.exists ? userSnap.data() : {};
 
