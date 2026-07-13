@@ -2,27 +2,24 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
-import { initializeApp } from 'firebase/app';
-import { 
-  initializeFirestore, 
-  collection, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  getDocs, 
-  updateDoc, 
-  deleteDoc,
-  query, 
-  where, 
-  limit,
-  memoryLocalCache,
-  runTransaction
-} from 'firebase/firestore';
+import { initializeApp, getApps } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 import crypto from 'crypto';
 
 // Initialize Express
 const app = express();
 app.use(express.json());
+
+// Enable CORS securely for all origins (Requirement 5)
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-telegram-init-data');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 const PORT = 3000;
 
@@ -33,132 +30,306 @@ if (!fs.existsSync(configPath)) {
   process.exit(1);
 }
 
-const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+import { initializeApp as initClientApp } from 'firebase/app';
+import { 
+  getFirestore as getClientFirestore, 
+  collection as clientCollection, 
+  doc as clientDoc, 
+  getDoc as clientGetDoc, 
+  getDocs as clientGetDocs, 
+  setDoc as clientSetDoc, 
+  updateDoc as clientUpdateDoc, 
+  deleteDoc as clientDeleteDoc, 
+  query as clientQuery, 
+  where as clientWhere, 
+  limit as clientLimit,
+  orderBy as clientOrderBy,
+  runTransaction as clientRunTransaction,
+  writeBatch as clientWriteBatch
+} from 'firebase/firestore';
 
-// Initialize Firebase Client
-const firebaseApp = initializeApp(firebaseConfig);
-const firestoreInstance = initializeFirestore(firebaseApp, {
-  experimentalForceLongPolling: true,
-  useFetchStreams: false,
-  localCache: memoryLocalCache()
-} as any, firebaseConfig.firestoreDatabaseId);
+class DocumentSnapshotWrapper {
+  id: string;
+  exists: boolean;
+  private _data: any;
 
-// Simple compatibility shim so we do not have to rewrite all DB queries across the codebase:
-class DocumentReferenceShim {
-  constructor(public collectionPath: string, public docId: string) {}
+  constructor(snap: any) {
+    this.id = snap.id;
+    this.exists = snap.exists();
+    this._data = snap.data();
+  }
 
-  get id() {
-    return this.docId;
+  data() {
+    return this._data;
+  }
+
+  get(field: string) {
+    return this._data ? this._data[field] : undefined;
+  }
+}
+
+class QuerySnapshotWrapper {
+  empty: boolean;
+  size: number;
+  docs: DocumentSnapshotWrapper[];
+
+  constructor(snap: any) {
+    this.empty = snap.empty;
+    this.size = snap.size;
+    this.docs = snap.docs.map((doc: any) => new DocumentSnapshotWrapper(doc));
+  }
+
+  forEach(callback: (doc: DocumentSnapshotWrapper) => void) {
+    this.docs.forEach(callback);
+  }
+}
+
+class DocumentReferenceWrapper {
+  id: string;
+  path: string;
+  _ref: any;
+  private _db: any;
+
+  constructor(ref: any, db: any) {
+    this._ref = ref;
+    this._db = db;
+    this.id = ref.id;
+    this.path = ref.path;
   }
 
   async get() {
-    const r = doc(firestoreInstance, this.collectionPath, this.docId);
-    const snap = await getDoc(r);
-    return {
-      exists: snap.exists(),
-      data: () => snap.data()
-    };
+    const snap = await clientGetDoc(this._ref);
+    return new DocumentSnapshotWrapper(snap);
   }
 
-  async set(data: any) {
-    const r = doc(firestoreInstance, this.collectionPath, this.docId);
-    return await setDoc(r, data);
+  async set(data: any, options?: { merge?: boolean }) {
+    await clientSetDoc(this._ref, data, { merge: !!options?.merge });
   }
 
   async update(data: any) {
-    const r = doc(firestoreInstance, this.collectionPath, this.docId);
-    return await updateDoc(r, data);
+    await clientUpdateDoc(this._ref, data);
   }
 
   async delete() {
-    const r = doc(firestoreInstance, this.collectionPath, this.docId);
-    return await deleteDoc(r);
+    await clientDeleteDoc(this._ref);
+  }
+
+  get firestore() {
+    return this._db;
   }
 }
 
-class CollectionReferenceShim {
-  public conditions: any[] = [];
-  public limitCount: number | null = null;
+class QueryWrapper {
+  protected _query: any;
+  protected _db: any;
 
-  constructor(public collectionPath: string) {}
-
-  doc(docId?: string) {
-    const finalId = docId || doc(collection(firestoreInstance, this.collectionPath)).id;
-    return new DocumentReferenceShim(this.collectionPath, finalId);
+  constructor(q: any, db: any) {
+    this._query = q;
+    this._db = db;
   }
 
   where(field: string, op: any, value: any) {
-    const q = new CollectionReferenceShim(this.collectionPath);
-    q.conditions = [...this.conditions, where(field, op, value)];
-    q.limitCount = this.limitCount;
-    return q;
+    const mappedOp = op === '===' ? '==' : op;
+    return new QueryWrapper(clientQuery(this._query, clientWhere(field, mappedOp, value)), this._db);
   }
 
   limit(count: number) {
-    const q = new CollectionReferenceShim(this.collectionPath);
-    q.conditions = [...this.conditions];
-    q.limitCount = count;
-    return q;
+    return new QueryWrapper(clientQuery(this._query, clientLimit(count)), this._db);
+  }
+
+  orderBy(field: string, dir?: 'asc' | 'desc') {
+    return new QueryWrapper(clientQuery(this._query, clientOrderBy(field, dir || 'asc')), this._db);
   }
 
   async get() {
-    let q = query(collection(firestoreInstance, this.collectionPath), ...this.conditions);
-    if (this.limitCount !== null) {
-      q = query(q, limit(this.limitCount));
-    }
-    const snap = await getDocs(q);
-    return {
-      empty: snap.empty,
-      docs: snap.docs.map(d => ({
-        id: d.id,
-        data: () => d.data()
-      })),
-      forEach: (callback: (d: any) => void) => {
-        snap.docs.forEach(d => {
-          callback({
-            id: d.id,
-            data: () => d.data()
-          });
-        });
-      }
-    };
+    const snap = await clientGetDocs(this._query);
+    return new QuerySnapshotWrapper(snap);
   }
 }
 
-const db = {
-  collection: (path: string) => new CollectionReferenceShim(path)
-};
+class CollectionReferenceWrapper extends QueryWrapper {
+  id: string;
+  path: string;
 
-const adminDb: any = {
-  collection: (path: string) => new CollectionReferenceShim(path),
-  runTransaction: async (callback: (transaction: any) => Promise<any>) => {
-    return await runTransaction(firestoreInstance, async (tx) => {
-      const txShim = {
-        get: async (refShim: any) => {
-          const r = doc(firestoreInstance, refShim.collectionPath, refShim.id);
-          const snap = await tx.get(r);
-          return {
-            exists: snap.exists(),
-            data: () => snap.data()
-          };
-        },
-        set: (refShim: any, data: any) => {
-          const r = doc(firestoreInstance, refShim.collectionPath, refShim.id);
-          tx.set(r, data);
-        },
-        update: (refShim: any, data: any) => {
-          const r = doc(firestoreInstance, refShim.collectionPath, refShim.id);
-          tx.update(r, data);
-        },
-        delete: (refShim: any) => {
-          const r = doc(firestoreInstance, refShim.collectionPath, refShim.id);
-          tx.delete(r);
-        }
-      };
-      return await callback(txShim);
+  constructor(ref: any, db: any) {
+    super(ref, db);
+    this.id = ref.id;
+    this.path = ref.path;
+  }
+
+  doc(id?: string) {
+    const ref = id ? clientDoc(this._query, id) : clientDoc(this._query);
+    return new DocumentReferenceWrapper(ref, this._db);
+  }
+
+  async add(data: any) {
+    const ref = clientDoc(this._query);
+    const wrapper = new DocumentReferenceWrapper(ref, this._db);
+    await wrapper.set(data);
+    return wrapper;
+  }
+}
+
+class TransactionWrapper {
+  private _tx: any;
+  private _db: any;
+
+  constructor(tx: any, db: any) {
+    this._tx = tx;
+    this._db = db;
+  }
+
+  async get(docRefWrapper: DocumentReferenceWrapper) {
+    const snap = await this._tx.get(docRefWrapper._ref);
+    return new DocumentSnapshotWrapper(snap);
+  }
+
+  set(docRefWrapper: DocumentReferenceWrapper, data: any, options?: { merge?: boolean }) {
+    this._tx.set(docRefWrapper._ref, data, { merge: !!options?.merge });
+    return this;
+  }
+
+  update(docRefWrapper: DocumentReferenceWrapper, data: any) {
+    this._tx.update(docRefWrapper._ref, data);
+    return this;
+  }
+
+  delete(docRefWrapper: DocumentReferenceWrapper) {
+    this._tx.delete(docRefWrapper._ref);
+    return this;
+  }
+}
+
+class BatchWrapper {
+  private _batch: any;
+  private _db: any;
+
+  constructor(batch: any, db: any) {
+    this._batch = batch;
+    this._db = db;
+  }
+
+  set(docRefWrapper: DocumentReferenceWrapper, data: any, options?: { merge?: boolean }) {
+    this._batch.set(docRefWrapper._ref, data, { merge: !!options?.merge });
+    return this;
+  }
+
+  update(docRefWrapper: DocumentReferenceWrapper, data: any) {
+    this._batch.update(docRefWrapper._ref, data);
+    return this;
+  }
+
+  delete(docRefWrapper: DocumentReferenceWrapper) {
+    this._batch.delete(docRefWrapper._ref);
+    return this;
+  }
+
+  async commit() {
+    await this._batch.commit();
+  }
+}
+
+class FirestoreWrapper {
+  private _clientDb: any;
+
+  constructor(clientDb: any) {
+    this._clientDb = clientDb;
+  }
+
+  collection(path: string) {
+    const ref = clientCollection(this._clientDb, path);
+    return new CollectionReferenceWrapper(ref, this);
+  }
+
+  doc(path: string) {
+    const ref = clientDoc(this._clientDb, path);
+    return new DocumentReferenceWrapper(ref, this);
+  }
+
+  async runTransaction(callback: (transaction: TransactionWrapper) => Promise<any>) {
+    return await clientRunTransaction(this._clientDb, async (clientTx) => {
+      const txWrapper = new TransactionWrapper(clientTx, this);
+      return await callback(txWrapper);
     });
   }
-};
+
+  batch() {
+    const clientBatch = clientWriteBatch(this._clientDb);
+    return new BatchWrapper(clientBatch, this);
+  }
+}
+
+const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+
+// Initialize Firebase Client SDK for server-side Firestore
+const clientApp = initClientApp({
+  apiKey: firebaseConfig.apiKey,
+  authDomain: firebaseConfig.authDomain,
+  projectId: firebaseConfig.projectId,
+  storageBucket: firebaseConfig.storageBucket,
+  messagingSenderId: firebaseConfig.messagingSenderId,
+  appId: firebaseConfig.appId
+});
+
+const clientDb = getClientFirestore(clientApp, firebaseConfig.firestoreDatabaseId || "ai-studio-8a8ccd56-f6a2-4be1-a666-859917405e4f");
+const adminDb: any = new FirestoreWrapper(clientDb);
+const db = adminDb;
+const firestoreInstance = adminDb; // Compatibility reference
+
+// Compatibility shim functions for direct Client-style database calls
+function doc(first: any, second?: any, third?: any) {
+  // Signature 1: doc(collectionRef)
+  if (first && typeof first.doc === 'function' && !second) {
+    return first.doc();
+  }
+  // Signature 2: doc(db, collectionPath, docId)
+  if (first && typeof second === 'string') {
+    if (third) {
+      return adminDb.collection(second).doc(third);
+    } else {
+      return adminDb.collection(second).doc();
+    }
+  }
+  return adminDb.collection(second || 'unknown').doc();
+}
+
+function collection(dbRef: any, collectionPath: string) {
+  return adminDb.collection(collectionPath);
+}
+
+async function getDoc(docRef: any) {
+  return await docRef.get();
+}
+
+async function getDocs(queryRef: any) {
+  return await queryRef.get();
+}
+
+async function runTransaction(dbRef: any, callback: (transaction: any) => Promise<any>) {
+  return await adminDb.runTransaction(async (tx: any) => {
+    return await callback(tx);
+  });
+}
+
+function where(field: string, op: any, value: any) {
+  return { type: 'where', field, op, value };
+}
+
+function limit(count: number) {
+  return { type: 'limit', count };
+}
+
+function query(baseRef: any, ...constraints: any[]) {
+  let current = baseRef;
+  for (const c of constraints) {
+    if (c.type === 'where') {
+      current = current.where(c.field, c.op, c.value);
+    } else if (c.type === 'limit') {
+      current = current.limit(c.count);
+    }
+  }
+  return current;
+}
 
 // TON Authoritative Financial System variables
 let serviceAccountEmail = "unknown";
@@ -539,7 +710,7 @@ async function reserveUserStake(userId: string, stake: number, challengeId: stri
   const userRefReal = doc(firestoreInstance, 'users', userId);
   return await runTransaction(firestoreInstance, async (transaction) => {
     const uSnap = await transaction.get(userRefReal);
-    if (!uSnap.exists()) {
+    if (!uSnap.exists) {
       throw new Error("user_not_found");
     }
     const uData = uSnap.data() || {};
@@ -549,7 +720,7 @@ async function reserveUserStake(userId: string, stake: number, challengeId: stri
     // Check transaction idempotency first
     const txRef = doc(firestoreInstance, 'transactions', idempotencyKey);
     const txSnap = await transaction.get(txRef);
-    if (txSnap.exists()) {
+    if (txSnap.exists) {
       return { success: true };
     }
 
@@ -590,7 +761,7 @@ async function releaseUserStake(userId: string, stake: number, challengeId: stri
   const userRefReal = doc(firestoreInstance, 'users', userId);
   return await runTransaction(firestoreInstance, async (transaction) => {
     const uSnap = await transaction.get(userRefReal);
-    if (!uSnap.exists()) {
+    if (!uSnap.exists) {
       throw new Error("user_not_found");
     }
     const uData = uSnap.data() || {};
@@ -600,7 +771,7 @@ async function releaseUserStake(userId: string, stake: number, challengeId: stri
     // Check transaction idempotency first
     const txRef = doc(firestoreInstance, 'transactions', idempotencyKey);
     const txSnap = await transaction.get(txRef);
-    if (txSnap.exists()) {
+    if (txSnap.exists) {
       return { success: true };
     }
 
@@ -944,9 +1115,14 @@ app.post('/api/user/sync', async (req, res) => {
       if (updated) {
         await userRef.update(upData);
       }
-      const mergedProfile = { ...currentData, ...upData };
-      const upAccount = getOrCreateTonAccount(mergedProfile, userId);
-      mergedProfile.tonAccount = upAccount;
+
+      // Auto check and release stale reserved funds
+      await checkAndReleaseStaleReservedFunds(userId);
+
+      const freshUserSnap = await userRef.get();
+      const freshUserData = freshUserSnap.data() || {};
+      const upAccount = getOrCreateTonAccount(freshUserData, userId);
+      freshUserData.tonAccount = upAccount;
 
       const tonConfig = {
         network: TON_CONFIG.network,
@@ -965,7 +1141,7 @@ app.post('/api/user/sync', async (req, res) => {
         }
       };
 
-      return res.json({ profile: mergedProfile, user: syncResponseUser, tonConfig });
+      return res.json({ profile: freshUserData, user: syncResponseUser, tonConfig });
     }
 
     // New user signup
@@ -1058,6 +1234,10 @@ app.post('/api/user/sync', async (req, res) => {
 app.get('/api/user/:userId', async (req, res) => {
   try {
     const userId = sanitizeUserId(req.params.userId);
+
+    // Automatically check and release stale reserved funds
+    await checkAndReleaseStaleReservedFunds(userId);
+
     const userSnap = await adminDb.collection('users').doc(userId).get();
     if (!userSnap.exists) {
       return res.status(404).json({ error: "User not found" });
@@ -1127,6 +1307,111 @@ function getOrCreateTonAccount(userData: any, userId: string) {
   };
 }
 
+async function checkAndReleaseStaleReservedFunds(userId: string): Promise<any> {
+  try {
+    const userRef = adminDb.collection('users').doc(userId);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
+      return { availableBefore: "0", availableAfter: "0", reservedBefore: "0", reservedAfter: "0", activeQueueId: null, activeMatchId: null, reason: "User not found" };
+    }
+
+    const userData = userSnap.data() || {};
+    const tonAccount = getOrCreateTonAccount(userData, userId);
+    const reservedBefore = Number(tonAccount.reservedNano || 0);
+    const availableBefore = Number(tonAccount.availableNano || 0);
+
+    if (reservedBefore <= 0) {
+      return {
+        availableBefore: String(availableBefore),
+        availableAfter: String(availableBefore),
+        reservedBefore: "0",
+        reservedAfter: "0",
+        activeQueueId: null,
+        activeMatchId: null,
+        reason: "No reserved funds"
+      };
+    }
+
+    // Check if player is in active matchmaking queue
+    let activeQueueId: string | null = null;
+    const queueSnap = await adminDb.collection('matchmakingQueue').doc(userId).get();
+    if (queueSnap.exists) {
+      const q = queueSnap.data() || {};
+      if (q.status === 'waiting') {
+        activeQueueId = userId;
+      }
+    }
+
+    // Check if player is in any active game/match
+    let activeMatchId: string | null = null;
+    const p1GamesSnap = await adminDb.collection('games')
+      .where('player1Id', '==', userId)
+      .get();
+    const p2GamesSnap = await adminDb.collection('games')
+      .where('player2Id', '==', userId)
+      .get();
+
+    const checkGameActive = (docSnap: any) => {
+      const g = docSnap.data() || {};
+      const status = g.status || "";
+      if (status !== 'completed' && status !== 'canceled' && status !== 'cancelled') {
+        activeMatchId = docSnap.id;
+      }
+    };
+
+    p1GamesSnap.forEach(checkGameActive);
+    p2GamesSnap.forEach(checkGameActive);
+
+    if (!activeQueueId && !activeMatchId) {
+      // Release funds! Move from reserved to available
+      const releaseKey = `auto_release_stale_${userId}_${Date.now()}`;
+      await runTransaction(firestoreInstance, async (transaction) => {
+        await moveUserTonBalance(
+          transaction,
+          userId,
+          reservedBefore,
+          'reserved',
+          'available',
+          'GAME_RESERVATION_REFUND',
+          { reason: 'auto_stale_release' },
+          releaseKey
+        );
+      });
+
+      console.log(`[STALE_RELEASE] Automatically released ${reservedBefore} Nano back to available for user ${userId}.`);
+
+      const updatedUserSnap = await userRef.get();
+      const updatedUserData = updatedUserSnap.data() || {};
+      const updatedTonAccount = getOrCreateTonAccount(updatedUserData, userId);
+
+      return {
+        availableBefore: String(availableBefore),
+        availableAfter: String(updatedTonAccount.availableNano),
+        reservedBefore: String(reservedBefore),
+        reservedAfter: String(updatedTonAccount.reservedNano),
+        activeQueueId: null,
+        activeMatchId: null,
+        reason: "No active queue or match found. Stale lock automatically released."
+      };
+    }
+
+    return {
+      availableBefore: String(availableBefore),
+      availableAfter: String(availableBefore),
+      reservedBefore: String(reservedBefore),
+      reservedAfter: String(reservedBefore),
+      activeQueueId,
+      activeMatchId,
+      reason: activeQueueId 
+        ? `User is currently in active matchmaking queue (Queue ID: ${activeQueueId}).`
+        : `User is currently in active match (Match ID: ${activeMatchId}).`
+    };
+  } catch (err: any) {
+    console.error(`[STALE_RELEASE_ERROR] Error checking/releasing stale reserved funds for ${userId}:`, err);
+    return { error: err.message };
+  }
+}
+
 function getTonCenterUrl(path: string): string {
   const host = TON_CONFIG.network === 'mainnet' ? 'toncenter.com' : 'testnet.toncenter.com';
   return `https://${host}${path}`;
@@ -1189,6 +1474,14 @@ function isDepositComment(text: string): boolean {
 
 function extractMessageText(inMsg: any): string {
   if (!inMsg) return "";
+  
+  // Try message_content.decoded.comment (v3 decoded payload)
+  if (inMsg.message_content && inMsg.message_content.decoded && typeof inMsg.message_content.decoded.comment === 'string') {
+    const text = inMsg.message_content.decoded.comment.trim();
+    if (isDepositComment(text)) {
+      return text;
+    }
+  }
   
   // Try raw message field
   if (typeof inMsg.message === 'string' && inMsg.message.trim() !== '') {
@@ -1259,9 +1552,15 @@ async function fetchTransactionsFromToncenter(address: string, network: string):
     if (data && Array.isArray(data.transactions)) {
       console.log(`[Toncenter V3] Successfully fetched ${data.transactions.length} transactions.`);
       for (const tx of data.transactions) {
+        let normalizedHash = tx.hash || "";
+        if (normalizedHash && normalizedHash.length === 44) {
+          try {
+            normalizedHash = Buffer.from(normalizedHash, 'base64').toString('hex');
+          } catch {}
+        }
         txs.push({
           version: 'v3',
-          hash: tx.hash,
+          hash: normalizedHash,
           lt: tx.lt,
           now: tx.now,
           in_msg: tx.in_msg ? {
@@ -1269,7 +1568,8 @@ async function fetchTransactionsFromToncenter(address: string, network: string):
             destination: tx.in_msg.destination,
             value: tx.in_msg.value,
             message: tx.in_msg.message,
-            decoded_body: tx.in_msg.decoded_body
+            decoded_body: tx.in_msg.decoded_body,
+            message_content: tx.in_msg.message_content
           } : null
         });
       }
@@ -1345,14 +1645,14 @@ async function moveUserTonBalance(
 ) {
   const ledgerTxRefReal = doc(firestoreInstance, 'ledgerTransactions', idempotencyKey);
   const ledgerTxSnap = await transaction.get(ledgerTxRefReal);
-  if (ledgerTxSnap.exists()) {
+  if (ledgerTxSnap.exists) {
     console.log(`[LEDGER_IDEMPOTENT] Ledger transaction ${idempotencyKey} already processed.`);
     return;
   }
 
   const userRefReal = doc(firestoreInstance, 'users', userId);
   const userSnap = await transaction.get(userRefReal);
-  if (!userSnap.exists()) {
+  if (!userSnap.exists) {
     throw new Error(`User profile ${userId} not found for TON balance move.`);
   }
 
@@ -1528,13 +1828,13 @@ async function creditUserTonDeposit(
 ) {
   const ledgerTxRefReal = doc(firestoreInstance, 'ledgerTransactions', idempotencyKey);
   const ledgerTxSnap = await transaction.get(ledgerTxRefReal);
-  if (ledgerTxSnap.exists()) {
+  if (ledgerTxSnap.exists) {
     return;
   }
 
   const userRefReal = doc(firestoreInstance, 'users', userId);
   const userSnap = await transaction.get(userRefReal);
-  if (!userSnap.exists()) {
+  if (!userSnap.exists) {
     throw new Error(`User profile ${userId} not found for deposit credit.`);
   }
 
@@ -1600,13 +1900,13 @@ async function confirmUserTonWithdrawal(
 ) {
   const ledgerTxRefReal = doc(firestoreInstance, 'ledgerTransactions', idempotencyKey);
   const ledgerTxSnap = await transaction.get(ledgerTxRefReal);
-  if (ledgerTxSnap.exists()) {
+  if (ledgerTxSnap.exists) {
     return;
   }
 
   const userRefReal = doc(firestoreInstance, 'users', userId);
   const userSnap = await transaction.get(userRefReal);
-  if (!userSnap.exists()) {
+  if (!userSnap.exists) {
     throw new Error(`User profile ${userId} not found for withdrawal confirmation.`);
   }
 
@@ -1753,7 +2053,7 @@ async function settleTonGame(matchId: string, winnerId: string, player1Id: strin
 
   await runTransaction(firestoreInstance, async (transaction) => {
     const ledgerSnap = await transaction.get(ledgerTxRefReal);
-    if (ledgerSnap.exists()) {
+    if (ledgerSnap.exists) {
       console.log(`[SETTLE_TON_GAME_IDEMPOTENT] Match ${matchId} already settled.`);
       return;
     }
@@ -1764,10 +2064,10 @@ async function settleTonGame(matchId: string, winnerId: string, player1Id: strin
       transaction.get(gameRefReal)
     ]);
 
-    if (!p1Snap.exists() || !p2Snap.exists()) {
+    if (!p1Snap.exists || !p2Snap.exists) {
       throw new Error("One or both player profiles do not exist for TON settlement.");
     }
-    if (!gameSnap.exists()) {
+    if (!gameSnap.exists) {
       throw new Error("Game session does not exist for TON settlement.");
     }
 
@@ -2649,7 +2949,19 @@ app.post('/api/ton/deposits/:depositId/verify', checkTonNetwork, async (req, res
     let validatedUser;
     try {
       validatedUser = getValidatedTelegramUser(req);
-    } catch (authErr) {
+    } catch (authErr: any) {
+      if (process.env.NODE_ENV === 'production' || !!process.env.K_REVISION) {
+        console.error("TON_DEPOSIT_POLL_AUTH_ERROR", {
+          depositId: req.params.depositId,
+          error: authErr.message
+        });
+        return res.status(401).json({
+          ok: false,
+          status: "error",
+          code: "TELEGRAM_AUTH_REQUIRED",
+          message: "⚠️ Telegram session required\n\nPlease reopen VIRAL Arena through @CyberDuellitebot."
+        });
+      }
       const verifiedUser = getRequestUser(req);
       validatedUser = { userId: verifiedUser.userId, username: verifiedUser.username || "" };
     }
@@ -2699,7 +3011,19 @@ app.post('/api/ton/deposit/verify', checkTonNetwork, async (req, res) => {
     let validatedUser;
     try {
       validatedUser = getValidatedTelegramUser(req);
-    } catch (authErr) {
+    } catch (authErr: any) {
+      if (process.env.NODE_ENV === 'production' || !!process.env.K_REVISION) {
+        console.error("TON_DEPOSIT_POLL_AUTH_ERROR", {
+          depositId: req.body.depositId,
+          error: authErr.message
+        });
+        return res.status(401).json({
+          ok: false,
+          status: "error",
+          code: "TELEGRAM_AUTH_REQUIRED",
+          message: "⚠️ Telegram session required\n\nPlease reopen VIRAL Arena through @CyberDuellitebot."
+        });
+      }
       const verifiedUser = getRequestUser(req);
       validatedUser = { userId: verifiedUser.userId, username: verifiedUser.username || "" };
     }
@@ -2861,6 +3185,9 @@ app.get('/api/ton/history', checkTonNetwork, async (req, res) => {
       return res.status(400).json({ error: "userId is required" });
     }
 
+    // Automatically check and release stale reserved funds first to keep history fully in sync
+    await checkAndReleaseStaleReservedFunds(targetUserId);
+
     const [depsSnap, withdrawsSnap, ledgerSnap, p1SettledSnap, p2SettledSnap] = await Promise.all([
       adminDb.collection('tonDeposits').where('telegramUserId', '==', targetUserId).get(),
       adminDb.collection('tonWithdrawals').where('telegramUserId', '==', targetUserId).get(),
@@ -2881,7 +3208,7 @@ app.get('/api/ton/history', checkTonNetwork, async (req, res) => {
         id: data.depositId,
         type: 'deposit',
         amountNano: data.actualAmountNano || data.expectedAmountNano,
-        status: data.status,
+        status: 'Credited',
         createdAt: data.createdAt,
         txHash: data.transactionHash || null
       });
@@ -2904,6 +3231,11 @@ app.get('/api/ton/history', checkTonNetwork, async (req, res) => {
         const data = d.data();
         const txId = data.transactionId;
         if (itemsMap.has(txId)) return;
+
+        // Skip internal deposit transactions to prevent duplicate history records
+        if (data.type === 'TON_DEPOSIT_CONFIRMED' || data.type === 'TON_DEPOSIT_CREDIT' || txId.startsWith('TON_DEPOSIT_CREDIT:')) {
+          return;
+        }
 
         let displayType = data.type.toLowerCase();
         let displayAmountNano = data.amountNano;
@@ -3121,13 +3453,13 @@ async function adjustUserTonBalance(
 ) {
   const ledgerTxRefReal = doc(firestoreInstance, 'ledgerTransactions', idempotencyKey);
   const ledgerTxSnap = await transaction.get(ledgerTxRefReal);
-  if (ledgerTxSnap.exists()) {
+  if (ledgerTxSnap.exists) {
     return;
   }
 
   const userRefReal = doc(firestoreInstance, 'users', userId);
   const userSnap = await transaction.get(userRefReal);
-  if (!userSnap.exists()) {
+  if (!userSnap.exists) {
     throw new Error(`User profile ${userId} not found.`);
   }
 
@@ -3422,7 +3754,7 @@ app.post('/api/mission/claim', async (req, res) => {
 
     const result = await runTransaction(firestoreInstance, async (transaction) => {
       const userSnap = await transaction.get(userRefReal);
-      if (!userSnap.exists()) {
+      if (!userSnap.exists) {
         throw new Error("user_not_found");
       }
 
@@ -4026,7 +4358,7 @@ app.post('/api/matchmaking/join', async (req, res) => {
         const matchResult = await runTransaction(firestoreInstance, async (transaction) => {
           // 1. Lock and read opponent's queue entry
           const oppSnap = await transaction.get(oppQueueRefReal);
-          if (!oppSnap.exists()) {
+          if (!oppSnap.exists) {
             throw new Error("opponent_queue_not_found");
           }
 
@@ -5395,7 +5727,7 @@ async function handleTelegramUpdate(update: any) {
         const chalRefReal = doc(firestoreInstance, 'challenges', challengeId);
         await runTransaction(firestoreInstance, async (transaction) => {
           const freshSnap = await transaction.get(chalRefReal);
-          if (!freshSnap.exists()) throw new Error("not_found");
+          if (!freshSnap.exists) throw new Error("not_found");
           const freshData = freshSnap.data() || {};
           if (freshData.status !== 'pending') throw new Error("status_changed");
 
@@ -5598,7 +5930,7 @@ async function handleTelegramUpdate(update: any) {
 
           const txResult = await runTransaction(firestoreInstance, async (transaction) => {
             const freshSnap = await transaction.get(chalRefReal);
-            if (!freshSnap.exists()) throw new Error("not_found");
+            if (!freshSnap.exists) throw new Error("not_found");
             const freshData = freshSnap.data() || {};
             if (freshData.status !== 'pending') throw new Error("already_accepted");
 
@@ -6759,7 +7091,7 @@ async function startTelegramBot() {
             const chalRefReal = doc(firestoreInstance, 'challenges', chDoc.id);
             await runTransaction(firestoreInstance, async (transaction) => {
               const freshSnap = await transaction.get(chalRefReal);
-              if (!freshSnap.exists()) throw new Error("not_found");
+              if (!freshSnap.exists) throw new Error("not_found");
               const freshData = freshSnap.data() || {};
               if (freshData.status !== 'pending') throw new Error("already_handled");
 

@@ -514,6 +514,8 @@ function GameAppInner() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [walletBalance, setWalletBalance] = useState<string>('0.00');
   const [balanceLoading, setBalanceLoading] = useState<boolean>(false);
+  const [balanceError, setBalanceError] = useState<boolean>(false);
+  const [balanceRefreshTrigger, setBalanceRefreshTrigger] = useState<number>(0);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [syncing, setSyncing] = useState<boolean>(false);
@@ -734,11 +736,23 @@ function GameAppInner() {
           body: JSON.stringify({ simulateOnChain: false })
         });
 
+        const isJson = res.headers.get('content-type')?.includes('application/json');
+        const data = isJson ? await res.json() : null;
+
         if (!res.ok) {
-          throw new Error(`HTTP error! status: ${res.status}`);
+          if (res.status === 401 && data && data.code === 'TELEGRAM_AUTH_REQUIRED') {
+            if (depositIntervalRef.current) {
+              clearInterval(depositIntervalRef.current);
+              depositIntervalRef.current = null;
+            }
+            setDepositPolling(false);
+            setDepositPendingStatus('failed');
+            setDepositVerifyError(data.message || "⚠️ Telegram authentication required.");
+            return;
+          }
+          throw new Error(data?.message || data?.error || `HTTP error! status: ${res.status}`);
         }
 
-        const data = await res.json();
         consecutiveServerErrors = 0; // Reset on successful server response
 
         if (data.success && (data.status === 'confirmed' || data.status === 'credited' || data.status === 'completed')) {
@@ -1505,6 +1519,7 @@ function GameAppInner() {
   useEffect(() => {
     if (!walletAddress) {
       setWalletBalance('0.00');
+      setBalanceError(false);
       return;
     }
     
@@ -1519,6 +1534,7 @@ function GameAppInner() {
           if (tData && tData.balance !== undefined) {
             const tonVal = parseFloat(tData.balance) / 1e9;
             setWalletBalance(tonVal.toFixed(2));
+            setBalanceError(false);
             setBalanceLoading(false);
             return;
           }
@@ -1535,12 +1551,13 @@ function GameAppInner() {
         if (data && data.ok && data.result) {
           const tonVal = parseFloat(data.result) / 1e9;
           setWalletBalance(tonVal.toFixed(2));
+          setBalanceError(false);
         } else {
-          setWalletBalance('0.00');
+          throw new Error("Invalid response from TON Center API");
         }
       } catch (err) {
         console.error("All TON RPC balance lookups failed:", err);
-        setWalletBalance('0.00');
+        setBalanceError(true);
       } finally {
         setBalanceLoading(false);
       }
@@ -1549,7 +1566,7 @@ function GameAppInner() {
     getBalance();
     const interval = setInterval(getBalance, 15000); // refresh every 15s
     return () => clearInterval(interval);
-  }, [walletAddress]);
+  }, [walletAddress, balanceRefreshTrigger]);
 
   // Trigger futuristic sound feedback when wallet connects
   useEffect(() => {
@@ -2329,17 +2346,29 @@ function GameAppInner() {
                   {/* TON Wallet */}
                   <div className="bg-[#0e1621]/80 rounded-2xl p-3 border border-[#242f3d]">
                     <span className="text-[9px] font-bold uppercase tracking-wider text-[#3390ec] block leading-none">TON {t('home.balance')}</span>
-                    <div className="flex items-baseline space-x-1 mt-2">
-                      <span className="text-xl font-black text-white leading-none">
-                        {balanceLoading ? (
+                    <div className="flex items-center space-x-1 mt-2 min-h-[24px]">
+                      {balanceLoading ? (
+                        <div className="flex items-center space-x-1">
                           <RefreshCw className="animate-spin w-3 h-3 text-[#3390ec]" />
-                        ) : walletAddress ? (
-                          walletBalance
-                        ) : (
-                          "0.00"
-                        )}
-                      </span>
-                      <span className="text-[9px] font-bold text-[#3390ec]">TON</span>
+                          <span className="text-xs text-[#708499]">{t('profile.loading') || 'Loading...'}</span>
+                        </div>
+                      ) : walletAddress && balanceError ? (
+                        <button
+                          onClick={() => setBalanceRefreshTrigger(prev => prev + 1)}
+                          className="text-[9px] px-2 py-0.5 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition flex items-center gap-1 font-bold uppercase tracking-wider cursor-pointer"
+                          title="Click to retry RPC call"
+                        >
+                          <RefreshCw className="w-2.5 h-2.5 animate-pulse" />
+                          Retry
+                        </button>
+                      ) : (
+                        <>
+                          <span className="text-xl font-black text-white leading-none">
+                            {walletAddress ? walletBalance : "0.00"}
+                          </span>
+                          <span className="text-[9px] font-bold text-[#3390ec]">TON</span>
+                        </>
+                      )}
                     </div>
                     <span className="text-[8px] text-[#708499] block mt-1.5 leading-tight">
                       {walletAddress ? t('profile.tonAddress').split(' ')[0] : t('profile.disconnected')}
@@ -2375,15 +2404,26 @@ function GameAppInner() {
                           {/* Connected Wallet Balance */}
                           <div className="bg-[#0e1621]/70 p-3 rounded-2xl border border-[#242f3d] flex flex-col justify-between">
                             <span className="text-[9px] text-[#708499] uppercase font-bold block leading-none">Wallet Balance</span>
-                            <div className="flex items-baseline space-x-1 mt-1.5">
-                              <span className="text-base font-black text-white leading-none">
-                                {balanceLoading ? (
-                                  <RefreshCw className="animate-spin w-3 h-3 text-[#3390ec]" />
-                                ) : (
-                                  walletBalance
-                                )}
-                              </span>
-                              <span className="text-[9px] font-bold text-[#3390ec]">TON</span>
+                            <div className="flex items-center space-x-1 mt-1.5 min-h-[20px]">
+                              {balanceLoading ? (
+                                <RefreshCw className="animate-spin w-3 h-3 text-[#3390ec]" />
+                              ) : balanceError ? (
+                                <button
+                                  onClick={() => setBalanceRefreshTrigger(prev => prev + 1)}
+                                  className="text-[9px] px-2 py-0.5 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition flex items-center gap-1 font-bold uppercase tracking-wider cursor-pointer"
+                                  title="Click to retry RPC call"
+                                >
+                                  <RefreshCw className="w-2 h-2 animate-pulse" />
+                                  Retry
+                                </button>
+                              ) : (
+                                <>
+                                  <span className="text-base font-black text-white leading-none">
+                                    {walletBalance}
+                                  </span>
+                                  <span className="text-[9px] font-bold text-[#3390ec]">TON</span>
+                                </>
+                              )}
                             </div>
                             <span className="text-[7.5px] text-[#708499] block mt-1 leading-none">On-Chain Wallet</span>
                           </div>
@@ -5218,7 +5258,7 @@ function GameAppInner() {
 
                           <div className="space-y-0.5 min-w-0">
                             <span className="font-bold text-white text-[11px] block truncate">
-                              {item.type === 'deposit' ? 'On-chain Deposit' :
+                              {item.type === 'deposit' ? 'TON Deposit' :
                                item.type === 'withdrawal' ? 'Outbound Withdrawal' :
                                item.type === 'game_win' ? 'Arena Match Win' :
                                item.type === 'game_loss' ? 'Arena Match Loss' :
@@ -5231,8 +5271,8 @@ function GameAppInner() {
                                 {item.createdAt ? new Date(item.createdAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : 'Recent'}
                               </span>
                               <span className={`text-[7.5px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded-full ${
-                                item.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400' :
-                                item.status === 'pending' ? 'bg-amber-500/10 text-amber-400 animate-pulse' :
+                                item.status === 'completed' || item.status === 'Credited' || item.status === 'credited' || item.status === 'confirmed' ? 'bg-emerald-500/10 text-emerald-400' :
+                                item.status === 'pending' || item.status === 'posted' ? 'bg-amber-500/10 text-amber-400 animate-pulse' :
                                 'bg-red-500/10 text-red-400'
                               }`}>
                                 {item.status}

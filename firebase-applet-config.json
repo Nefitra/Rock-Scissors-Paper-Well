@@ -6,5 +6,6 @@
   "firestoreDatabaseId": "ai-studio-8a8ccd56-f6a2-4be1-a666-859917405e4f",
   "storageBucket": "majestic-metrics-d7k72.firebasestorage.app",
   "messagingSenderId": "52536426129",
-  "measurementId": ""
+  "measurementId": "",
+  "oAuthClientId": "52536426129-8qsnuho8pc2h2loka6pg5s49c0ihr6ae.apps.googleusercontent.com"
 }
