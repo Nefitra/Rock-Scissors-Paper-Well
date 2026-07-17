@@ -450,6 +450,7 @@ function GameAppInner() {
   
   // Tabs: 'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows' | 'missions'
   const [activeTab, setActiveTab ] = useState<'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows' | 'missions'>('home');
+
   const [selectedLobbyMode, setSelectedLobbyMode] = useState<'free' | 'stake' | 'ton'>('free');
   const [selectedLobbyStake, setSelectedLobbyStake] = useState<number>(50);
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
@@ -470,6 +471,22 @@ function GameAppInner() {
   const [showTonHistoryModal, setShowTonHistoryModal] = useState<boolean>(false);
   const [showDepositSuccessOverlay, setShowDepositSuccessOverlay] = useState<boolean>(false);
   const [successDepositAmount, setSuccessDepositAmount] = useState<string>('1.00');
+
+  // QA Instrumentation Logs
+  console.log("[QA LOG] Render of Wallet screen / Dashboard (GameAppInner). Active Tab:", activeTab, "Deposit Success Overlay:", showDepositSuccessOverlay ? "VISIBLE" : "HIDDEN");
+
+  useEffect(() => {
+    console.log("[QA LOG] Active Tab changed to:", activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    console.log("[QA LOG] Modal visibility state updated:", {
+      showDepositModal,
+      showWithdrawModal,
+      showTonHistoryModal,
+      showDepositSuccessOverlay
+    });
+  }, [showDepositModal, showWithdrawModal, showTonHistoryModal, showDepositSuccessOverlay]);
   
   const [depositAmount, setDepositAmount] = useState<string>('1');
   const [depositLoading, setDepositLoading] = useState<boolean>(false);
@@ -488,6 +505,18 @@ function GameAppInner() {
   const [withdrawLoading, setWithdrawLoading] = useState<boolean>(false);
   const [withdrawSuccess, setWithdrawSuccess] = useState<string | null>(null);
   const [withdrawError, setWithdrawError] = useState<string | null>(null);
+  const [isWithdrawalSuccess, setIsWithdrawalSuccess] = useState<boolean>(false);
+  const [submittedWithdrawalAmount, setSubmittedWithdrawalAmount] = useState<string>('');
+  const withdrawTimerRef = useRef<any>(null);
+
+  // Clean up withdrawal timers on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (withdrawTimerRef.current) {
+        clearTimeout(withdrawTimerRef.current);
+      }
+    };
+  }, []);
 
   const [tonHistory, setTonHistory] = useState<any[]>([]);
   const [tonHistoryLoading, setTonHistoryLoading] = useState<boolean>(false);
@@ -694,13 +723,15 @@ function GameAppInner() {
   const handleSuccessfulDepositVerified = async (amount: string) => {
     // 0. Prevent concurrent executions of success handlers
     if (isHandlingDepositSuccessRef.current) {
-      console.log("[DEPOSIT] Success already being handled, skipping duplicate.");
+      console.log("[QA LOG] [DEPOSIT] Success already being handled, skipping duplicate.");
       return;
     }
     isHandlingDepositSuccessRef.current = true;
+    console.log("[QA LOG] [DEPOSIT] Success handler triggered. Amount:", amount);
 
     // 1. Immediately cancel polling to prevent duplicate checks or triggers
     if (depositIntervalRef.current) {
+      console.log("[QA LOG] Clearing deposit polling interval inside success handler.");
       clearInterval(depositIntervalRef.current);
       depositIntervalRef.current = null;
     }
@@ -708,11 +739,13 @@ function GameAppInner() {
     setDepositPendingStatus('completed');
 
     // 2. Refresh all balances immediately (sync profile and widgets)
+    console.log("[QA LOG] Syncing profile balance after successful deposit.");
     syncProfile();
 
     // 3. Refresh TON History in the background asynchronously without blocking UI rendering
     (async () => {
       try {
+        console.log("[QA LOG] Fetching updated TON ledger history...");
         const headers: any = {};
         const initData = (window as any).Telegram?.WebApp?.initData;
         if (initData) {
@@ -722,42 +755,22 @@ function GameAppInner() {
         const histData = await histRes.json();
         if (histData.history) {
           setTonHistory(histData.history);
+          console.log("[QA LOG] TON ledger history updated successfully.");
         }
       } catch (hErr) {
-        console.error("History refresh error:", hErr);
+        console.error("[QA LOG] History refresh error:", hErr);
       }
     })();
 
-    // 4. Play the satisfying victory win chime sound
+    // 4. Play the satisfying victory win chime sound (No graphics, safe audio trigger)
+    console.log("[QA LOG] Playing victory sound chime.");
     playWinChime();
 
-    // 5. Trigger gorgeous confetti animation from the top of the screen (optimized particle count)
-    confetti({
-      particleCount: 100, // Reduced to 100 for optimal performance on low-end mobile devices
-      spread: 75,
-      origin: { y: 0.05 },
-      disableForReducedMotion: true
-    });
-    
-    // A couple of extra side bursts for extra celebratory feel!
-    setTimeout(() => {
-      confetti({
-        particleCount: 40, // Reduced from 70 to 40
-        angle: 60,
-        spread: 45,
-        origin: { x: 0, y: 0.1 },
-        disableForReducedMotion: true
-      });
-      confetti({
-        particleCount: 40, // Reduced from 70 to 40
-        angle: 120,
-        spread: 45,
-        origin: { x: 1, y: 0.1 },
-        disableForReducedMotion: true
-      });
-    }, 300);
+    // 5. Visual effects disabled for maximum stability & zero flicker (Requirement 1)
+    console.log("[QA LOG] Confetti and heavy visual effects disabled for performance and stability.");
 
     // 6. Clear localStorage on successful credit
+    console.log("[QA LOG] Clearing pending deposit localStorage state.");
     localStorage.removeItem('pending_deposit_id');
     localStorage.removeItem('pending_deposit_amount');
     localStorage.removeItem('pending_deposit_amount_nano');
@@ -769,16 +782,18 @@ function GameAppInner() {
     setShowDepositSuccessOverlay(true);
 
     // 8. Automatically close everything in a controlled, staggered sequence (Requirement 4)
+    console.log("[QA LOG] Setting timers for auto-closing Success Overlay and Modals (staggered, 2.8s total)");
     setTimeout(() => {
-      // Step A: Close Success Overlay first to animate fade-out smoothly
+      console.log("[QA LOG] Timer callback: closing Success Overlay (fade-out phase).");
       setShowDepositSuccessOverlay(false);
       
-      // Step B: Wait for overlay exit animation to finish, then close standard underlying modals
       setTimeout(() => {
+        console.log("[QA LOG] Timer callback: closing deposit standard modals & resetting success lock state.");
         setShowDepositModal(false);
         setShowTonHistoryModal(false);
         setDepositPendingId(null);
         isHandlingDepositSuccessRef.current = false;
+        console.log("[QA LOG] Return to Wallet screen. All cleanups complete.");
       }, 400);
     }, 2800);
   };
@@ -804,6 +819,7 @@ function GameAppInner() {
     let consecutiveServerErrors = 0;
 
     depositIntervalRef.current = setInterval(async () => {
+      console.log(`[QA LOG] Polling callback executing. Pending ID: ${pendingId}. Elapsed: ${Date.now() - startTime}ms`);
       // 120 seconds timeout limit check (Requirement 6)
       if (Date.now() - startTime >= durationLimit) {
         if (depositIntervalRef.current) {
@@ -930,6 +946,10 @@ function GameAppInner() {
   };
 
   const handleRequestWithdrawal = async () => {
+    if (withdrawLoading || isWithdrawalSuccess) {
+      console.log("[QA LOG] Withdrawal already in progress or completed, ignoring duplicate request.");
+      return;
+    }
     if (!wallet || !walletAddress) {
       setWithdrawError("Please connect your wallet first.");
       return;
@@ -941,6 +961,12 @@ function GameAppInner() {
       } else {
         setWithdrawError("Please switch your wallet to TON Testnet.");
       }
+      return;
+    }
+
+    const amt = parseFloat(withdrawAmount);
+    if (isNaN(amt) || amt < 1.0 || amt > 100.0) {
+      setWithdrawError("Please enter a valid amount between 1.0 and 100.0 TON.");
       return;
     }
 
@@ -957,21 +983,61 @@ function GameAppInner() {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          amount: parseFloat(withdrawAmount),
+          amount: amt,
           walletAddress: walletAddress
         })
       });
       const data = await res.json();
       if (data.error) {
         setWithdrawError(data.error);
+        setWithdrawLoading(false);
       } else {
-        setWithdrawSuccess(`Success! Your withdrawal request of ${withdrawAmount} TON has been submitted and is processing.`);
+        // Clear any previous timer
+        if (withdrawTimerRef.current) {
+          clearTimeout(withdrawTimerRef.current);
+        }
+
+        setIsWithdrawalSuccess(true);
+        setSubmittedWithdrawalAmount(amt.toFixed(2));
+        setWithdrawSuccess(`Success! Your withdrawal request of ${amt.toFixed(2)} TON has been submitted and is processing.`);
         setWithdrawAmount('');
-        syncProfile();
+        setWithdrawLoading(false);
+
+        console.log("[QA LOG] [WITHDRAW] Request successfully accepted. Initializing 2.5s auto-close timer.");
+        
+        // 2.5s Close timer (Requirement 4)
+        withdrawTimerRef.current = setTimeout(() => {
+          console.log("[QA LOG] [WITHDRAW] Timer callback executing. Closing modal and resetting states.");
+          setShowWithdrawModal(false);
+          setIsWithdrawalSuccess(false);
+          setWithdrawSuccess(null);
+          setWithdrawError(null);
+        }, 2500);
+
+        // Async Background Updates of All Wallet-related States (no reload/remount, Requirement 7 & 8)
+        (async () => {
+          try {
+            console.log("[QA LOG] [WITHDRAW] Fetching updated profile / game balance...");
+            await syncProfile();
+            
+            console.log("[QA LOG] [WITHDRAW] Refreshing TON ledger history in background...");
+            const h: any = {};
+            if (initData) {
+              h['x-telegram-init-data'] = initData;
+            }
+            const histRes = await fetch('/api/ton/history', { headers: h });
+            const histData = await histRes.json();
+            if (histData.history) {
+              setTonHistory(histData.history);
+              console.log("[QA LOG] [WITHDRAW] Wallet ledger history updated successfully in background.");
+            }
+          } catch (bgErr) {
+            console.error("[QA LOG] [WITHDRAW] Background wallet refresh error:", bgErr);
+          }
+        })();
       }
     } catch (e: any) {
       setWithdrawError(e.message);
-    } finally {
       setWithdrawLoading(false);
     }
   };
@@ -5118,7 +5184,12 @@ function GameAppInner() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => { playClickSound(); setShowWithdrawModal(false); }}
+              onClick={() => {
+                if (!isWithdrawalSuccess) {
+                  playClickSound();
+                  setShowWithdrawModal(false);
+                }
+              }}
               className="absolute inset-0 bg-black/80 backdrop-blur-xs"
             />
             
@@ -5133,16 +5204,48 @@ function GameAppInner() {
                   <ArrowUpRight className="w-5 h-5 text-purple-400" />
                   Withdraw TON
                 </span>
-                <button
-                  id="btn_close_withdraw_modal"
-                  onClick={() => { playClickSound(); setShowWithdrawModal(false); }}
-                  className="p-1 rounded-sm hover:bg-[#242f3d] text-[#708499] hover:text-white transition cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+                {!isWithdrawalSuccess && (
+                  <button
+                    id="btn_close_withdraw_modal"
+                    onClick={() => { playClickSound(); setShowWithdrawModal(false); }}
+                    className="p-1 rounded-sm hover:bg-[#242f3d] text-[#708499] hover:text-white transition cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                )}
               </div>
 
-              {tonConfig?.withdrawalsDisabledByConfigError ? (
+              {isWithdrawalSuccess ? (
+                <div className="flex flex-col items-center justify-center py-6 text-center space-y-5">
+                  {/* Clean, stable checkmark - static for solid mobile performance */}
+                  <div className="w-16 h-16 rounded-full bg-emerald-500 text-[#0e1621] flex items-center justify-center shadow-lg">
+                    <Check className="w-9 h-9 stroke-[3]" />
+                  </div>
+
+                  {/* Messages */}
+                  <div className="space-y-1.5">
+                    <h3 className="text-base font-black text-emerald-400 uppercase tracking-wider">
+                      Request Submitted!
+                    </h3>
+                    <p className="text-xs text-[#b2c1d4] px-1 leading-relaxed">
+                      Your withdrawal request has been successfully created and is now processing.
+                    </p>
+                  </div>
+
+                  {/* Plain, clean card showing requested details */}
+                  <div className="w-full bg-[#0e1621] border border-emerald-500/10 rounded-2xl p-4 flex flex-col items-center justify-center space-y-1">
+                    <span className="text-[9px] text-[#708499] uppercase tracking-widest font-black">Outbound Amount</span>
+                    <span className="text-xl font-black text-emerald-400 font-mono">
+                      -{submittedWithdrawalAmount} TON
+                    </span>
+                  </div>
+
+                  {/* Auto-close status message */}
+                  <span className="text-[9.5px] text-[#708499] uppercase tracking-wider font-semibold">
+                    Returning to Wallet in 2.5s...
+                  </span>
+                </div>
+              ) : tonConfig?.withdrawalsDisabledByConfigError ? (
                 <div className="bg-red-500/15 border border-red-500/30 text-red-400 p-4 rounded-2xl text-xs font-medium text-center space-y-2">
                   <p className="font-bold uppercase tracking-wider">⚠️ Withdrawal Config Error</p>
                   <p className="text-[11px] opacity-85 leading-relaxed font-mono break-all">{tonConfig?.configErrorMessage || "Derived hot wallet address does not match TON_HOT_WALLET_ADDRESS"}</p>
@@ -5351,116 +5454,50 @@ function GameAppInner() {
         {/* DEPOSIT SUCCESS OVERLAY */}
         {showDepositSuccessOverlay && (
           <div id="modal_deposit_success" key="modal_deposit_success" className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/90 backdrop-blur-md"
-            />
+            {/* Plain solid static black background - zero blur, zero GPU rendering */}
+            <div className="absolute inset-0 bg-[#0e1621]" />
             
-            <motion.div
-              initial={{ scale: 0.8, opacity: 0, y: 50 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.8, opacity: 0, y: -50 }}
-              transition={{ type: "spring", damping: 25, stiffness: 350 }}
-              className="bg-radial from-[#1e2e3e] to-[#111921] border border-emerald-500/40 rounded-3xl p-8 w-full max-w-sm relative z-10 shadow-3xl text-center overflow-hidden flex flex-col items-center justify-center space-y-6"
-            >
-              {/* Top ambient lights/sparkles */}
-              <div className="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-transparent via-emerald-400 to-transparent blur-md opacity-70" />
+            {/* Simple static success dialog with zero visual effects or animations */}
+            <div className="bg-[#17212b] border-2 border-emerald-500/30 rounded-3xl p-8 w-full max-w-sm relative z-10 shadow-2xl text-center flex flex-col items-center justify-center space-y-6">
               
-              {/* Polished custom floating checkmark & sparkles */}
+              {/* Polished custom floating checkmark - static, no pulsing or glowing */}
               <div className="relative">
-                {/* Outer pulsing ring */}
-                <motion.div 
-                  initial={{ scale: 0.8, opacity: 0 }}
-                  animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
-                  transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-                  className="absolute -inset-4 rounded-full bg-emerald-500/20 blur-xl"
-                />
-                
-                {/* Main animated success ring */}
-                <motion.div 
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ delay: 0.1, type: "spring", stiffness: 200, damping: 12 }}
-                  className="w-20 h-20 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-400 text-[#0e1621] flex items-center justify-center shadow-lg relative z-10"
-                >
-                  <motion.svg 
+                {/* Main success ring - static, no animations */}
+                <div className="w-20 h-20 rounded-full bg-emerald-500 text-[#0e1621] flex items-center justify-center shadow-lg relative z-10">
+                  <svg 
                     xmlns="http://www.w3.org/2000/svg" 
                     fill="none" 
                     viewBox="0 0 24 24" 
-                    strokeWidth={3} 
+                    strokeWidth={3.5} 
                     stroke="currentColor" 
-                    className="w-10 h-10"
-                    initial={{ pathLength: 0 }}
-                    animate={{ pathLength: 1 }}
-                    transition={{ delay: 0.3, duration: 0.5, ease: "easeOut" }}
+                    className="w-11 h-11"
                   >
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                  </motion.svg>
-                </motion.div>
-
-                {/* Floating sparkles */}
-                <motion.span 
-                  animate={{ y: [0, -10, 0], opacity: [0, 1, 0] }}
-                  transition={{ repeat: Infinity, duration: 1.5, delay: 0.2 }}
-                  className="absolute -top-3 -left-3 text-lg"
-                >
-                  ✨
-                </motion.span>
-                <motion.span 
-                  animate={{ y: [0, -12, 0], opacity: [0, 1, 0] }}
-                  transition={{ repeat: Infinity, duration: 1.8, delay: 0.6 }}
-                  className="absolute -bottom-2 -right-3 text-lg"
-                >
-                  ✨
-                </motion.span>
-                <motion.span 
-                  animate={{ scale: [0.8, 1.2, 0.8], opacity: [0.4, 1, 0.4] }}
-                  transition={{ repeat: Infinity, duration: 1.2 }}
-                  className="absolute top-1/2 -right-6 text-sm"
-                >
-                  ⭐
-                </motion.span>
+                  </svg>
+                </div>
               </div>
 
               {/* Success Messages */}
               <div className="space-y-2 relative z-10">
-                <motion.h3 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.2 }}
-                  className="text-lg font-black text-white uppercase tracking-wider bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent"
-                >
+                <h3 className="text-xl font-bold text-emerald-400 uppercase tracking-wider">
                   Deposit Successful!
-                </motion.h3>
-                <motion.p 
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.3 }}
-                  className="text-xs text-[#b2c1d4] px-2 leading-relaxed"
-                >
-                  Deposit Successful! <span className="text-emerald-400 font-bold">+{parseFloat(successDepositAmount).toFixed(2)} TON</span> has been added to your Game Balance.
-                </motion.p>
+                </h3>
+                <p className="text-xs text-[#b2c1d4] px-2 leading-relaxed">
+                  The deposit has completed. <span className="text-emerald-400 font-bold font-mono">+{parseFloat(successDepositAmount).toFixed(2)} TON</span> has been added to your Game Balance.
+                </p>
               </div>
 
-              {/* Sparkle background container */}
-              <div className="w-full bg-[#182533] border border-emerald-500/20 rounded-2xl p-4 flex flex-col items-center justify-center space-y-1 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-500/5 rounded-full blur-xl" />
+              {/* Simple background container */}
+              <div className="w-full bg-[#0e1621] border border-emerald-500/10 rounded-2xl p-4 flex flex-col items-center justify-center space-y-1 relative">
                 <span className="text-[10px] text-[#708499] uppercase tracking-widest font-black">Credited TON</span>
                 <span className="text-2xl font-black text-emerald-400 tracking-tight font-mono">+{parseFloat(successDepositAmount).toFixed(2)} TON</span>
               </div>
 
-              {/* Progress indicator */}
-              <div className="w-2/3 h-1 bg-white/10 rounded-full overflow-hidden relative">
-                <motion.div 
-                  initial={{ width: "0%" }}
-                  animate={{ width: "100%" }}
-                  transition={{ duration: 2.5, ease: "linear" }}
-                  className="h-full bg-emerald-400 rounded-full"
-                />
-              </div>
-            </motion.div>
+              {/* Close helper status */}
+              <span className="text-[9px] text-[#708499] uppercase tracking-wider font-semibold">
+                Returning to Wallet in 2.8s...
+              </span>
+            </div>
           </div>
         )}
       </AnimatePresence>
