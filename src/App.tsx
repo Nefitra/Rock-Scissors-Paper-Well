@@ -497,6 +497,7 @@ function GameAppInner() {
   const [depositTreasuryAddress, setDepositTreasuryAddress] = useState<string>('');
   const [depositAmountNano, setDepositAmountNano] = useState<string>('');
   const [depositPolling, setDepositPolling] = useState<boolean>(false);
+  const [isAppVisible, setIsAppVisible] = useState<boolean>(true);
   const [floatingNotification, setFloatingNotification] = useState<string | null>(null);
   const depositIntervalRef = useRef<any>(null);
   const isHandlingDepositSuccessRef = useRef<boolean>(false);
@@ -1602,11 +1603,44 @@ function GameAppInner() {
     syncProfile();
   }, [currentTgId, currentUsername, walletAddress, currentLanguage]);
 
+  // Track Telegram App visibility state to pause/resume background tasks (Requirement 4)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const visible = document.visibilityState === 'visible';
+      console.log(`[QA LOG] App visibility change detected. Is visible: ${visible}`);
+      setIsAppVisible(visible);
+      if (visible) {
+        console.log("[QA LOG] App active again. Performing controlled refresh...");
+        syncProfile();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [currentTgId]);
+
+  // Manage deposit polling based on App visibility
+  useEffect(() => {
+    if (!isAppVisible) {
+      if (depositIntervalRef.current) {
+        clearInterval(depositIntervalRef.current);
+        depositIntervalRef.current = null;
+      }
+    } else {
+      if (depositPendingId && depositPolling) {
+        startDepositPolling(depositPendingId, depositAmount);
+      }
+    }
+  }, [isAppVisible, depositPendingId, depositPolling]);
+
   // Fetch Wallet Balance dynamically using official TON RPC/Center APIs
   useEffect(() => {
-    if (!walletAddress) {
-      setWalletBalance('0.00');
-      setBalanceError(false);
+    if (!walletAddress || !isAppVisible) {
+      if (!walletAddress) {
+        setWalletBalance('0.00');
+        setBalanceError(false);
+      }
       return;
     }
     
@@ -1653,7 +1687,7 @@ function GameAppInner() {
     getBalance();
     const interval = setInterval(getBalance, 15000); // refresh every 15s
     return () => clearInterval(interval);
-  }, [walletAddress, balanceRefreshTrigger]);
+  }, [walletAddress, balanceRefreshTrigger, isAppVisible]);
 
   // Trigger futuristic sound feedback when wallet connects
   useEffect(() => {
@@ -1665,7 +1699,7 @@ function GameAppInner() {
 
   // Unified Game Session Poller (handles searching queue, countdown progression, move selections, active resolving, and completing matches)
   useEffect(() => {
-    if (!activeGame) return;
+    if (!activeGame || !isAppVisible) return;
     if (activeGame.status === 'completed' || activeGame.status === 'canceled' || activeGame.status === 'cancelled') return;
 
     const interval = setInterval(async () => {
@@ -1713,12 +1747,12 @@ function GameAppInner() {
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [activeGame?.id, activeGame?.status, currentTgId]);
+  }, [activeGame?.id, activeGame?.status, currentTgId, isAppVisible]);
 
   // Track countdown tick locally for fluid 1-second UI counting
   useEffect(() => {
     const arenaState = getArenaState();
-    if (arenaState !== 'countdown') return;
+    if (arenaState !== 'countdown' || !isAppVisible) return;
 
     const interval = setInterval(() => {
       // Force local re-render to update Date.now() difference
@@ -1726,7 +1760,7 @@ function GameAppInner() {
     }, 250);
 
     return () => clearInterval(interval);
-  }, [activeGame?.matchedAt, activeGame?.status]);
+  }, [activeGame?.matchedAt, activeGame?.status, isAppVisible]);
 
   // Fetch Admin Metrics if in admin tab
   const fetchAdminMetrics = async () => {
@@ -4629,7 +4663,7 @@ function GameAppInner() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => { playClickSound(); setShowInfoModal(false); }}
-              className="absolute inset-0 bg-black/75 backdrop-blur-xs"
+              className="absolute inset-0 bg-black/80"
             />
             
             {/* Modal Box */}
@@ -4724,7 +4758,7 @@ function GameAppInner() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => { playClickSound(); setShowRankTiersModal(false); }}
-              className="absolute inset-0 bg-black/85 backdrop-blur-xs"
+              className="absolute inset-0 bg-black/90"
             />
             
             {/* Modal Box */}
@@ -4819,7 +4853,7 @@ function GameAppInner() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => { playClickSound(); setPromotedRank(null); }}
-              className="absolute inset-0 bg-slate-950/85 backdrop-blur-md"
+              className="absolute inset-0 bg-slate-950/90"
             />
             
             {/* Celebration Modal Box */}
@@ -4870,7 +4904,7 @@ function GameAppInner() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => { playClickSound(); setShowReferralQrModal(false); }}
-              className="absolute inset-0 bg-black/80 backdrop-blur-xs"
+              className="absolute inset-0 bg-black/85"
             />
             
             {/* Modal Box */}
@@ -4946,7 +4980,7 @@ function GameAppInner() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => { playClickSound(); setShowDepositModal(false); }}
-              className="absolute inset-0 bg-black/70 backdrop-blur-xs"
+              className="absolute inset-0 bg-black/80"
             />
             
             <motion.div
@@ -5191,17 +5225,14 @@ function GameAppInner() {
         {/* TON WITHDRAWAL MODAL */}
         {showWithdrawModal && (
           <div id="modal_ton_withdraw" key="modal_ton_withdraw" className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+            <div
               onClick={() => {
                 if (!isWithdrawalSuccess) {
                   playClickSound();
                   setShowWithdrawModal(false);
                 }
               }}
-              className="absolute inset-0 bg-black/70 backdrop-blur-xs"
+              className="absolute inset-0 bg-black/80"
             />
             
             <motion.div
@@ -5330,8 +5361,6 @@ function GameAppInner() {
             </motion.div>
           </div>
         )}
-
-        {/* TON LEDGER HISTORY MODAL */}
         {showTonHistoryModal && (
           <div id="modal_ton_history" key="modal_ton_history" className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
@@ -5339,7 +5368,7 @@ function GameAppInner() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => { playClickSound(); setShowTonHistoryModal(false); }}
-              className="absolute inset-0 bg-black/70 backdrop-blur-xs"
+              className="absolute inset-0 bg-black/80"
             />
             
             <motion.div
@@ -5470,19 +5499,9 @@ function GameAppInner() {
         {/* DEPOSIT SUCCESS OVERLAY */}
         {showDepositSuccessOverlay && (
           <div id="modal_deposit_success" key="modal_deposit_success" className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/70 backdrop-blur-xs"
-            />
+            <div className="absolute inset-0 bg-black/80" />
             
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0, y: 15 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.95, opacity: 0, y: 15 }}
-              className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-6 w-full max-w-sm relative z-10 shadow-2xl text-center flex flex-col items-center justify-center space-y-4"
-            >
+            <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-6 w-full max-w-sm relative z-10 shadow-2xl text-center flex flex-col items-center justify-center space-y-4">
               <div className="w-14 h-14 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto shadow-lg">
                 <Check className="w-7 h-7 stroke-[2.5]" />
               </div>
@@ -5504,7 +5523,7 @@ function GameAppInner() {
               <span className="text-[9px] text-[#708499] uppercase tracking-wider font-semibold">
                 Returning to Wallet in 2.8s...
               </span>
-            </motion.div>
+            </div>
           </div>
         )}
       </AnimatePresence>

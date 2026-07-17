@@ -566,7 +566,8 @@ async function runStartupFinancialDiagnostic() {
       isClientMode = true;
     }
 
-    // 4. Verify write/read access to tonProcessedTransactions (Access Test)
+    // 4. Verify write/read access to tonProcessedTransactions (Access Test - Commented out to eliminate startup reads/writes)
+    /*
     const testRef = adminDb.collection('tonProcessedTransactions').doc('diagnostic_startup_test');
     await testRef.set({
       test: true,
@@ -578,8 +579,10 @@ async function runStartupFinancialDiagnostic() {
     }
     await testRef.delete();
     console.log("[DIAGNOSTIC] IAM validation write/read test PASSED successfully!");
+    */
 
-    // Revert the simulated withdrawal WD_1783973796750_8C9B8E if it is currently marked completed/sent
+    // Revert the simulated withdrawal WD_1783973796750_8C9B8E if it is currently marked completed/sent (Commented out to eliminate startup reads/writes)
+    /*
     const wIdToRevert = 'WD_1783973796750_8C9B8E';
     try {
       const wRef = adminDb.collection('withdrawals').doc(wIdToRevert);
@@ -639,6 +642,7 @@ async function runStartupFinancialDiagnostic() {
     } catch (recErr: any) {
       console.error(`[RECOVERY] Error during simulated withdrawal recovery:`, recErr);
     }
+    */
 
     // 4. Derive and validate hot wallet from mnemonic
     const mnemonic = process.env.TON_HOT_WALLET_MNEMONIC;
@@ -2796,6 +2800,7 @@ async function processWithdrawals() {
 
     const withdrawalsSnap = await adminDb.collection('tonWithdrawals')
       .where('status', '==', 'requested')
+      .limit(10)
       .get();
 
     for (const docSnap of withdrawalsSnap.docs) {
@@ -4357,10 +4362,26 @@ app.post('/api/user/claim-daily', async (req, res) => {
   }
 });
 
+// Global cache variables for Leaderboard (Optimizes reads and eliminates exhaustion)
+let leaderboardCache: any[] | null = null;
+let leaderboardCacheTime = 0;
+const LEADERBOARD_CACHE_TTL = 60000; // 60 seconds
+
 // 3a. Global Leaderboard top 10 (returns extended metrics)
 app.get('/api/leaderboard', async (req, res) => {
   try {
-    const usersSnap = await db.collection('users').get();
+    const now = Date.now();
+    if (leaderboardCache && (now - leaderboardCacheTime < LEADERBOARD_CACHE_TTL)) {
+      console.log("[CACHE LOG] Serving leaderboard from memory cache...");
+      return res.json({ leaderboard: leaderboardCache.slice(0, 10) });
+    }
+
+    console.log("[CACHE LOG] Leaderboard cache expired or empty. Fetching from Firestore...");
+    const usersSnap = await db.collection('users')
+      .orderBy('wins', 'desc')
+      .limit(50)
+      .get();
+
     const usersList: any[] = [];
     usersSnap.forEach((d) => {
       const data = d.data() || {};
@@ -4382,6 +4403,9 @@ app.get('/api/leaderboard', async (req, res) => {
       if (b.wins !== a.wins) return b.wins - a.wins;
       return b.gamesPlayed - a.gamesPlayed;
     });
+
+    leaderboardCache = usersList;
+    leaderboardCacheTime = now;
 
     const top10 = usersList.slice(0, 10);
     res.json({ leaderboard: top10 });
@@ -5895,6 +5919,11 @@ app.get('/api/game/:gameId', async (req, res) => {
   }
 });
 
+// Global cache variables for Admin Metrics (Optimizes reads and eliminates exhaustion)
+let adminMetricsCache: any = null;
+let adminMetricsCacheTime = 0;
+const ADMIN_METRICS_CACHE_TTL = 120000; // 2 minutes
+
 // 6. Admin Panel data retrieval
 app.get('/api/admin/metrics', async (req, res) => {
   try {
@@ -5912,15 +5941,26 @@ app.get('/api/admin/metrics', async (req, res) => {
       return res.status(403).json({ error: `Access Denied. User @${requestorId} is not an approved Telegram Admin.` });
     }
 
-    // Fetch all users
-    const usersSnap = await db.collection('users').get();
+    const nowTime = Date.now();
+    if (adminMetricsCache && (nowTime - adminMetricsCacheTime < ADMIN_METRICS_CACHE_TTL)) {
+      console.log("[CACHE LOG] Serving admin metrics from memory cache...");
+      return res.json({
+        authorized: true,
+        ...adminMetricsCache
+      });
+    }
+
+    console.log("[CACHE LOG] Admin metrics cache expired or empty. Fetching from Firestore with limits...");
+
+    // Fetch users (limit to 100 to avoid reading thousands of documents)
+    const usersSnap = await db.collection('users').limit(100).get();
     const usersList: any[] = [];
     usersSnap.forEach((d) => {
       usersList.push(d.data());
     });
 
-    // Fetch games limit 100
-    const gamesSnap = await db.collection('games').get();
+    // Fetch games (limit 100)
+    const gamesSnap = await db.collection('games').orderBy('createdAt', 'desc').limit(100).get();
     const gamesList: any[] = [];
     gamesSnap.forEach((d) => {
       gamesList.push(d.data());
@@ -5937,8 +5977,8 @@ app.get('/api/admin/metrics', async (req, res) => {
       totalReferrals: usersList.reduce((acc, u) => acc + (u.referralsCountL1 || 0) + (u.referralsCountL2 || 0), 0)
     };
 
-    // Fetch matchmakingQueue and compute detailed metrics
-    const queueSnap = await db.collection('matchmakingQueue').get();
+    // Fetch matchmakingQueue (limit 100)
+    const queueSnap = await db.collection('matchmakingQueue').orderBy('createdAt', 'desc').limit(100).get();
     const queueList: any[] = [];
     queueSnap.forEach((d) => {
       queueList.push(d.data());
@@ -5968,13 +6008,18 @@ app.get('/api/admin/metrics', async (req, res) => {
       cloudRunRevision: process.env.K_REVISION || "local_dev"
     };
 
-    res.json({
-      authorized: true,
+    adminMetricsCache = {
       stats,
       users: usersList,
       games: gamesList.slice(0, 50), // output last 50 games for high performance
       matchmakingQueue: queueList,
       matchmakingStats
+    };
+    adminMetricsCacheTime = nowTime;
+
+    res.json({
+      authorized: true,
+      ...adminMetricsCache
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -5998,7 +6043,9 @@ app.post('/api/admin/matchmaking/cleanup', async (req, res) => {
       return res.status(403).json({ error: `Access Denied. User @${requestorId} is not an approved Telegram Admin.` });
     }
 
-    const queueSnap = await db.collection('matchmakingQueue').get();
+    const queueSnap = await db.collection('matchmakingQueue')
+      .where('status', '==', 'waiting')
+      .get();
     let cleanedCount = 0;
     const now = Date.now();
 
@@ -6202,8 +6249,11 @@ app.post('/api/admin/pinned-message', async (req, res) => {
       return res.status(400).json({ error: "TELEGRAM_BOT_TOKEN is not configured." });
     }
 
-    // Fetch and sort users to construct Leaderboard
-    const usersSnap = await db.collection('users').get();
+    // Fetch and sort users to construct Leaderboard (Optimized to top 50 only)
+    const usersSnap = await db.collection('users')
+      .orderBy('wins', 'desc')
+      .limit(50)
+      .get();
     const list: any[] = [];
     usersSnap.forEach((d) => {
       const data = d.data() || {};
@@ -6345,21 +6395,37 @@ app.post('/api/admin/cancel-challenge', async (req, res) => {
   }
 });
 
+// Global cache variables for Settings (Optimizes reads and eliminates exhaustion)
+let settingsCache: any = null;
+let settingsCacheTime = 0;
+const SETTINGS_CACHE_TTL = 300000; // 5 minutes
+
 // GET global settings
 app.get('/api/settings', async (req, res) => {
   try {
+    const now = Date.now();
+    if (settingsCache && (now - settingsCacheTime < SETTINGS_CACHE_TTL)) {
+      console.log("[CACHE LOG] Serving settings from memory cache...");
+      return res.json(settingsCache);
+    }
+
+    console.log("[CACHE LOG] Settings cache expired or empty. Fetching from Firestore...");
     const settingsDocName = 'global_settings';
     const settingsRef = db.collection('settings').doc(settingsDocName);
     const snap = await settingsRef.get();
     if (snap.exists) {
-      res.json(snap.data());
+      const data = snap.data();
+      settingsCache = data;
+      settingsCacheTime = now;
+      res.json(data);
     } else {
       // Default configurations
-      res.json({
+      const defaultSettings = {
         botUsername: "RpsRockPaperBot",
         appName: "play",
         webUrl: ""
-      });
+      };
+      res.json(defaultSettings);
     }
   } catch (error: any) {
     console.error("Error retrieving settings:", error);
@@ -6387,6 +6453,11 @@ app.post('/api/settings', async (req, res) => {
       appName: appName || "",
       webUrl: webUrl || ""
     });
+
+    // Invalidate settings cache
+    settingsCache = null;
+    settingsCacheTime = 0;
+
     res.json({ success: true });
   } catch (error: any) {
     console.error("Error saving settings:", error);
@@ -7286,7 +7357,10 @@ async function handleTelegramUpdate(update: any) {
     } 
     else if (command === '/top' || command === '/leaderboard') {
       try {
-        const usersSnap = await db.collection('users').get();
+        const usersSnap = await db.collection('users')
+          .orderBy('wins', 'desc')
+          .limit(50)
+          .get();
         const list: any[] = [];
         usersSnap.forEach((d) => {
           const data = d.data() || {};
@@ -7859,6 +7933,7 @@ async function startTelegramBot() {
       const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const expiredGames = await db.collection('games')
         .where('status', '==', 'waiting')
+        .limit(15)
         .get();
 
       for (const doc of expiredGames.docs) {
@@ -7899,6 +7974,7 @@ async function startTelegramBot() {
       // (b) Handle new custom challenges expiration (Requirement 11)
       const expiredChallenges = await db.collection('challenges')
         .where('status', '==', 'pending')
+        .limit(15)
         .get();
 
       for (const chDoc of expiredChallenges.docs) {
@@ -8042,6 +8118,7 @@ async function runDepositScanCycle() {
     const nowIso = new Date().toISOString();
     const pendingSnap = await db.collection('tonDeposits')
       .where('status', 'in', ['created', 'submitted'])
+      .limit(15)
       .get();
       
     if (pendingSnap.empty) {
@@ -8230,10 +8307,12 @@ async function startServer() {
     });
   }
 
-  // Trigger test withdrawal reset if worker is enabled in environment
+  // Trigger test withdrawal reset if worker is enabled in environment (Disabled to prevent unnecessary startup reads/writes)
+  /*
   if (process.env.TON_WITHDRAWAL_WORKER_ENABLED === 'true') {
     await resetExistingWithdrawalForTesting();
   }
+  */
 
   // Launch background Telegram Bot poller if token configured
   startTelegramBot();
