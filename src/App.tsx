@@ -468,6 +468,8 @@ function GameAppInner() {
   const [showDepositModal, setShowDepositModal] = useState<boolean>(false);
   const [showWithdrawModal, setShowWithdrawModal] = useState<boolean>(false);
   const [showTonHistoryModal, setShowTonHistoryModal] = useState<boolean>(false);
+  const [showDepositSuccessOverlay, setShowDepositSuccessOverlay] = useState<boolean>(false);
+  const [successDepositAmount, setSuccessDepositAmount] = useState<string>('1.00');
   
   const [depositAmount, setDepositAmount] = useState<string>('1');
   const [depositLoading, setDepositLoading] = useState<boolean>(false);
@@ -688,6 +690,80 @@ function GameAppInner() {
     }
   };
 
+  const handleSuccessfulDepositVerified = async (amount: string) => {
+    // 1. Refresh all balances immediately (sync profile and widgets)
+    syncProfile();
+
+    // 2. Refresh TON History in the background (no manual refresh needed)
+    try {
+      const headers: any = {};
+      const initData = (window as any).Telegram?.WebApp?.initData;
+      if (initData) {
+        headers['x-telegram-init-data'] = initData;
+      }
+      const histRes = await fetch('/api/ton/history', { headers });
+      const histData = await histRes.json();
+      if (histData.history) {
+        setTonHistory(histData.history);
+      }
+    } catch (hErr) {
+      console.error("History refresh error:", hErr);
+    }
+
+    // 3. Play the satisfying victory win chime sound
+    playWinChime();
+
+    // 4. Trigger gorgeous confetti animation from the top of the screen
+    confetti({
+      particleCount: 150,
+      spread: 85,
+      origin: { y: 0.05 }
+    });
+    
+    // A couple of extra side bursts for extra celebratory feel!
+    setTimeout(() => {
+      confetti({
+        particleCount: 70,
+        angle: 60,
+        spread: 55,
+        origin: { x: 0, y: 0.1 }
+      });
+      confetti({
+        particleCount: 70,
+        angle: 120,
+        spread: 55,
+        origin: { x: 1, y: 0.1 }
+      });
+    }, 300);
+
+    // 5. Clear localStorage on successful credit
+    localStorage.removeItem('pending_deposit_id');
+    localStorage.removeItem('pending_deposit_amount');
+    localStorage.removeItem('pending_deposit_amount_nano');
+    localStorage.removeItem('pending_deposit_message');
+    localStorage.removeItem('pending_deposit_treasury');
+
+    // 6. Polling state updates
+    if (depositIntervalRef.current) {
+      clearInterval(depositIntervalRef.current);
+      depositIntervalRef.current = null;
+    }
+    setDepositPolling(false);
+    setDepositPendingStatus('completed');
+
+    // 7. Open Success Overlay with exact amount
+    setSuccessDepositAmount(amount || depositAmount || '1.00');
+    setShowDepositSuccessOverlay(true);
+
+    // 8. Automatically close everything after 2.8 seconds
+    setTimeout(() => {
+      setShowDepositSuccessOverlay(false);
+      setShowDepositModal(false);
+      setShowTonHistoryModal(false);
+      setDepositPendingId(null);
+    }, 2800);
+  };
+
   const startDepositPolling = (pendingId: string, amount: string) => {
     if (depositIntervalRef.current) {
       clearInterval(depositIntervalRef.current);
@@ -756,48 +832,7 @@ function GameAppInner() {
         consecutiveServerErrors = 0; // Reset on successful server response
 
         if (data.success && (data.status === 'confirmed' || data.status === 'credited' || data.status === 'completed')) {
-          if (depositIntervalRef.current) {
-            clearInterval(depositIntervalRef.current);
-            depositIntervalRef.current = null;
-          }
-          setDepositPolling(false);
-          setDepositPendingStatus('completed');
-          playNotificationSound();
-          playRewardXPSound();
-          
-          // Refresh user profile immediately to update Game Balance (Requirement 5)
-          syncProfile();
-          
-          // Refresh TON History in the background (Requirement 5)
-          try {
-            const histRes = await fetch('/api/ton/history', { headers });
-            const histData = await histRes.json();
-            if (histData.history) {
-              setTonHistory(histData.history);
-            }
-          } catch (hErr) {
-            console.error("History refresh error:", hErr);
-          }
-
-          // Clear localStorage on successful credit (Requirement 7)
-          localStorage.removeItem('pending_deposit_id');
-          localStorage.removeItem('pending_deposit_amount');
-          localStorage.removeItem('pending_deposit_amount_nano');
-          localStorage.removeItem('pending_deposit_message');
-          localStorage.removeItem('pending_deposit_treasury');
-
-          // Close deposit dialog automatically (Requirement 5)
-          setShowDepositModal(false);
-          setDepositPendingId(null);
-          
-          // Display success notification (Requirement 5)
-          const formattedAmount = parseFloat(amount).toFixed(2);
-          setFloatingNotification(
-            `✅ Deposit credited\n${formattedAmount} TON was added to your Game Balance.`
-          );
-          setTimeout(() => {
-            setFloatingNotification(null);
-          }, 8000);
+          await handleSuccessfulDepositVerified(amount);
         } else if (data.status === 'failed' || data.status === 'rejected') {
           // Stop polling on terminal failed/rejected status (Requirement 5)
           if (depositIntervalRef.current) {
@@ -858,44 +893,11 @@ function GameAppInner() {
       const data = await res.json();
       if (data.error) {
         setDepositVerifyError(data.error);
-      } else if (data.success && (data.status === 'confirmed' || data.status === 'credited' || data.status === 'completed')) {
-        if (depositIntervalRef.current) {
-          clearInterval(depositIntervalRef.current);
-          depositIntervalRef.current = null;
-        }
-        setDepositPolling(false);
-        setDepositPendingStatus('completed');
-        playNotificationSound();
-        playRewardXPSound();
-        syncProfile();
-        
-        setShowDepositModal(false);
-        setDepositPendingId(null);
-        setFloatingNotification(
-          `✅ ${depositAmount} TON credited successfully`
-        );
-        setTimeout(() => {
-          setFloatingNotification(null);
-        }, 6000);
-      } else if (data.status === 'completed' || data.status === 'confirmed' || data.status === 'credited') {
-        if (depositIntervalRef.current) {
-          clearInterval(depositIntervalRef.current);
-          depositIntervalRef.current = null;
-        }
-        setDepositPolling(false);
-        setDepositPendingStatus('completed');
-        playNotificationSound();
-        playRewardXPSound();
-        syncProfile();
-        
-        setShowDepositModal(false);
-        setDepositPendingId(null);
-        setFloatingNotification(
-          `✅ ${depositAmount} TON credited successfully`
-        );
-        setTimeout(() => {
-          setFloatingNotification(null);
-        }, 6000);
+      } else if (
+        (data.success && (data.status === 'confirmed' || data.status === 'credited' || data.status === 'completed')) ||
+        (data.status === 'completed' || data.status === 'confirmed' || data.status === 'credited')
+      ) {
+        await handleSuccessfulDepositVerified(depositAmount);
       } else if (data.ok && data.status === 'pending') {
         setDepositVerifyError(data.message || "Transaction not detected yet.");
       } else {
@@ -5323,6 +5325,122 @@ function GameAppInner() {
               >
                 CLOSE LEDGER
               </button>
+            </motion.div>
+          </div>
+        )}
+
+        {/* DEPOSIT SUCCESS OVERLAY */}
+        {showDepositSuccessOverlay && (
+          <div id="modal_deposit_success" className="fixed inset-0 z-55 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/90 backdrop-blur-md"
+            />
+            
+            <motion.div
+              initial={{ scale: 0.8, opacity: 0, y: 50 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.8, opacity: 0, y: -50 }}
+              transition={{ type: "spring", damping: 25, stiffness: 350 }}
+              className="bg-radial from-[#1e2e3e] to-[#111921] border border-emerald-500/40 rounded-3xl p-8 w-full max-w-sm relative z-10 shadow-3xl text-center overflow-hidden flex flex-col items-center justify-center space-y-6"
+            >
+              {/* Top ambient lights/sparkles */}
+              <div className="absolute top-0 inset-x-0 h-2 bg-gradient-to-r from-transparent via-emerald-400 to-transparent blur-md opacity-70" />
+              
+              {/* Polished custom floating checkmark & sparkles */}
+              <div className="relative">
+                {/* Outer pulsing ring */}
+                <motion.div 
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: [1, 1.2, 1], opacity: [0.3, 0.6, 0.3] }}
+                  transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                  className="absolute -inset-4 rounded-full bg-emerald-500/20 blur-xl"
+                />
+                
+                {/* Main animated success ring */}
+                <motion.div 
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  transition={{ delay: 0.1, type: "spring", stiffness: 200, damping: 12 }}
+                  className="w-20 h-20 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-400 text-[#0e1621] flex items-center justify-center shadow-lg relative z-10"
+                >
+                  <motion.svg 
+                    xmlns="http://www.w3.org/2000/svg" 
+                    fill="none" 
+                    viewBox="0 0 24 24" 
+                    strokeWidth={3} 
+                    stroke="currentColor" 
+                    className="w-10 h-10"
+                    initial={{ pathLength: 0 }}
+                    animate={{ pathLength: 1 }}
+                    transition={{ delay: 0.3, duration: 0.5, ease: "easeOut" }}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                  </motion.svg>
+                </motion.div>
+
+                {/* Floating sparkles */}
+                <motion.span 
+                  animate={{ y: [0, -10, 0], opacity: [0, 1, 0] }}
+                  transition={{ repeat: Infinity, duration: 1.5, delay: 0.2 }}
+                  className="absolute -top-3 -left-3 text-lg"
+                >
+                  ✨
+                </motion.span>
+                <motion.span 
+                  animate={{ y: [0, -12, 0], opacity: [0, 1, 0] }}
+                  transition={{ repeat: Infinity, duration: 1.8, delay: 0.6 }}
+                  className="absolute -bottom-2 -right-3 text-lg"
+                >
+                  ✨
+                </motion.span>
+                <motion.span 
+                  animate={{ scale: [0.8, 1.2, 0.8], opacity: [0.4, 1, 0.4] }}
+                  transition={{ repeat: Infinity, duration: 1.2 }}
+                  className="absolute top-1/2 -right-6 text-sm"
+                >
+                  ⭐
+                </motion.span>
+              </div>
+
+              {/* Success Messages */}
+              <div className="space-y-2 relative z-10">
+                <motion.h3 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.2 }}
+                  className="text-lg font-black text-white uppercase tracking-wider bg-gradient-to-r from-emerald-400 to-teal-300 bg-clip-text text-transparent"
+                >
+                  Deposit Successful!
+                </motion.h3>
+                <motion.p 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.3 }}
+                  className="text-xs text-[#b2c1d4] px-2 leading-relaxed"
+                >
+                  Deposit Successful! <span className="text-emerald-400 font-bold">+{parseFloat(successDepositAmount).toFixed(2)} TON</span> has been added to your Game Balance.
+                </motion.p>
+              </div>
+
+              {/* Sparkle background container */}
+              <div className="w-full bg-[#182533] border border-emerald-500/20 rounded-2xl p-4 flex flex-col items-center justify-center space-y-1 relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-500/5 rounded-full blur-xl" />
+                <span className="text-[10px] text-[#708499] uppercase tracking-widest font-black">Credited TON</span>
+                <span className="text-2xl font-black text-emerald-400 tracking-tight font-mono">+{parseFloat(successDepositAmount).toFixed(2)} TON</span>
+              </div>
+
+              {/* Progress indicator */}
+              <div className="w-2/3 h-1 bg-white/10 rounded-full overflow-hidden relative">
+                <motion.div 
+                  initial={{ width: "0%" }}
+                  animate={{ width: "100%" }}
+                  transition={{ duration: 2.5, ease: "linear" }}
+                  className="h-full bg-emerald-400 rounded-full"
+                />
+              </div>
             </motion.div>
           </div>
         )}
