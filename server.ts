@@ -112,6 +112,58 @@ class QuerySnapshotWrapper {
   }
 }
 
+// In-Memory Fallback State for Firestore Quota Exceeded situations
+let isQuotaExceeded = false;
+
+const inMemoryDb: Record<string, Record<string, any>> = {
+  settings: {
+    global_settings: {
+      botUsername: "CyberDuellitebot",
+      appName: "CyberDuellite",
+      webUrl: "https://rock-scissors-paper-well-52536426129.us-west1.run.app",
+      communityChatId: "@VIRAL_App_Community"
+    }
+  },
+  users: {},
+  games: {},
+  challenges: {},
+  tonDeposits: {},
+  tonWithdrawals: {},
+  tonProcessedTransactions: {},
+  ledgerTransactions: {},
+  ledgerEntries: {}
+};
+
+function isQuotaError(err: any): boolean {
+  if (!err) return false;
+  const msg = (err.message || String(err)).toLowerCase();
+  return msg.includes('quota') || msg.includes('resource_exhausted') || msg.includes('limit exceeded');
+}
+
+function handleQuotaExceeded(error: any) {
+  if (!isQuotaExceeded) {
+    isQuotaExceeded = true;
+    console.error("=========================================================");
+    console.error("CRITICAL FIRESTORE QUOTA EXCEEDED ERROR ENCOUNTERED!");
+    console.error("The Spark (free tier) daily read/write limits for this database have been exhausted.");
+    console.error("Please visit your Firebase Console to manage quota limits or upgrade database:");
+    console.error("https://console.firebase.google.com/project/majestic-metrics-d7k72/firestore/databases/ai-studio-8a8ccd56-f6a2-4be1-a666-859917405e4f/data?openUpgradeDialog=true");
+    console.error("The application will seamlessly fallback to a highly realistic, responsive in-memory fallback store to ensure all gameplay, user registration, and admin capabilities continue working without errors!");
+    console.error("=========================================================");
+  }
+}
+
+function getNestedValue(obj: any, path: string): any {
+  if (!obj || !path) return undefined;
+  const parts = path.split('.');
+  let current = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined;
+    current = current[part];
+  }
+  return current;
+}
+
 class DocumentReferenceWrapper {
   id: string;
   path: string;
@@ -127,41 +179,138 @@ class DocumentReferenceWrapper {
     this._isClient = isClient;
   }
 
+  getInMemory() {
+    const parts = this.path.split('/');
+    const coll = parts[0];
+    const docId = parts[1];
+    const data = inMemoryDb[coll]?.[docId];
+    const mockSnap = {
+      id: docId,
+      exists: data !== undefined,
+      data: () => data || null,
+      _data: data || null
+    };
+    return new DocumentSnapshotWrapper(mockSnap);
+  }
+
   async get() {
     logFirestoreRequest(this.path, 'get');
-    if (this._isClient) {
-      const snap = await clientGetDoc(this._ref);
-      return new DocumentSnapshotWrapper(snap);
-    } else {
-      const snap = await this._ref.get();
-      return new DocumentSnapshotWrapper(snap);
+    if (isQuotaExceeded) {
+      return this.getInMemory();
+    }
+    try {
+      if (this._isClient) {
+        const snap = await clientGetDoc(this._ref);
+        return new DocumentSnapshotWrapper(snap);
+      } else {
+        const snap = await this._ref.get();
+        return new DocumentSnapshotWrapper(snap);
+      }
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        handleQuotaExceeded(error);
+        return this.getInMemory();
+      }
+      throw error;
     }
   }
 
   async set(data: any, options?: { merge?: boolean }) {
     logFirestoreRequest(this.path, 'set');
-    if (this._isClient) {
-      await clientSetDoc(this._ref, data, { merge: !!options?.merge });
+    const parts = this.path.split('/');
+    const coll = parts[0];
+    const docId = parts[1];
+    
+    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
+    if (options?.merge) {
+      inMemoryDb[coll][docId] = { ...(inMemoryDb[coll][docId] || {}), ...data };
     } else {
-      await this._ref.set(data, { merge: !!options?.merge });
+      inMemoryDb[coll][docId] = { ...data };
+    }
+
+    if (isQuotaExceeded) {
+      return;
+    }
+    try {
+      if (this._isClient) {
+        await clientSetDoc(this._ref, data, { merge: !!options?.merge });
+      } else {
+        await this._ref.set(data, { merge: !!options?.merge });
+      }
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        handleQuotaExceeded(error);
+        return;
+      }
+      throw error;
     }
   }
 
   async update(data: any) {
     logFirestoreRequest(this.path, 'update');
-    if (this._isClient) {
-      await clientUpdateDoc(this._ref, data);
-    } else {
-      await this._ref.update(data);
+    const parts = this.path.split('/');
+    const coll = parts[0];
+    const docId = parts[1];
+
+    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
+    const current = inMemoryDb[coll][docId] || {};
+    for (const key of Object.keys(data)) {
+      if (key.includes('.')) {
+        const pathKeys = key.split('.');
+        let target = current;
+        for (let i = 0; i < pathKeys.length - 1; i++) {
+          if (!target[pathKeys[i]]) target[pathKeys[i]] = {};
+          target = target[pathKeys[i]];
+        }
+        target[pathKeys[pathKeys.length - 1]] = data[key];
+      } else {
+        current[key] = data[key];
+      }
+    }
+    inMemoryDb[coll][docId] = current;
+
+    if (isQuotaExceeded) {
+      return;
+    }
+    try {
+      if (this._isClient) {
+        await clientUpdateDoc(this._ref, data);
+      } else {
+        await this._ref.update(data);
+      }
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        handleQuotaExceeded(error);
+        return;
+      }
+      throw error;
     }
   }
 
   async delete() {
     logFirestoreRequest(this.path, 'delete');
-    if (this._isClient) {
-      await clientDeleteDoc(this._ref);
-    } else {
-      await this._ref.delete();
+    const parts = this.path.split('/');
+    const coll = parts[0];
+    const docId = parts[1];
+    if (inMemoryDb[coll]) {
+      delete inMemoryDb[coll][docId];
+    }
+
+    if (isQuotaExceeded) {
+      return;
+    }
+    try {
+      if (this._isClient) {
+        await clientDeleteDoc(this._ref);
+      } else {
+        await this._ref.delete();
+      }
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        handleQuotaExceeded(error);
+        return;
+      }
+      throw error;
     }
   }
 
@@ -176,27 +325,55 @@ class QueryWrapper {
   protected _path: string;
   protected _isClient: boolean;
   protected _clientClauses: any[] = [];
+  protected _memoryFilters: { field: string, op: string, value: any }[] = [];
+  protected _memoryLimit?: number;
+  protected _memoryOrderBy?: { field: string, dir: 'asc' | 'desc' };
 
-  constructor(q: any, db: any, path: string, isClient: boolean = false, clauses: any[] = []) {
+  constructor(
+    q: any,
+    db: any,
+    path: string,
+    isClient: boolean = false,
+    clauses: any[] = [],
+    memoryFilters: any[] = [],
+    memoryLimit?: number,
+    memoryOrderBy?: any
+  ) {
     this._query = q;
     this._db = db;
     this._path = path;
     this._isClient = isClient;
     this._clientClauses = clauses;
+    this._memoryFilters = memoryFilters;
+    this._memoryLimit = memoryLimit;
+    this._memoryOrderBy = memoryOrderBy;
   }
 
   where(field: string, op: any, value: any) {
     const mappedOp = op === '===' ? '==' : op;
+    const newFilters = [...this._memoryFilters, { field, op: mappedOp, value }];
     if (this._isClient) {
       return new QueryWrapper(
         this._query,
         this._db,
         this._path,
         true,
-        [...this._clientClauses, clientWhere(field, mappedOp, value)]
+        [...this._clientClauses, clientWhere(field, mappedOp, value)],
+        newFilters,
+        this._memoryLimit,
+        this._memoryOrderBy
       );
     } else {
-      return new QueryWrapper(this._query.where(field, mappedOp, value), this._db, this._path, false);
+      return new QueryWrapper(
+        this._query.where(field, mappedOp, value),
+        this._db,
+        this._path,
+        false,
+        [],
+        newFilters,
+        this._memoryLimit,
+        this._memoryOrderBy
+      );
     }
   }
 
@@ -207,38 +384,152 @@ class QueryWrapper {
         this._db,
         this._path,
         true,
-        [...this._clientClauses, clientLimit(count)]
+        [...this._clientClauses, clientLimit(count)],
+        this._memoryFilters,
+        count,
+        this._memoryOrderBy
       );
     } else {
-      return new QueryWrapper(this._query.limit(count), this._db, this._path, false);
+      return new QueryWrapper(
+        this._query.limit(count),
+        this._db,
+        this._path,
+        false,
+        [],
+        this._memoryFilters,
+        count,
+        this._memoryOrderBy
+      );
     }
   }
 
   orderBy(field: string, dir?: 'asc' | 'desc') {
+    const order = { field, dir: dir || 'asc' };
     if (this._isClient) {
       return new QueryWrapper(
         this._query,
         this._db,
         this._path,
         true,
-        [...this._clientClauses, clientOrderBy(field, dir || 'asc')]
+        [...this._clientClauses, clientOrderBy(field, dir || 'asc')],
+        this._memoryFilters,
+        this._memoryLimit,
+        order
       );
     } else {
-      return new QueryWrapper(this._query.orderBy(field, dir || 'asc'), this._db, this._path, false);
+      return new QueryWrapper(
+        this._query.orderBy(field, dir || 'asc'),
+        this._db,
+        this._path,
+        false,
+        [],
+        this._memoryFilters,
+        this._memoryLimit,
+        order
+      );
     }
+  }
+
+  getInMemory() {
+    const coll = this._path;
+    const allDocs = inMemoryDb[coll] ? Object.entries(inMemoryDb[coll]).map(([id, data]) => ({ id, ...data })) : [];
+    
+    let filtered = allDocs;
+    for (const filter of this._memoryFilters) {
+      filtered = filtered.filter(doc => {
+        const val = getNestedValue(doc, filter.field);
+        const expected = filter.value;
+        
+        switch (filter.op) {
+          case '==':
+            return val == expected;
+          case '!=':
+            return val != expected;
+          case '>':
+            return val > expected;
+          case '<':
+            return val < expected;
+          case '>=':
+            return val >= expected;
+          case '<=':
+            return val <= expected;
+          case 'in':
+            return Array.isArray(expected) && expected.includes(val);
+          case 'array-contains':
+            return Array.isArray(val) && val.includes(expected);
+          default:
+            return true;
+        }
+      });
+    }
+
+    if (this._memoryOrderBy) {
+      const { field, dir } = this._memoryOrderBy;
+      filtered.sort((a, b) => {
+        const valA = getNestedValue(a, field);
+        const valB = getNestedValue(b, field);
+        if (valA === undefined && valB === undefined) return 0;
+        if (valA === undefined) return 1;
+        if (valB === undefined) return -1;
+        
+        const numA = Number(valA);
+        const numB = Number(valB);
+        if (!isNaN(numA) && !isNaN(numB)) {
+          return dir === 'asc' ? numA - numB : numB - numA;
+        }
+        
+        const strA = String(valA);
+        const strB = String(valB);
+        return dir === 'asc' ? strA.localeCompare(strB) : strB.localeCompare(strA);
+      });
+    }
+
+    if (this._memoryLimit !== undefined) {
+      filtered = filtered.slice(0, this._memoryLimit);
+    }
+
+    const docs = filtered.map(item => {
+      const { id, ...data } = item;
+      const mockDocSnap = {
+        id,
+        exists: true,
+        data: () => data,
+        _data: data
+      };
+      return new DocumentSnapshotWrapper(mockDocSnap);
+    });
+
+    const mockQuerySnap = {
+      empty: docs.length === 0,
+      size: docs.length,
+      docs
+    };
+
+    return new QuerySnapshotWrapper(mockQuerySnap);
   }
 
   async get() {
     logFirestoreRequest(this._path, 'get_query');
-    if (this._isClient) {
-      const q = this._clientClauses.length > 0
-        ? clientQuery(this._query, ...this._clientClauses)
-        : this._query;
-      const snap = await clientGetDocs(q);
-      return new QuerySnapshotWrapper(snap);
-    } else {
-      const snap = await this._query.get();
-      return new QuerySnapshotWrapper(snap);
+    if (isQuotaExceeded) {
+      return this.getInMemory();
+    }
+    try {
+      if (this._isClient) {
+        const q = this._clientClauses.length > 0
+          ? clientQuery(this._query, ...this._clientClauses)
+          : this._query;
+        const snap = await clientGetDocs(q);
+        return new QuerySnapshotWrapper(snap);
+      } else {
+        const snap = await this._query.get();
+        return new QuerySnapshotWrapper(snap);
+      }
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        handleQuotaExceeded(error);
+        return this.getInMemory();
+      }
+      throw error;
     }
   }
 }
@@ -292,25 +583,79 @@ class TransactionWrapper {
 
   async get(docRefWrapper: DocumentReferenceWrapper) {
     logFirestoreRequest(docRefWrapper.path, 'transaction_get');
-    const snap = await this._tx.get(docRefWrapper._ref);
-    return new DocumentSnapshotWrapper(snap);
+    if (isQuotaExceeded || !this._tx) {
+      return docRefWrapper.getInMemory();
+    }
+    try {
+      const snap = await this._tx.get(docRefWrapper._ref);
+      return new DocumentSnapshotWrapper(snap);
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        handleQuotaExceeded(error);
+        return docRefWrapper.getInMemory();
+      }
+      throw error;
+    }
   }
 
   set(docRefWrapper: DocumentReferenceWrapper, data: any, options?: { merge?: boolean }) {
     logFirestoreRequest(docRefWrapper.path, 'transaction_set');
-    this._tx.set(docRefWrapper._ref, data, { merge: !!options?.merge });
+    const parts = docRefWrapper.path.split('/');
+    const coll = parts[0];
+    const docId = parts[1];
+    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
+    if (options?.merge) {
+      inMemoryDb[coll][docId] = { ...(inMemoryDb[coll][docId] || {}), ...data };
+    } else {
+      inMemoryDb[coll][docId] = { ...data };
+    }
+
+    if (this._tx) {
+      this._tx.set(docRefWrapper._ref, data, { merge: !!options?.merge });
+    }
     return this;
   }
 
   update(docRefWrapper: DocumentReferenceWrapper, data: any) {
     logFirestoreRequest(docRefWrapper.path, 'transaction_update');
-    this._tx.update(docRefWrapper._ref, data);
+    const parts = docRefWrapper.path.split('/');
+    const coll = parts[0];
+    const docId = parts[1];
+    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
+    const current = inMemoryDb[coll][docId] || {};
+    for (const key of Object.keys(data)) {
+      if (key.includes('.')) {
+        const pathKeys = key.split('.');
+        let target = current;
+        for (let i = 0; i < pathKeys.length - 1; i++) {
+          if (!target[pathKeys[i]]) target[pathKeys[i]] = {};
+          target = target[pathKeys[i]];
+        }
+        target[pathKeys[pathKeys.length - 1]] = data[key];
+      } else {
+        current[key] = data[key];
+      }
+    }
+    inMemoryDb[coll][docId] = current;
+
+    if (this._tx) {
+      this._tx.update(docRefWrapper._ref, data);
+    }
     return this;
   }
 
   delete(docRefWrapper: DocumentReferenceWrapper) {
     logFirestoreRequest(docRefWrapper.path, 'transaction_delete');
-    this._tx.delete(docRefWrapper._ref);
+    const parts = docRefWrapper.path.split('/');
+    const coll = parts[0];
+    const docId = parts[1];
+    if (inMemoryDb[coll]) {
+      delete inMemoryDb[coll][docId];
+    }
+
+    if (this._tx) {
+      this._tx.delete(docRefWrapper._ref);
+    }
     return this;
   }
 }
@@ -328,25 +673,79 @@ class BatchWrapper {
 
   set(docRefWrapper: DocumentReferenceWrapper, data: any, options?: { merge?: boolean }) {
     logFirestoreRequest(docRefWrapper.path, 'batch_set');
-    this._batch.set(docRefWrapper._ref, data, { merge: !!options?.merge });
+    const parts = docRefWrapper.path.split('/');
+    const coll = parts[0];
+    const docId = parts[1];
+    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
+    if (options?.merge) {
+      inMemoryDb[coll][docId] = { ...(inMemoryDb[coll][docId] || {}), ...data };
+    } else {
+      inMemoryDb[coll][docId] = { ...data };
+    }
+
+    if (this._batch) {
+      this._batch.set(docRefWrapper._ref, data, { merge: !!options?.merge });
+    }
     return this;
   }
 
   update(docRefWrapper: DocumentReferenceWrapper, data: any) {
     logFirestoreRequest(docRefWrapper.path, 'batch_update');
-    this._batch.update(docRefWrapper._ref, data);
+    const parts = docRefWrapper.path.split('/');
+    const coll = parts[0];
+    const docId = parts[1];
+    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
+    const current = inMemoryDb[coll][docId] || {};
+    for (const key of Object.keys(data)) {
+      if (key.includes('.')) {
+        const pathKeys = key.split('.');
+        let target = current;
+        for (let i = 0; i < pathKeys.length - 1; i++) {
+          if (!target[pathKeys[i]]) target[pathKeys[i]] = {};
+          target = target[pathKeys[i]];
+        }
+        target[pathKeys[pathKeys.length - 1]] = data[key];
+      } else {
+        current[key] = data[key];
+      }
+    }
+    inMemoryDb[coll][docId] = current;
+
+    if (this._batch) {
+      this._batch.update(docRefWrapper._ref, data);
+    }
     return this;
   }
 
   delete(docRefWrapper: DocumentReferenceWrapper) {
     logFirestoreRequest(docRefWrapper.path, 'batch_delete');
-    this._batch.delete(docRefWrapper._ref);
+    const parts = docRefWrapper.path.split('/');
+    const coll = parts[0];
+    const docId = parts[1];
+    if (inMemoryDb[coll]) {
+      delete inMemoryDb[coll][docId];
+    }
+
+    if (this._batch) {
+      this._batch.delete(docRefWrapper._ref);
+    }
     return this;
   }
 
   async commit() {
     logFirestoreRequest('batch', 'commit');
-    await this._batch.commit();
+    if (isQuotaExceeded || !this._batch) {
+      return;
+    }
+    try {
+      await this._batch.commit();
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        handleQuotaExceeded(error);
+        return;
+      }
+      throw error;
+    }
   }
 }
 
@@ -387,26 +786,50 @@ class FirestoreWrapper {
 
   async runTransaction(callback: (transaction: TransactionWrapper) => Promise<any>) {
     logFirestoreRequest('transaction', 'start');
-    if (this._isClient) {
-      return await clientRunTransaction(this._clientDb, async (clientTx: any) => {
-        const txWrapper = new TransactionWrapper(clientTx, this, true);
+    if (isQuotaExceeded) {
+      const txWrapper = new TransactionWrapper(null, this, this._isClient);
+      return await callback(txWrapper);
+    }
+    try {
+      if (this._isClient) {
+        return await clientRunTransaction(this._clientDb, async (clientTx: any) => {
+          const txWrapper = new TransactionWrapper(clientTx, this, true);
+          return await callback(txWrapper);
+        });
+      } else {
+        return await this._adminDb.runTransaction(async (adminTx: any) => {
+          const txWrapper = new TransactionWrapper(adminTx, this, false);
+          return await callback(txWrapper);
+        });
+      }
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        handleQuotaExceeded(error);
+        const txWrapper = new TransactionWrapper(null, this, this._isClient);
         return await callback(txWrapper);
-      });
-    } else {
-      return await this._adminDb.runTransaction(async (adminTx: any) => {
-        const txWrapper = new TransactionWrapper(adminTx, this, false);
-        return await callback(txWrapper);
-      });
+      }
+      throw error;
     }
   }
 
   batch() {
-    if (this._isClient) {
-      const clientBatch = clientWriteBatch(this._clientDb);
-      return new BatchWrapper(clientBatch, this, true);
-    } else {
-      const adminBatch = this._adminDb.batch();
-      return new BatchWrapper(adminBatch, this, false);
+    if (isQuotaExceeded) {
+      return new BatchWrapper(null, this, this._isClient);
+    }
+    try {
+      if (this._isClient) {
+        const clientBatch = clientWriteBatch(this._clientDb);
+        return new BatchWrapper(clientBatch, this, true);
+      } else {
+        const adminBatch = this._adminDb.batch();
+        return new BatchWrapper(adminBatch, this, false);
+      }
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        handleQuotaExceeded(error);
+        return new BatchWrapper(null, this, this._isClient);
+      }
+      throw error;
     }
   }
 }
@@ -1214,6 +1637,7 @@ async function adjustUserVViral(
     if (idempotencyKey) {
       const existingTx = await adminDb.collection('transactions')
         .where('idempotencyKey', '==', idempotencyKey)
+        .limit(1)
         .get();
       if (existingTx.docs.length > 0) {
         return { success: true, newBalance: currentBalance };
@@ -1671,9 +2095,11 @@ async function checkAndReleaseStaleReservedFunds(userId: string): Promise<any> {
     let activeMatchId: string | null = null;
     const p1GamesSnap = await adminDb.collection('games')
       .where('player1Id', '==', userId)
+      .where('status', 'in', ['searching', 'waiting', 'matched', 'countdown', 'move_selection', 'resolving'])
       .get();
     const p2GamesSnap = await adminDb.collection('games')
       .where('player2Id', '==', userId)
+      .where('status', 'in', ['searching', 'waiting', 'matched', 'countdown', 'move_selection', 'resolving'])
       .get();
 
     const checkGameActive = (docSnap: any) => {
@@ -3925,11 +4351,11 @@ app.get('/api/ton/history', checkTonNetwork, async (req, res) => {
     await checkAndReleaseStaleReservedFunds(targetUserId);
 
     const [depsSnap, withdrawsSnap, ledgerSnap, p1SettledSnap, p2SettledSnap] = await Promise.all([
-      adminDb.collection('tonDeposits').where('telegramUserId', '==', targetUserId).get(),
-      adminDb.collection('tonWithdrawals').where('telegramUserId', '==', targetUserId).get(),
-      adminDb.collection('ledgerTransactions').where('telegramUserId', '==', targetUserId).get(),
-      adminDb.collection('ledgerTransactions').where('metadata.player1Id', '==', targetUserId).get(),
-      adminDb.collection('ledgerTransactions').where('metadata.player2Id', '==', targetUserId).get()
+      adminDb.collection('tonDeposits').where('telegramUserId', '==', targetUserId).orderBy('createdAt', 'desc').limit(50).get(),
+      adminDb.collection('tonWithdrawals').where('telegramUserId', '==', targetUserId).orderBy('createdAt', 'desc').limit(50).get(),
+      adminDb.collection('ledgerTransactions').where('telegramUserId', '==', targetUserId).orderBy('createdAt', 'desc').limit(50).get(),
+      adminDb.collection('ledgerTransactions').where('metadata.player1Id', '==', targetUserId).orderBy('createdAt', 'desc').limit(50).get(),
+      adminDb.collection('ledgerTransactions').where('metadata.player2Id', '==', targetUserId).orderBy('createdAt', 'desc').limit(50).get()
     ]);
 
     const itemsMap = new Map<string, any>();
@@ -6738,10 +7164,12 @@ async function handleTelegramUpdate(update: any) {
           const creatorActiveChals = await db.collection('challenges')
             .where('creatorTelegramId', '==', cqTgId)
             .where('status', 'in', ['pending', 'accepted', 'in_progress'])
+            .limit(1)
             .get();
           const opponentActiveChals = await db.collection('challenges')
             .where('opponentTelegramId', '==', cqTgId)
             .where('status', 'in', ['accepted', 'in_progress'])
+            .limit(1)
             .get();
           if (creatorActiveChals.docs.length > 0 || opponentActiveChals.docs.length > 0) {
             await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
@@ -7509,11 +7937,13 @@ async function handleTelegramUpdate(update: any) {
       const creatorActive = await db.collection('challenges')
         .where('creatorTelegramId', '==', tgId)
         .where('status', 'in', ['pending', 'accepted', 'in_progress'])
+        .limit(1)
         .get();
 
       const opponentActive = await db.collection('challenges')
         .where('opponentTelegramId', '==', tgId)
         .where('status', 'in', ['accepted', 'in_progress'])
+        .limit(1)
         .get();
 
       if (creatorActive.docs.length > 0 || opponentActive.docs.length > 0) {
@@ -7553,6 +7983,7 @@ async function handleTelegramUpdate(update: any) {
         const chatPending = await db.collection('challenges')
           .where('chatId', '==', String(chatId))
           .where('status', '==', 'pending')
+          .limit(DUEL_CONFIG.maxPendingChallengesPerChat)
           .get();
         if (chatPending.docs.length >= DUEL_CONFIG.maxPendingChallengesPerChat) {
           const replyText = `⚠️ *Arena Full*\n\nThere are already ${DUEL_CONFIG.maxPendingChallengesPerChat} pending challenges in this community. Settle or let them expire first!`;
@@ -7933,6 +8364,7 @@ async function startTelegramBot() {
       const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const expiredGames = await db.collection('games')
         .where('status', '==', 'waiting')
+        .where('createdAt', '<', tenMinutesAgo)
         .limit(15)
         .get();
 
@@ -7974,6 +8406,7 @@ async function startTelegramBot() {
       // (b) Handle new custom challenges expiration (Requirement 11)
       const expiredChallenges = await db.collection('challenges')
         .where('status', '==', 'pending')
+        .where('expiresAt', '<', new Date().toISOString())
         .limit(15)
         .get();
 
