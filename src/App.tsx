@@ -2465,113 +2465,119 @@ function GameAppInner() {
 
                 {/* TON Custodial Game Wallet Panel */}
                 {ENABLE_TON_GAME_MODE && (
-                  <div className="bg-[#17212b]/95 border border-[#3390ec]/30 rounded-3xl p-4.5 space-y-4 shadow-xl">
-                    <div className="flex justify-between items-center pb-2 border-b border-[#242f3d]">
-                      <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-4.5 space-y-4 shadow-xl relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-[#3390ec]/5 rounded-full blur-xl pointer-events-none" />
+                    <div className="flex justify-between items-center pb-2.5 border-b border-[#242f3d]">
+                      <span className="text-[11px] font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-[#3390ec] animate-pulse" />
                         TON Game Wallet (Custodial)
                       </span>
-                      <span className="text-[9px] bg-[#3390ec]/15 text-[#3390ec] border border-[#3390ec]/25 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                      <span className="text-[9px] bg-[#3390ec]/10 text-[#3390ec] border border-[#3390ec]/20 px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
                         {tonConfig?.network === 'testnet' ? 'Testnet' : 'Mainnet'}
                       </span>
                     </div>
 
                     {!walletAddress ? (
-                      <div className="text-center py-3 space-y-2">
-                        <p className="text-amber-500 text-[11px] font-bold uppercase tracking-widest flex items-center justify-center gap-1.5">
+                      <div className="text-center py-4 space-y-2.5">
+                        <p className="text-amber-500 text-[10.5px] font-bold uppercase tracking-widest flex items-center justify-center gap-1.5">
                           ⚠️ CONNECT WALLET TO USE TON GAMES
                         </p>
-                        <p className="text-[#708499] text-[9.5px] leading-relaxed">
+                        <p className="text-[#708499] text-[9.5px] leading-relaxed max-w-xs mx-auto">
                           Please connect your TON wallet via the TON Connect button at the top of the screen to deposit, withdraw, or enter the 1 TON Duel Arena.
                         </p>
                       </div>
                     ) : (
-                      <div className="space-y-4">
-                        <div className="grid grid-cols-2 gap-2.5 text-xs">
+                      <div className="space-y-3.5">
+                        {/* 1. Main Premium Game Balance Card */}
+                        <div className="bg-gradient-to-b from-[#182533] to-[#121b26] border border-[#3390ec]/20 rounded-xl p-4 text-center shadow-inner relative overflow-hidden">
+                          <div className="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-[#3390ec]/40 to-transparent" />
+                          <span className="text-[9px] text-[#3390ec] uppercase font-black tracking-widest block mb-1">
+                            AVAILABLE GAME BALANCE
+                          </span>
+                          <div className="flex items-center justify-center space-x-1.5 py-0.5">
+                            <span className="text-3xl font-black text-white tracking-tight font-mono tabular-nums">
+                              {getTonValue(profile?.tonAccount?.availableNano)}
+                            </span>
+                            <span className="text-xs font-black text-[#3390ec] tracking-wider font-mono">TON</span>
+                          </div>
+                          <span className="text-[8.5px] text-[#708499] uppercase font-bold block mt-1 tracking-wider">
+                            Internal Ledger • Instantly playable
+                          </span>
+                        </div>
+
+                        {/* 2. Secondary Balances Grid */}
+                        <div className="grid grid-cols-3 gap-2 text-xs">
                           {/* Connected Wallet Balance */}
-                          <div className="bg-[#0e1621]/70 p-3 rounded-2xl border border-[#242f3d] flex flex-col justify-between">
-                            <span className="text-[9px] text-[#708499] uppercase font-bold block leading-none">Wallet Balance</span>
-                            <div className="flex items-center space-x-1 mt-1.5 min-h-[20px]">
+                          <div className="bg-[#0e1621]/80 p-2.5 rounded-xl border border-[#242f3d] flex flex-col justify-between text-center">
+                            <span className="text-[8.5px] text-[#708499] uppercase font-bold tracking-wider block leading-none">Wallet Balance</span>
+                            <div className="flex items-center justify-center space-x-0.5 my-1.5 min-h-[16px]">
                               {balanceLoading ? (
-                                <RefreshCw className="animate-spin w-3 h-3 text-[#3390ec]" />
+                                <RefreshCw className="animate-spin w-2.5 h-2.5 text-[#3390ec]" />
                               ) : balanceError ? (
                                 <button
                                   onClick={() => setBalanceRefreshTrigger(prev => prev + 1)}
-                                  className="text-[9px] px-2 py-0.5 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition flex items-center gap-1 font-bold uppercase tracking-wider cursor-pointer"
-                                  title="Click to retry RPC call"
+                                  className="text-[8px] px-1 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 transition flex items-center gap-0.5 font-bold uppercase tracking-wider cursor-pointer"
+                                  title="Retry"
                                 >
-                                  <RefreshCw className="w-2 h-2 animate-pulse" />
                                   Retry
                                 </button>
                               ) : (
                                 <>
-                                  <span className="text-base font-black text-white leading-none">
+                                  <span className="text-xs font-bold text-white leading-none font-mono tabular-nums truncate">
                                     {walletBalance}
                                   </span>
-                                  <span className="text-[9px] font-bold text-[#3390ec]">TON</span>
+                                  <span className="text-[8px] font-bold text-[#3390ec] font-mono shrink-0">T</span>
                                 </>
                               )}
                             </div>
-                            <span className="text-[7.5px] text-[#708499] block mt-1 leading-none">On-Chain Wallet</span>
-                          </div>
-
-                          {/* Internal Game TON Balance */}
-                          <div className="bg-[#0e1621]/70 p-3 rounded-2xl border border-[#3390ec]/30 flex flex-col justify-between shadow-sm shadow-[#3390ec]/5">
-                            <span className="text-[9px] text-[#3390ec] uppercase font-bold block leading-none">Game Balance</span>
-                            <div className="flex items-baseline space-x-1 mt-1.5">
-                              <span className="text-base font-black text-[#3390ec] leading-none">
-                                {getTonValue(profile?.tonAccount?.availableNano)}
-                              </span>
-                              <span className="text-[9px] font-bold text-[#3390ec]">TON</span>
-                            </div>
-                            <span className="text-[7.5px] text-[#708499] block mt-1 leading-none">Internal Ledger</span>
+                            <span className="text-[7.5px] text-[#708499] block leading-none tracking-wider font-semibold">On-Chain</span>
                           </div>
 
                           {/* Reserved in TON Games */}
-                          <div className="bg-[#0e1621]/70 p-3 rounded-2xl border border-[#242f3d] flex flex-col justify-between">
-                            <span className="text-[9px] text-amber-500 uppercase font-bold block leading-none">Reserved</span>
-                            <div className="flex items-baseline space-x-1 mt-1.5">
-                              <span className="text-base font-black text-amber-400 leading-none">
+                          <div className="bg-[#0e1621]/80 p-2.5 rounded-xl border border-[#242f3d] flex flex-col justify-between text-center">
+                            <span className="text-[8.5px] text-[#708499] uppercase font-bold tracking-wider block leading-none">Reserved</span>
+                            <div className="flex items-center justify-center space-x-0.5 my-1.5 min-h-[16px]">
+                              <span className="text-xs font-bold text-amber-400 leading-none font-mono tabular-nums">
                                 {getTonValue(profile?.tonAccount?.reservedNano)}
                               </span>
-                              <span className="text-[9px] font-bold text-amber-500">TON</span>
+                              <span className="text-[8px] font-bold text-amber-500 font-mono shrink-0">T</span>
                             </div>
-                            <span className="text-[7.5px] text-[#708499] block mt-1 leading-none">In Matchmaking Queue</span>
+                            <span className="text-[7.5px] text-amber-500/70 block leading-none tracking-wider font-semibold" title="In Matchmaking Queue">In Queue</span>
                           </div>
 
-                          {/* Pending Withdrawal */}
-                          <div className="bg-[#0e1621]/70 p-3 rounded-2xl border border-[#242f3d] flex flex-col justify-between">
-                            <span className="text-[9px] text-purple-400 uppercase font-bold block leading-none">Pending Outbound</span>
-                            <div className="flex items-baseline space-x-1 mt-1.5">
-                              <span className="text-base font-black text-purple-400 leading-none">
+                          {/* Pending Outbound */}
+                          <div className="bg-[#0e1621]/80 p-2.5 rounded-xl border border-[#242f3d] flex flex-col justify-between text-center">
+                            <span className="text-[8.5px] text-[#708499] uppercase font-bold tracking-wider block leading-none">Pending Out</span>
+                            <div className="flex items-center justify-center space-x-0.5 my-1.5 min-h-[16px]">
+                              <span className="text-xs font-bold text-purple-400 leading-none font-mono tabular-nums">
                                 {getTonValue(profile?.tonAccount?.pendingWithdrawalNano)}
                               </span>
-                              <span className="text-[9px] font-bold text-purple-400">TON</span>
+                              <span className="text-[8px] font-bold text-purple-400 font-mono shrink-0">T</span>
                             </div>
-                            <span className="text-[7.5px] text-[#708499] block mt-1 leading-none">Outbound Queue</span>
+                            <span className="text-[7.5px] text-purple-400/70 block leading-none tracking-wider font-semibold" title="Pending Withdrawal">Outbound</span>
                           </div>
                         </div>
 
-                        {/* Buttons near the TON Game Wallet panel */}
-                        <div className="grid grid-cols-3 gap-2 pt-1.5 border-t border-[#242f3d]">
+                        {/* 3. Action Buttons */}
+                        <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-[#242f3d]">
                           <button
                             id="btn_ton_deposit"
                             onClick={() => { playClickSound(); setDepositVerifyError(null); setDepositPendingId(null); setDepositPendingStatus(''); setShowDepositModal(true); }}
-                            className="bg-[#3390ec] hover:bg-[#2879c8] text-[#0e1621] py-2 px-1 rounded-xl text-[10px] font-black uppercase tracking-wider text-center transition cursor-pointer"
+                            className="bg-[#3390ec] hover:bg-[#2081e2] text-[#0e1621] font-bold py-2.5 px-1 rounded-xl text-[10px] uppercase tracking-wider text-center transition-all duration-150 cursor-pointer active:scale-95 shadow-md shadow-[#3390ec]/10"
                           >
                             DEPOSIT
                           </button>
                           <button
                             id="btn_ton_withdraw"
                             onClick={() => { playClickSound(); setWithdrawError(null); setWithdrawSuccess(null); setShowWithdrawModal(true); }}
-                            className="bg-[#242f3d] hover:bg-[#2d3b4c] text-white py-2 px-1 rounded-xl text-[10px] font-black uppercase tracking-wider text-center transition cursor-pointer"
+                            className="bg-[#242f3d] hover:bg-[#2e3b4d] text-white font-bold py-2.5 px-1 rounded-xl text-[10px] uppercase tracking-wider text-center border border-[#2b3745] transition-all duration-150 cursor-pointer active:scale-95"
                           >
                             WITHDRAW
                           </button>
                           <button
                             id="btn_ton_history"
                             onClick={() => { playClickSound(); handleFetchTonHistory(); }}
-                            className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 py-2 px-1 rounded-xl text-[10px] font-black uppercase tracking-wider text-center transition cursor-pointer"
+                            className="bg-[#1c2430] hover:bg-[#232d3b] text-amber-400 font-bold py-2.5 px-1 rounded-xl text-[10px] uppercase tracking-wider text-center border border-amber-500/20 transition-all duration-150 cursor-pointer active:scale-95"
                           >
                             HISTORY
                           </button>
@@ -4940,46 +4946,48 @@ function GameAppInner() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => { playClickSound(); setShowDepositModal(false); }}
-              className="absolute inset-0 bg-black/80 backdrop-blur-xs"
+              className="absolute inset-0 bg-black/70 backdrop-blur-xs"
             />
             
             <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              initial={{ scale: 0.95, opacity: 0, y: 15 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-[#17212b] border border-[#3390ec]/30 rounded-3xl p-6 w-full max-w-sm relative z-10 shadow-2xl space-y-4"
+              exit={{ scale: 0.95, opacity: 0, y: 15 }}
+              className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-5 w-full max-w-sm relative z-10 shadow-2xl space-y-4"
             >
-              <div className="flex justify-between items-center pb-2 border-b border-[#242f3d]">
-                <span className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-1.5">
-                  <ArrowDownLeft className="w-5 h-5 text-[#3390ec]" />
+              <div className="flex justify-between items-center pb-2.5 border-b border-[#242f3d]">
+                <span className="text-[12px] font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <ArrowDownLeft className="w-4 h-4 text-[#3390ec]" />
                   Deposit TON
                 </span>
                 <button
                   id="btn_close_deposit_modal"
                   onClick={() => { playClickSound(); setShowDepositModal(false); }}
-                  className="p-1 rounded-sm hover:bg-[#242f3d] text-[#708499] hover:text-white transition cursor-pointer"
+                  className="p-1.5 rounded-lg hover:bg-[#242f3d] text-[#708499] hover:text-white transition-colors cursor-pointer"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-4 h-4" />
                 </button>
               </div>
 
               {tonConfig?.pauseDeposits ? (
-                <div className="bg-red-500/15 border border-red-500/30 text-red-400 p-4 rounded-2xl text-xs font-medium text-center space-y-2">
-                  <p className="font-bold uppercase tracking-wider">Deposits Suspended</p>
-                  <p className="text-[11px] opacity-80 leading-relaxed">TON deposits are temporarily paused for system upgrading. Please try again later.</p>
+                <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl text-xs font-medium text-center space-y-1.5">
+                  <p className="font-bold uppercase tracking-wider text-[11px]">Deposits Suspended</p>
+                  <p className="text-[10px] opacity-80 leading-relaxed">TON deposits are temporarily paused for system upgrading. Please try again later.</p>
                 </div>
               ) : depositPendingStatus === 'completed' ? (
-                <div className="text-center py-4 space-y-3">
-                  <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto text-2xl font-black">
+                <div className="text-center py-5 space-y-4">
+                  <div className="w-14 h-14 rounded-full bg-emerald-500/15 text-emerald-400 flex items-center justify-center mx-auto text-xl font-bold border border-emerald-500/30">
                     ✓
                   </div>
-                  <h4 className="text-sm font-bold text-white uppercase tracking-wide">Deposit Successful!</h4>
-                  <p className="text-xs text-[#708499] leading-relaxed">
-                    We have successfully credited <span className="text-emerald-400 font-bold">{depositAmount} TON</span> to your internal Game TON Balance! Enjoy the Arena!
-                  </p>
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-bold text-white uppercase tracking-wide">Deposit Successful!</h4>
+                    <p className="text-[11px] text-[#708499] leading-relaxed">
+                      We have successfully credited <span className="text-emerald-400 font-bold font-mono">{depositAmount} TON</span> to your internal Game TON Balance! Enjoy the Arena!
+                    </p>
+                  </div>
                   <button
                     onClick={() => { playClickSound(); setShowDepositModal(false); }}
-                    className="w-full py-2.5 bg-[#3390ec] text-[#0e1621] font-black rounded-xl text-xs transition cursor-pointer"
+                    className="w-full py-2.5 bg-[#3390ec] hover:bg-[#2081e2] text-[#0e1621] font-bold rounded-xl text-xs uppercase tracking-wider transition active:scale-98 cursor-pointer"
                   >
                     BACK TO ARENA
                   </button>
@@ -4987,16 +4995,16 @@ function GameAppInner() {
               ) : !depositPendingId ? (
                 <div className="space-y-4">
                   <div className="space-y-1.5">
-                    <label className="text-[10px] text-[#708499] font-bold uppercase tracking-wider block">Select Preset Amount (TON)</label>
+                    <label className="text-[9.5px] text-[#708499] font-bold uppercase tracking-wider block">Select Preset Amount</label>
                     <div className="grid grid-cols-4 gap-2">
                       {['1', '2', '5', '10'].map((preset) => (
                         <button
                           key={preset}
                           onClick={() => { playClickSound(); setDepositAmount(preset); }}
-                          className={`py-2 text-xs font-mono font-bold rounded-xl border transition-all cursor-pointer ${
+                          className={`py-2 text-[11px] font-mono font-bold rounded-xl border transition-all duration-150 cursor-pointer ${
                             depositAmount === preset
-                              ? 'bg-[#3390ec] text-[#0e1621] border-[#3390ec] font-black shadow-md shadow-[#3390ec]/15'
-                              : 'bg-[#0e1621] border-[#242f3d] text-[#708499] hover:text-white'
+                              ? 'bg-[#3390ec] text-[#0e1621] border-[#3390ec] font-bold shadow-md shadow-[#3390ec]/15'
+                              : 'bg-[#0e1621] border-[#242f3d] text-[#708499] hover:text-white hover:border-[#2b3745]'
                           }`}
                         >
                           {preset} TON
@@ -5006,20 +5014,23 @@ function GameAppInner() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[10px] text-[#708499] font-bold uppercase tracking-wider block">Or Custom Amount (TON)</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      value={depositAmount}
-                      onChange={(e) => setDepositAmount(e.target.value)}
-                      className="w-full bg-[#0e1621] border border-[#242f3d] rounded-xl py-2.5 px-3 text-xs font-bold font-mono text-white focus:outline-none focus:border-[#3390ec] text-center"
-                      placeholder="0.00"
-                    />
+                    <label className="text-[9.5px] text-[#708499] font-bold uppercase tracking-wider block">Or Custom Amount</label>
+                    <div className="relative flex items-center">
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="0.1"
+                        value={depositAmount}
+                        onChange={(e) => setDepositAmount(e.target.value)}
+                        className="w-full bg-[#0e1621] border border-[#242f3d] rounded-xl py-2.5 pl-3.5 pr-12 text-xs font-bold font-mono text-white focus:outline-none focus:border-[#3390ec] focus:ring-1 focus:ring-[#3390ec]/30 transition"
+                        placeholder="0.00"
+                      />
+                      <span className="absolute right-4 text-[10px] font-bold text-[#708499] font-mono pointer-events-none">TON</span>
+                    </div>
                   </div>
 
                   {depositVerifyError && (
-                    <div className="bg-red-500/10 border border-red-500/25 p-2.5 rounded-xl text-[10.5px] text-red-400 leading-normal">
+                    <div className="bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl text-[10px] text-red-400 leading-normal">
                       ⚠️ {depositVerifyError}
                     </div>
                   )}
@@ -5027,7 +5038,7 @@ function GameAppInner() {
                   <button
                     disabled={depositLoading || !depositAmount || parseFloat(depositAmount) <= 0}
                     onClick={handleCreateDepositIntent}
-                    className="w-full py-3 bg-[#3390ec] hover:bg-[#2879c8] disabled:bg-[#1e2730] disabled:opacity-40 disabled:cursor-not-allowed text-[#0e1621] font-black rounded-xl text-xs tracking-wider uppercase transition cursor-pointer flex items-center justify-center gap-1.5"
+                    className="w-full py-3 bg-[#3390ec] hover:bg-[#2081e2] disabled:bg-[#1c2430] disabled:opacity-40 disabled:cursor-not-allowed text-[#0e1621] font-bold rounded-xl text-xs tracking-wider uppercase transition active:scale-98 cursor-pointer flex items-center justify-center gap-1.5"
                   >
                     {depositLoading ? (
                       <>
@@ -5041,67 +5052,67 @@ function GameAppInner() {
                 </div>
               ) : (
                 <div className="space-y-4 text-xs">
-                  <div className="bg-[#0e1621] p-3.5 rounded-2xl border border-[#242f3d] space-y-2.5 font-mono">
-                    <div className="flex justify-between items-center text-[10px] border-b border-[#242f3d] pb-1.5">
+                  <div className="bg-[#0e1621] p-3.5 rounded-xl border border-[#242f3d] space-y-3 font-mono">
+                    <div className="flex justify-between items-center text-[9.5px] border-b border-[#242f3d]/60 pb-2">
                       <span className="text-[#708499] uppercase font-bold">Deposit Intent ID</span>
                       <span className="text-white font-bold">{depositPendingId.slice(0, 8)}...</span>
                     </div>
 
-                    <div className="flex justify-between items-baseline">
-                      <span className="text-[10px] text-[#708499] uppercase font-bold">Amount to Pay:</span>
+                    <div className="flex justify-between items-baseline py-0.5">
+                      <span className="text-[9.5px] text-[#708499] uppercase font-bold">Amount to Pay:</span>
                       <span className="text-base font-black text-emerald-400">{depositAmount} TON</span>
                     </div>
 
-                    <div className="space-y-1">
+                    <div className="space-y-1 pt-1 border-t border-[#242f3d]/30">
                       <div className="flex justify-between items-center">
-                        <span className="text-[10px] text-[#708499] uppercase font-bold">Treasury Wallet:</span>
+                        <span className="text-[9.5px] text-[#708499] uppercase font-bold">Treasury Wallet:</span>
                         <button
                           onClick={() => { playClickSound(); navigator.clipboard.writeText(depositTreasuryAddress); }}
-                          className="text-[9px] text-[#3390ec] hover:underline cursor-pointer flex items-center gap-0.5"
+                          className="text-[9px] text-[#3390ec] hover:underline cursor-pointer flex items-center gap-0.5 font-bold"
                         >
                           <Copy className="w-2.5 h-2.5" /> COPY
                         </button>
                       </div>
-                      <p className="text-[9.5px] text-white break-all leading-normal bg-[#17212b] p-1.5 rounded border border-[#242f3d]/60 select-all">
+                      <p className="text-[9px] text-white break-all leading-normal bg-[#17212b] p-2 rounded border border-[#242f3d]/60 select-all">
                         {depositTreasuryAddress}
                       </p>
                     </div>
 
-                    <div className="space-y-1">
+                    <div className="space-y-1 pt-1">
                       <div className="flex justify-between items-center">
-                        <span className="text-[10px] text-amber-500 uppercase font-bold">Required Comment:</span>
+                        <span className="text-[9.5px] text-amber-500 uppercase font-bold">Required Comment:</span>
                         <button
                           onClick={() => { playClickSound(); navigator.clipboard.writeText(depositMessage); }}
-                          className="text-[9px] text-[#3390ec] hover:underline cursor-pointer flex items-center gap-0.5"
+                          className="text-[9px] text-[#3390ec] hover:underline cursor-pointer flex items-center gap-0.5 font-bold"
                         >
                           <Copy className="w-2.5 h-2.5" /> COPY
                         </button>
                       </div>
-                      <p className="text-[11px] font-black text-amber-400 bg-amber-500/10 p-2 rounded border border-amber-500/20 text-center select-all">
+                      <p className="text-[11px] font-black text-amber-400 bg-amber-500/10 p-2 rounded border border-amber-500/20 text-center select-all tracking-wider">
                         {depositMessage}
                       </p>
                     </div>
                   </div>
 
-                  <div className="bg-amber-500/10 border border-amber-500/25 p-3 rounded-xl text-[9.5px] text-amber-500 leading-normal space-y-1">
-                    <p className="font-bold uppercase">⚠️ CRITICAL DIRECTIVE:</p>
+                  <div className="bg-amber-500/5 border border-amber-500/15 p-3 rounded-xl text-[9.5px] text-amber-500/90 leading-relaxed space-y-0.5">
+                    <p className="font-bold uppercase tracking-wider text-[9px] text-amber-500">⚠️ CRITICAL DIRECTIVE:</p>
                     <p>You MUST include the exact unique comment above in your transaction, or your deposit will not be credited.</p>
                   </div>
 
                   {depositPolling && (
-                    <div className="bg-[#3390ec]/15 border border-[#3390ec]/30 p-3 rounded-2xl flex items-center justify-center gap-2 text-xs text-[#3390ec] font-bold">
-                      <RefreshCw className="animate-spin w-4 h-4 text-[#3390ec]" />
-                      <span>Automatically detecting on-chain transaction...</span>
+                    <div className="bg-[#3390ec]/10 border border-[#3390ec]/20 p-2.5 rounded-xl flex items-center justify-center gap-2 text-[10.5px] text-[#3390ec] font-bold">
+                      <RefreshCw className="animate-spin w-3.5 h-3.5 text-[#3390ec]" />
+                      <span>Detecting on-chain transaction...</span>
                     </div>
                   )}
 
                   {depositVerifyError && (
-                    <div className="bg-red-500/10 border border-red-500/25 p-2.5 rounded-xl text-[10.5px] text-red-400 leading-normal whitespace-pre-line">
+                    <div className="bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl text-[10px] text-red-400 leading-normal whitespace-pre-line">
                       ⚠️ {depositVerifyError}
                     </div>
                   )}
 
-                  <div className="space-y-2 pt-1.5 border-t border-[#242f3d]">
+                  <div className="space-y-2 pt-2 border-t border-[#242f3d]">
                     <button
                       disabled={depositLoading || depositPolling}
                       onClick={async () => {
@@ -5142,7 +5153,7 @@ function GameAppInner() {
                           setDepositLoading(false);
                         }
                       }}
-                      className="w-full py-3 bg-[#3390ec] hover:bg-[#2879c8] disabled:opacity-40 disabled:cursor-not-allowed text-[#0e1621] font-black rounded-xl text-xs tracking-wider uppercase transition cursor-pointer flex items-center justify-center gap-1.5"
+                      className="w-full py-3 bg-[#3390ec] hover:bg-[#2081e2] disabled:opacity-40 disabled:cursor-not-allowed text-[#0e1621] font-bold rounded-xl text-xs tracking-wider uppercase transition active:scale-98 cursor-pointer flex items-center justify-center gap-1.5"
                     >
                       {depositPolling ? "POLLING TRANSACTION..." : "PAY VIA TON CONNECT"}
                     </button>
@@ -5166,7 +5177,7 @@ function GameAppInner() {
                         setDepositPolling(false);
                         setDepositPendingId(null); 
                       }}
-                      className="w-full py-1.5 text-[#708499] hover:text-white transition text-[10px] uppercase font-bold text-center cursor-pointer"
+                      className="w-full py-1.5 text-[#708499] hover:text-white transition text-[9px] uppercase font-bold text-center cursor-pointer tracking-wider"
                     >
                       START OVER / CHOOSE DIFFERENT AMOUNT
                     </button>
@@ -5190,107 +5201,112 @@ function GameAppInner() {
                   setShowWithdrawModal(false);
                 }
               }}
-              className="absolute inset-0 bg-black/80 backdrop-blur-xs"
+              className="absolute inset-0 bg-black/70 backdrop-blur-xs"
             />
             
             <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              initial={{ scale: 0.95, opacity: 0, y: 15 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-[#17212b] border border-[#2b3745] rounded-3xl p-6 w-full max-w-sm relative z-10 shadow-2xl space-y-4"
+              exit={{ scale: 0.95, opacity: 0, y: 15 }}
+              className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-5 w-full max-w-sm relative z-10 shadow-2xl space-y-4"
             >
-              <div className="flex justify-between items-center pb-2 border-b border-[#242f3d]">
-                <span className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-1.5">
-                  <ArrowUpRight className="w-5 h-5 text-purple-400" />
+              <div className="flex justify-between items-center pb-2.5 border-b border-[#242f3d]">
+                <span className="text-[12px] font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <ArrowUpRight className="w-4 h-4 text-purple-400" />
                   Withdraw TON
                 </span>
                 {!isWithdrawalSuccess && (
                   <button
                     id="btn_close_withdraw_modal"
                     onClick={() => { playClickSound(); setShowWithdrawModal(false); }}
-                    className="p-1 rounded-sm hover:bg-[#242f3d] text-[#708499] hover:text-white transition cursor-pointer"
+                    className="p-1.5 rounded-lg hover:bg-[#242f3d] text-[#708499] hover:text-white transition-colors cursor-pointer"
                   >
-                    <X className="w-5 h-5" />
+                    <X className="w-4 h-4" />
                   </button>
                 )}
               </div>
 
               {isWithdrawalSuccess ? (
-                <div className="flex flex-col items-center justify-center py-6 text-center space-y-5">
+                <div className="flex flex-col items-center justify-center py-6 text-center space-y-4">
                   {/* Clean, stable checkmark - static for solid mobile performance */}
-                  <div className="w-16 h-16 rounded-full bg-emerald-500 text-[#0e1621] flex items-center justify-center shadow-lg">
-                    <Check className="w-9 h-9 stroke-[3]" />
+                  <div className="w-14 h-14 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shadow-lg">
+                    <Check className="w-7 h-7 stroke-[2.5]" />
                   </div>
 
                   {/* Messages */}
-                  <div className="space-y-1.5">
-                    <h3 className="text-base font-black text-emerald-400 uppercase tracking-wider">
+                  <div className="space-y-1">
+                    <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-wide">
                       Request Submitted!
                     </h3>
-                    <p className="text-xs text-[#b2c1d4] px-1 leading-relaxed">
+                    <p className="text-[11px] text-[#b2c1d4] px-1 leading-relaxed">
                       Your withdrawal request has been successfully created and is now processing.
                     </p>
                   </div>
 
                   {/* Plain, clean card showing requested details */}
-                  <div className="w-full bg-[#0e1621] border border-emerald-500/10 rounded-2xl p-4 flex flex-col items-center justify-center space-y-1">
-                    <span className="text-[9px] text-[#708499] uppercase tracking-widest font-black">Outbound Amount</span>
-                    <span className="text-xl font-black text-emerald-400 font-mono">
+                  <div className="w-full bg-[#0e1621] border border-[#242f3d] rounded-xl p-3.5 flex flex-col items-center justify-center space-y-0.5">
+                    <span className="text-[9px] text-[#708499] uppercase tracking-wider font-bold">Outbound Amount</span>
+                    <span className="text-lg font-black text-emerald-400 font-mono">
                       -{submittedWithdrawalAmount} TON
                     </span>
                   </div>
 
                   {/* Auto-close status message */}
-                  <span className="text-[9.5px] text-[#708499] uppercase tracking-wider font-semibold">
+                  <span className="text-[9px] text-[#708499] uppercase tracking-wider font-semibold">
                     Returning to Wallet in 2.5s...
                   </span>
                 </div>
               ) : tonConfig?.withdrawalsDisabledByConfigError ? (
-                <div className="bg-red-500/15 border border-red-500/30 text-red-400 p-4 rounded-2xl text-xs font-medium text-center space-y-2">
-                  <p className="font-bold uppercase tracking-wider">⚠️ Withdrawal Config Error</p>
-                  <p className="text-[11px] opacity-85 leading-relaxed font-mono break-all">{tonConfig?.configErrorMessage || "Derived hot wallet address does not match TON_HOT_WALLET_ADDRESS"}</p>
+                <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl text-xs font-medium text-center space-y-1.5">
+                  <p className="font-bold uppercase tracking-wider text-[11px]">⚠️ Withdrawal Config Error</p>
+                  <p className="text-[10px] opacity-85 leading-relaxed font-mono break-all">{tonConfig?.configErrorMessage || "Derived hot wallet address does not match TON_HOT_WALLET_ADDRESS"}</p>
                 </div>
               ) : tonConfig?.pauseWithdrawals ? (
-                <div className="bg-red-500/15 border border-red-500/30 text-red-400 p-4 rounded-2xl text-xs font-medium text-center space-y-2">
-                  <p className="font-bold uppercase tracking-wider">Withdrawals Suspended</p>
-                  <p className="text-[11px] opacity-80 leading-relaxed">Outbound TON withdrawals are temporarily paused for backend ledger balancing. Please try again later.</p>
+                <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl text-xs font-medium text-center space-y-1.5">
+                  <p className="font-bold uppercase tracking-wider text-[11px]">Withdrawals Suspended</p>
+                  <p className="text-[10px] opacity-80 leading-relaxed">Outbound TON withdrawals are temporarily paused for backend ledger balancing. Please try again later.</p>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <div className="bg-[#0e1621] p-3 rounded-2xl border border-[#242f3d] flex justify-between items-center text-xs">
+                  <div className="bg-[#0e1621] p-3 rounded-xl border border-[#242f3d] flex justify-between items-center text-xs">
                     <span className="text-[#708499] uppercase font-bold text-[9.5px]">Available Game Balance:</span>
-                    <span className="font-black text-white text-sm">
+                    <span className="font-bold text-white text-xs font-mono">
                       {getTonValue(profile?.tonAccount?.availableNano)} TON
                     </span>
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[10px] text-[#708499] font-bold uppercase tracking-wider block">Withdrawal Amount (TON)</label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="1.0"
-                      value={withdrawAmount}
-                      onChange={(e) => setWithdrawAmount(e.target.value)}
-                      className="w-full bg-[#0e1621] border border-[#242f3d] rounded-xl py-2.5 px-3 text-xs font-bold font-mono text-white focus:outline-none focus:border-[#3390ec] text-center"
-                      placeholder="Min 1.0 TON"
-                    />
-                    <span className="text-[8.5px] text-[#708499] block mt-1 leading-none">Min limit: 1 TON. Max limit: 100 TON per transaction.</span>
+                    <label className="text-[9.5px] text-[#708499] font-bold uppercase tracking-wider block">Withdrawal Amount</label>
+                    <div className="relative flex items-center">
+                      <input
+                        type="number"
+                        step="0.1"
+                        min="1.0"
+                        value={withdrawAmount}
+                        onChange={(e) => setWithdrawAmount(e.target.value)}
+                        className="w-full bg-[#0e1621] border border-[#242f3d] rounded-xl py-2.5 pl-3.5 pr-12 text-xs font-bold font-mono text-white focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/30 transition"
+                        placeholder="Min 1.0 TON"
+                      />
+                      <span className="absolute right-4 text-[10px] font-bold text-[#708499] font-mono pointer-events-none">TON</span>
+                    </div>
+                    <span className="text-[8.5px] text-[#708499] block mt-1 leading-normal">
+                      Min limit: <span className="text-white font-semibold font-mono">1 TON</span>. Max limit: <span className="text-white font-semibold font-mono">100 TON</span> per transaction.
+                    </span>
                   </div>
 
                   <div className="space-y-1.5 font-mono text-[9.5px] text-[#708499] bg-[#0e1621] p-3 rounded-xl border border-[#242f3d] leading-normal">
-                    <span className="text-[8px] text-[#708499] uppercase font-bold block mb-1">Outbound Connected Destination Address:</span>
-                    <span className="text-white break-all">{walletAddress}</span>
+                    <span className="text-[8.5px] text-[#708499] uppercase font-bold block mb-1">Destination Address:</span>
+                    <span className="text-white break-all text-[9px] select-all leading-relaxed">{walletAddress}</span>
                   </div>
 
                   {withdrawError && (
-                    <div className="bg-red-500/10 border border-red-500/25 p-2.5 rounded-xl text-[10.5px] text-red-400 leading-normal">
+                    <div className="bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl text-[10px] text-red-400 leading-normal">
                       ⚠️ {withdrawError}
                     </div>
                   )}
 
                   {withdrawSuccess && (
-                    <div className="bg-emerald-500/10 border border-emerald-500/25 p-2.5 rounded-xl text-[10.5px] text-emerald-400 leading-normal">
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-xl text-[10px] text-emerald-400 leading-normal">
                       ✓ {withdrawSuccess}
                     </div>
                   )}
@@ -5298,7 +5314,7 @@ function GameAppInner() {
                   <button
                     disabled={withdrawLoading || !withdrawAmount || parseFloat(withdrawAmount) < 1}
                     onClick={handleRequestWithdrawal}
-                    className="w-full py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-[#1e2730] disabled:to-[#1e2730] disabled:opacity-40 disabled:cursor-not-allowed text-white font-black rounded-xl text-xs tracking-wider uppercase transition cursor-pointer flex items-center justify-center gap-1.5"
+                    className="w-full py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:from-[#1c2430] disabled:to-[#1c2430] disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded-xl text-xs tracking-wider uppercase transition active:scale-98 cursor-pointer flex items-center justify-center gap-1.5"
                   >
                     {withdrawLoading ? (
                       <>
@@ -5323,39 +5339,39 @@ function GameAppInner() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => { playClickSound(); setShowTonHistoryModal(false); }}
-              className="absolute inset-0 bg-black/80 backdrop-blur-xs"
+              className="absolute inset-0 bg-black/70 backdrop-blur-xs"
             />
             
             <motion.div
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              initial={{ scale: 0.95, opacity: 0, y: 15 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="bg-[#17212b] border border-[#2b3745] rounded-3xl p-6 w-full max-w-sm relative z-10 shadow-2xl space-y-4 flex flex-col max-h-[85vh]"
+              exit={{ scale: 0.95, opacity: 0, y: 15 }}
+              className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-5 w-full max-w-sm relative z-10 shadow-2xl flex flex-col max-h-[85vh] space-y-4"
             >
-              <div className="flex justify-between items-center pb-2 border-b border-[#242f3d] shrink-0">
-                <span className="text-sm font-black text-white uppercase tracking-wider flex items-center gap-1.5">
-                  <History className="w-5 h-5 text-amber-500" />
-                  TON Game Ledger History
+              <div className="flex justify-between items-center pb-2.5 border-b border-[#242f3d] shrink-0">
+                <span className="text-[12px] font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                  <History className="w-4 h-4 text-amber-500" />
+                  TON Game Ledger
                 </span>
                 <button
                   id="btn_close_history_modal"
                   onClick={() => { playClickSound(); setShowTonHistoryModal(false); }}
-                  className="p-1 rounded-sm hover:bg-[#242f3d] text-[#708499] hover:text-white transition cursor-pointer"
+                  className="p-1.5 rounded-lg hover:bg-[#242f3d] text-[#708499] hover:text-white transition-colors cursor-pointer"
                 >
-                  <X className="w-5 h-5" />
+                  <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <div className="overflow-y-auto grow space-y-2.5 pr-1 py-1 scrollbar-thin">
+              <div className="overflow-y-auto grow space-y-2 pr-1 py-1 scrollbar-thin">
                 {tonHistoryLoading ? (
                   <div className="text-center py-12 space-y-3 shrink-0">
-                    <RefreshCw className="animate-spin w-8 h-8 text-[#3390ec] mx-auto" />
-                    <p className="text-xs text-[#708499]">Retrieving unified transaction logs...</p>
+                    <RefreshCw className="animate-spin w-6 h-6 text-[#3390ec] mx-auto" />
+                    <p className="text-[11px] text-[#708499]">Retrieving unified transaction logs...</p>
                   </div>
                 ) : tonHistory.length === 0 ? (
                   <div className="text-center py-12 space-y-1.5 shrink-0">
-                    <p className="text-xs font-bold text-white uppercase">No Transactions Yet</p>
-                    <p className="text-[10px] text-[#708499] max-w-xs mx-auto">
+                    <p className="text-[11px] font-bold text-white uppercase tracking-wider">No Transactions Yet</p>
+                    <p className="text-[10px] text-[#708499] max-w-xs mx-auto leading-relaxed">
                       All your on-chain deposits, outbound withdrawals, stakes, wins, losses, draws, and refunds will appear here.
                     </p>
                   </div>
@@ -5367,28 +5383,28 @@ function GameAppInner() {
                     return (
                       <div
                         key={item.id || idx}
-                        className="bg-[#0e1621]/60 border border-[#242f3d] rounded-2xl p-3 flex items-center justify-between text-xs transition hover:border-[#2b3745]"
+                        className="bg-[#0e1621]/60 border border-[#242f3d] rounded-xl p-3 flex items-center justify-between text-xs transition-colors hover:border-[#2b3745]"
                       >
-                        <div className="flex items-center gap-3">
-                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-base shrink-0 ${
-                            item.type === 'deposit' ? 'bg-[#3390ec]/15 text-[#3390ec]' :
-                            item.type === 'withdrawal' ? 'bg-purple-500/15 text-purple-400' :
-                            item.type === 'game_win' ? 'bg-emerald-500/15 text-emerald-400' :
-                            item.type === 'game_loss' ? 'bg-red-500/15 text-red-400' :
-                            'bg-amber-500/15 text-amber-500'
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-base shrink-0 border ${
+                            item.type === 'deposit' ? 'bg-[#3390ec]/10 text-[#3390ec] border-[#3390ec]/15' :
+                            item.type === 'withdrawal' ? 'bg-purple-500/10 text-purple-400 border-purple-500/15' :
+                            item.type === 'game_win' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/15' :
+                            item.type === 'game_loss' ? 'bg-red-500/10 text-red-400 border-red-500/15' :
+                            'bg-amber-500/10 text-amber-500 border-amber-500/15'
                           }`}>
-                            {item.type === 'deposit' ? <ArrowDownLeft className="w-4 h-4" /> :
-                             item.type === 'withdrawal' ? <ArrowUpRight className="w-4 h-4" /> :
-                             item.type === 'game_win' ? <Trophy className="w-4 h-4 text-emerald-400" /> :
-                             item.type === 'game_loss' ? <X className="w-4 h-4 text-red-400" /> :
-                             item.type === 'stake_reservation' ? <Lock className="w-4 h-4" /> :
-                             <RefreshCw className="w-3.5 h-3.5" />}
+                            {item.type === 'deposit' ? <ArrowDownLeft className="w-3.5 h-3.5" /> :
+                             item.type === 'withdrawal' ? <ArrowUpRight className="w-3.5 h-3.5" /> :
+                             item.type === 'game_win' ? <Trophy className="w-3.5 h-3.5" /> :
+                             item.type === 'game_loss' ? <X className="w-3.5 h-3.5" /> :
+                             item.type === 'stake_reservation' ? <Lock className="w-3.5 h-3.5" /> :
+                             <RefreshCw className="w-3 h-3" />}
                           </div>
 
                           <div className="space-y-0.5 min-w-0">
-                            <span className="font-bold text-white text-[11px] block truncate">
-                              {item.type === 'deposit' ? 'TON Deposit' :
-                               item.type === 'withdrawal' ? 'Outbound Withdrawal' :
+                            <span className="font-bold text-white text-[11px] block truncate leading-tight">
+                              {item.type === 'deposit' ? 'Deposit TON' :
+                               item.type === 'withdrawal' ? 'Withdrawal' :
                                item.type === 'withdrawal_requested' ? 'Withdrawal Requested' :
                                item.type === 'game_win' ? 'Arena Match Win' :
                                item.type === 'game_loss' ? 'Arena Match Loss' :
@@ -5396,11 +5412,11 @@ function GameAppInner() {
                                item.type === 'refund' ? 'Staking Refund' :
                                item.type === 'draw' || item.type === 'game_draw' ? 'Match Draw' : item.type}
                             </span>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="text-[8.5px] text-[#708499] block font-mono">
                                 {item.createdAt ? new Date(item.createdAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : 'Recent'}
                               </span>
-                              <span className={`text-[7.5px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded-full ${
+                              <span className={`text-[7.5px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded ${
                                 item.status === 'completed' || item.status === 'Credited' || item.status === 'credited' || item.status === 'confirmed' ? 'bg-emerald-500/10 text-emerald-400' :
                                 item.status === 'pending' || item.status === 'posted' ? 'bg-amber-500/10 text-amber-400 animate-pulse' :
                                 'bg-red-500/10 text-red-400'
@@ -5416,7 +5432,7 @@ function GameAppInner() {
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 onClick={(e) => e.stopPropagation()}
-                                className="text-[9px] text-[#3390ec] hover:underline font-mono flex items-center gap-0.5 mt-1.5"
+                                className="text-[9px] text-[#3390ec] hover:underline font-mono flex items-center gap-0.5 mt-1"
                               >
                                 <ExternalLink className="w-2.5 h-2.5" />
                                 View Transaction
@@ -5426,13 +5442,13 @@ function GameAppInner() {
                         </div>
 
                         <div className="text-right shrink-0">
-                          <span className={`font-black font-mono text-[11.5px] block ${
+                          <span className={`font-bold font-mono text-[11px] block ${
                             isCredit ? 'text-emerald-400' : isDebit ? 'text-rose-400' : 'text-slate-400'
                           }`}>
                             {isCredit ? '+' : isDebit ? '-' : ''}
                             {getTonValue(item.amountNano)}
                           </span>
-                          <span className="text-[8px] text-[#708499] uppercase font-bold font-mono">TON</span>
+                          <span className="text-[8px] text-[#708499] uppercase font-bold font-mono block leading-none">TON</span>
                         </div>
                       </div>
                     );
@@ -5443,7 +5459,7 @@ function GameAppInner() {
               <button
                 id="btn_close_history"
                 onClick={() => { playClickSound(); setShowTonHistoryModal(false); }}
-                className="w-full py-2.5 bg-[#242f3d] text-white font-bold rounded-xl text-xs transition cursor-pointer shrink-0 border border-[#2b3745] active:scale-[0.98]"
+                className="w-full py-2.5 bg-[#242f3d] hover:bg-[#2c394a] text-white font-bold rounded-xl text-xs uppercase tracking-wider transition cursor-pointer shrink-0 border border-[#2b3745]/60 active:scale-98"
               >
                 CLOSE LEDGER
               </button>
@@ -5454,50 +5470,41 @@ function GameAppInner() {
         {/* DEPOSIT SUCCESS OVERLAY */}
         {showDepositSuccessOverlay && (
           <div id="modal_deposit_success" key="modal_deposit_success" className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            {/* Plain solid static black background - zero blur, zero GPU rendering */}
-            <div className="absolute inset-0 bg-[#0e1621]" />
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/70 backdrop-blur-xs"
+            />
             
-            {/* Simple static success dialog with zero visual effects or animations */}
-            <div className="bg-[#17212b] border-2 border-emerald-500/30 rounded-3xl p-8 w-full max-w-sm relative z-10 shadow-2xl text-center flex flex-col items-center justify-center space-y-6">
-              
-              {/* Polished custom floating checkmark - static, no pulsing or glowing */}
-              <div className="relative">
-                {/* Main success ring - static, no animations */}
-                <div className="w-20 h-20 rounded-full bg-emerald-500 text-[#0e1621] flex items-center justify-center shadow-lg relative z-10">
-                  <svg 
-                    xmlns="http://www.w3.org/2000/svg" 
-                    fill="none" 
-                    viewBox="0 0 24 24" 
-                    strokeWidth={3.5} 
-                    stroke="currentColor" 
-                    className="w-11 h-11"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                  </svg>
-                </div>
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0, y: 15 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 15 }}
+              className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-6 w-full max-w-sm relative z-10 shadow-2xl text-center flex flex-col items-center justify-center space-y-4"
+            >
+              <div className="w-14 h-14 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center mx-auto shadow-lg">
+                <Check className="w-7 h-7 stroke-[2.5]" />
               </div>
 
-              {/* Success Messages */}
-              <div className="space-y-2 relative z-10">
-                <h3 className="text-xl font-bold text-emerald-400 uppercase tracking-wider">
+              <div className="space-y-1">
+                <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-wide">
                   Deposit Successful!
                 </h3>
-                <p className="text-xs text-[#b2c1d4] px-2 leading-relaxed">
+                <p className="text-[11px] text-[#b2c1d4] px-2 leading-relaxed">
                   The deposit has completed. <span className="text-emerald-400 font-bold font-mono">+{parseFloat(successDepositAmount).toFixed(2)} TON</span> has been added to your Game Balance.
                 </p>
               </div>
 
-              {/* Simple background container */}
-              <div className="w-full bg-[#0e1621] border border-emerald-500/10 rounded-2xl p-4 flex flex-col items-center justify-center space-y-1 relative">
-                <span className="text-[10px] text-[#708499] uppercase tracking-widest font-black">Credited TON</span>
-                <span className="text-2xl font-black text-emerald-400 tracking-tight font-mono">+{parseFloat(successDepositAmount).toFixed(2)} TON</span>
+              <div className="w-full bg-[#0e1621] border border-[#242f3d] rounded-xl p-3.5 flex flex-col items-center justify-center space-y-0.5">
+                <span className="text-[9px] text-[#708499] uppercase tracking-wider font-bold">Credited TON</span>
+                <span className="text-lg font-black text-emerald-400 tracking-tight font-mono">+{parseFloat(successDepositAmount).toFixed(2)} TON</span>
               </div>
 
-              {/* Close helper status */}
               <span className="text-[9px] text-[#708499] uppercase tracking-wider font-semibold">
                 Returning to Wallet in 2.8s...
               </span>
-            </div>
+            </motion.div>
           </div>
         )}
       </AnimatePresence>
