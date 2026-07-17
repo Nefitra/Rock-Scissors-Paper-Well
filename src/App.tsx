@@ -482,6 +482,7 @@ function GameAppInner() {
   const [depositPolling, setDepositPolling] = useState<boolean>(false);
   const [floatingNotification, setFloatingNotification] = useState<string | null>(null);
   const depositIntervalRef = useRef<any>(null);
+  const isHandlingDepositSuccessRef = useRef<boolean>(false);
   
   const [withdrawAmount, setWithdrawAmount] = useState<string>('');
   const [withdrawLoading, setWithdrawLoading] = useState<boolean>(false);
@@ -691,59 +692,14 @@ function GameAppInner() {
   };
 
   const handleSuccessfulDepositVerified = async (amount: string) => {
-    // 1. Refresh all balances immediately (sync profile and widgets)
-    syncProfile();
-
-    // 2. Refresh TON History in the background (no manual refresh needed)
-    try {
-      const headers: any = {};
-      const initData = (window as any).Telegram?.WebApp?.initData;
-      if (initData) {
-        headers['x-telegram-init-data'] = initData;
-      }
-      const histRes = await fetch('/api/ton/history', { headers });
-      const histData = await histRes.json();
-      if (histData.history) {
-        setTonHistory(histData.history);
-      }
-    } catch (hErr) {
-      console.error("History refresh error:", hErr);
+    // 0. Prevent concurrent executions of success handlers
+    if (isHandlingDepositSuccessRef.current) {
+      console.log("[DEPOSIT] Success already being handled, skipping duplicate.");
+      return;
     }
+    isHandlingDepositSuccessRef.current = true;
 
-    // 3. Play the satisfying victory win chime sound
-    playWinChime();
-
-    // 4. Trigger gorgeous confetti animation from the top of the screen
-    confetti({
-      particleCount: 150,
-      spread: 85,
-      origin: { y: 0.05 }
-    });
-    
-    // A couple of extra side bursts for extra celebratory feel!
-    setTimeout(() => {
-      confetti({
-        particleCount: 70,
-        angle: 60,
-        spread: 55,
-        origin: { x: 0, y: 0.1 }
-      });
-      confetti({
-        particleCount: 70,
-        angle: 120,
-        spread: 55,
-        origin: { x: 1, y: 0.1 }
-      });
-    }, 300);
-
-    // 5. Clear localStorage on successful credit
-    localStorage.removeItem('pending_deposit_id');
-    localStorage.removeItem('pending_deposit_amount');
-    localStorage.removeItem('pending_deposit_amount_nano');
-    localStorage.removeItem('pending_deposit_message');
-    localStorage.removeItem('pending_deposit_treasury');
-
-    // 6. Polling state updates
+    // 1. Immediately cancel polling to prevent duplicate checks or triggers
     if (depositIntervalRef.current) {
       clearInterval(depositIntervalRef.current);
       depositIntervalRef.current = null;
@@ -751,16 +707,79 @@ function GameAppInner() {
     setDepositPolling(false);
     setDepositPendingStatus('completed');
 
+    // 2. Refresh all balances immediately (sync profile and widgets)
+    syncProfile();
+
+    // 3. Refresh TON History in the background asynchronously without blocking UI rendering
+    (async () => {
+      try {
+        const headers: any = {};
+        const initData = (window as any).Telegram?.WebApp?.initData;
+        if (initData) {
+          headers['x-telegram-init-data'] = initData;
+        }
+        const histRes = await fetch('/api/ton/history', { headers });
+        const histData = await histRes.json();
+        if (histData.history) {
+          setTonHistory(histData.history);
+        }
+      } catch (hErr) {
+        console.error("History refresh error:", hErr);
+      }
+    })();
+
+    // 4. Play the satisfying victory win chime sound
+    playWinChime();
+
+    // 5. Trigger gorgeous confetti animation from the top of the screen (optimized particle count)
+    confetti({
+      particleCount: 100, // Reduced to 100 for optimal performance on low-end mobile devices
+      spread: 75,
+      origin: { y: 0.05 },
+      disableForReducedMotion: true
+    });
+    
+    // A couple of extra side bursts for extra celebratory feel!
+    setTimeout(() => {
+      confetti({
+        particleCount: 40, // Reduced from 70 to 40
+        angle: 60,
+        spread: 45,
+        origin: { x: 0, y: 0.1 },
+        disableForReducedMotion: true
+      });
+      confetti({
+        particleCount: 40, // Reduced from 70 to 40
+        angle: 120,
+        spread: 45,
+        origin: { x: 1, y: 0.1 },
+        disableForReducedMotion: true
+      });
+    }, 300);
+
+    // 6. Clear localStorage on successful credit
+    localStorage.removeItem('pending_deposit_id');
+    localStorage.removeItem('pending_deposit_amount');
+    localStorage.removeItem('pending_deposit_amount_nano');
+    localStorage.removeItem('pending_deposit_message');
+    localStorage.removeItem('pending_deposit_treasury');
+
     // 7. Open Success Overlay with exact amount
     setSuccessDepositAmount(amount || depositAmount || '1.00');
     setShowDepositSuccessOverlay(true);
 
-    // 8. Automatically close everything after 2.8 seconds
+    // 8. Automatically close everything in a controlled, staggered sequence (Requirement 4)
     setTimeout(() => {
+      // Step A: Close Success Overlay first to animate fade-out smoothly
       setShowDepositSuccessOverlay(false);
-      setShowDepositModal(false);
-      setShowTonHistoryModal(false);
-      setDepositPendingId(null);
+      
+      // Step B: Wait for overlay exit animation to finish, then close standard underlying modals
+      setTimeout(() => {
+        setShowDepositModal(false);
+        setShowTonHistoryModal(false);
+        setDepositPendingId(null);
+        isHandlingDepositSuccessRef.current = false;
+      }, 400);
     }, 2800);
   };
 
@@ -4531,7 +4550,7 @@ function GameAppInner() {
       {/* INTERACTIVE RULES INFO MODAL */}
       <AnimatePresence>
         {showInfoModal && (
-          <div id="modal_interaction_chart" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div id="modal_interaction_chart" key="modal_interaction_chart" className="fixed inset-0 z-50 flex items-center justify-center p-4">
             {/* Backdrop with transition */}
             <motion.div
               initial={{ opacity: 0 }}
@@ -4626,7 +4645,7 @@ function GameAppInner() {
         )}
 
         {showRankTiersModal && (
-          <div id="modal_rank_tiers_showcase" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div id="modal_rank_tiers_showcase" key="modal_rank_tiers_showcase" className="fixed inset-0 z-50 flex items-center justify-center p-4">
             {/* Backdrop with transition */}
             <motion.div
               initial={{ opacity: 0 }}
@@ -4721,7 +4740,7 @@ function GameAppInner() {
         )}
 
         {promotedRank && (
-          <div id="modal_rank_promotion_celebration" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div id="modal_rank_promotion_celebration" key="modal_rank_promotion_celebration" className="fixed inset-0 z-50 flex items-center justify-center p-4">
             {/* Backdrop with transition */}
             <motion.div
               initial={{ opacity: 0 }}
@@ -4772,7 +4791,7 @@ function GameAppInner() {
         )}
 
         {showReferralQrModal && (
-          <div id="modal_referral_qr_code" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div id="modal_referral_qr_code" key="modal_referral_qr_code" className="fixed inset-0 z-50 flex items-center justify-center p-4">
             {/* Backdrop with transition */}
             <motion.div
               initial={{ opacity: 0 }}
@@ -4849,7 +4868,7 @@ function GameAppInner() {
 
         {/* TON DEPOSIT MODAL */}
         {showDepositModal && (
-          <div id="modal_ton_deposit" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div id="modal_ton_deposit" key="modal_ton_deposit" className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -5094,7 +5113,7 @@ function GameAppInner() {
 
         {/* TON WITHDRAWAL MODAL */}
         {showWithdrawModal && (
-          <div id="modal_ton_withdraw" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div id="modal_ton_withdraw" key="modal_ton_withdraw" className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -5195,7 +5214,7 @@ function GameAppInner() {
 
         {/* TON LEDGER HISTORY MODAL */}
         {showTonHistoryModal && (
-          <div id="modal_ton_history" className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div id="modal_ton_history" key="modal_ton_history" className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -5331,7 +5350,7 @@ function GameAppInner() {
 
         {/* DEPOSIT SUCCESS OVERLAY */}
         {showDepositSuccessOverlay && (
-          <div id="modal_deposit_success" className="fixed inset-0 z-55 flex items-center justify-center p-4">
+          <div id="modal_deposit_success" key="modal_deposit_success" className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}

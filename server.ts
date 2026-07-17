@@ -1736,7 +1736,7 @@ async function checkAndReleaseStaleReservedFunds(userId: string): Promise<any> {
 async function runWithRetry<T>(
   fn: () => Promise<T>,
   retries = 5,
-  delayMs = 2000,
+  delayMs = 3000,
   backoffFactor = 2
 ): Promise<T> {
   let attempt = 0;
@@ -1747,23 +1747,33 @@ async function runWithRetry<T>(
       attempt++;
       
       const status = err?.status || err?.response?.status || (err?.response && err.response.status);
+      const errStr = String(err).toLowerCase();
+      const errMessage = (err?.message || '').toLowerCase();
+      
       const isRateLimit = status === 429 ||
-        String(err).includes('429') ||
-        (err.message && err.message.includes('429'));
+        errStr.includes('429') ||
+        errMessage.includes('429') ||
+        errStr.includes('rate limit') ||
+        errMessage.includes('rate limit') ||
+        errStr.includes('too many requests') ||
+        errMessage.includes('too many requests');
       
       if (isRateLimit && attempt < retries) {
         const waitTime = delayMs * Math.pow(backoffFactor, attempt - 1);
-        console.warn(`[RATE_LIMIT] Got 429 rate limit error (attempt ${attempt}/${retries}). Retrying in ${waitTime}ms...`);
+        console.warn(`[RATE_LIMIT] Got rate limit error (attempt ${attempt}/${retries}). Retrying in ${waitTime}ms...`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
         continue;
       }
       
       const isTransient = !err?.response ||
         (status >= 500 && status <= 599) ||
-        String(err).toLowerCase().includes('timeout') ||
-        String(err).toLowerCase().includes('econnrefused') ||
-        String(err).toLowerCase().includes('failed to fetch');
-        
+        errStr.includes('timeout') ||
+        errMessage.includes('timeout') ||
+        errStr.includes('econnrefused') ||
+        errMessage.includes('econnrefused') ||
+        errStr.includes('failed to fetch') ||
+        errMessage.includes('failed to fetch');
+         
       if (isTransient && attempt < retries) {
         const waitTime = delayMs * Math.pow(backoffFactor, attempt - 1);
         console.warn(`[TRANSIENT_ERROR] Got transient error: ${err.message || err} (attempt ${attempt}/${retries}). Retrying in ${waitTime}ms...`);
@@ -2022,87 +2032,121 @@ function extractMessageText(inMsg: any): string {
   return "";
 }
 
+let cachedTransactions: any[] = [];
+let cacheTimestamp = 0;
+let activeFetchPromise: Promise<any[]> | null = null;
+
 async function fetchTransactionsFromToncenter(address: string, network: string): Promise<any[]> {
-  const host = network === 'mainnet' ? 'toncenter.com' : 'testnet.toncenter.com';
-  const headers = getTonCenterHeaders();
-  const txs: any[] = [];
+  const now = Date.now();
+  
+  // If we have a fresh cache (less than 4.5 seconds old), return it immediately
+  if (now - cacheTimestamp < 4500 && cachedTransactions.length > 0) {
+    console.log(`[Toncenter Cache] Returning ${cachedTransactions.length} cached transactions (cache age: ${now - cacheTimestamp}ms)`);
+    return cachedTransactions;
+  }
+  
+  // If there is an active fetch, reuse its promise to deduplicate concurrent calls
+  if (activeFetchPromise) {
+    console.log(`[Toncenter Cache] Reusing active transactions fetch promise...`);
+    return activeFetchPromise;
+  }
+  
+  activeFetchPromise = (async () => {
+    const host = network === 'mainnet' ? 'toncenter.com' : 'testnet.toncenter.com';
+    const headers = getTonCenterHeaders();
+    const txs: any[] = [];
+    let v3Success = false;
 
-  // 1. Try API v3 (REST): GET /api/v3/transactions?account=address&limit=20
-  try {
-    const url = `https://${host}/api/v3/transactions?account=${address}&limit=20`;
-    console.log(`[Toncenter V3] Fetching: ${url}`);
-    let res = await fetchWithRetry(url, { headers });
-    if (res.status === 401 && headers['X-API-Key']) {
-      console.warn(`[Toncenter V3] 401 Unauthorized with API key. Retrying WITHOUT API key.`);
-      const cleanHeaders = { ...headers };
-      delete cleanHeaders['X-API-Key'];
-      res = await fetchWithRetry(url, { headers: cleanHeaders });
-    }
-    const data = await res.json();
-    if (data && Array.isArray(data.transactions)) {
-      console.log(`[Toncenter V3] Successfully fetched ${data.transactions.length} transactions.`);
-      for (const tx of data.transactions) {
-        let normalizedHash = tx.hash || "";
-        if (normalizedHash && normalizedHash.length === 44) {
-          try {
-            normalizedHash = Buffer.from(normalizedHash, 'base64').toString('hex');
-          } catch {}
+    // 1. Try API v3 (REST): GET /api/v3/transactions?account=address&limit=20
+    try {
+      const url = `https://${host}/api/v3/transactions?account=${address}&limit=20`;
+      console.log(`[Toncenter V3] Fetching: ${url}`);
+      let res = await fetchWithRetry(url, { headers }, 3, 1500);
+      if (res.status === 401 && headers['X-API-Key']) {
+        console.warn(`[Toncenter V3] 401 Unauthorized with API key. Retrying WITHOUT API key.`);
+        const cleanHeaders = { ...headers };
+        delete cleanHeaders['X-API-Key'];
+        res = await fetchWithRetry(url, { headers: cleanHeaders }, 3, 1500);
+      }
+      const data = await res.json();
+      if (data && Array.isArray(data.transactions)) {
+        console.log(`[Toncenter V3] Successfully fetched ${data.transactions.length} transactions.`);
+        v3Success = true;
+        for (const tx of data.transactions) {
+          let normalizedHash = tx.hash || "";
+          if (normalizedHash && normalizedHash.length === 44) {
+            try {
+              normalizedHash = Buffer.from(normalizedHash, 'base64').toString('hex');
+            } catch {}
+          }
+          txs.push({
+            version: 'v3',
+            hash: normalizedHash,
+            lt: tx.lt,
+            now: tx.now,
+            in_msg: tx.in_msg ? {
+              source: tx.in_msg.source,
+              destination: tx.in_msg.destination,
+              value: tx.in_msg.value,
+              message: tx.in_msg.message,
+              decoded_body: tx.in_msg.decoded_body,
+              message_content: tx.in_msg.message_content
+            } : null
+          });
         }
-        txs.push({
-          version: 'v3',
-          hash: normalizedHash,
-          lt: tx.lt,
-          now: tx.now,
-          in_msg: tx.in_msg ? {
-            source: tx.in_msg.source,
-            destination: tx.in_msg.destination,
-            value: tx.in_msg.value,
-            message: tx.in_msg.message,
-            decoded_body: tx.in_msg.decoded_body,
-            message_content: tx.in_msg.message_content
-          } : null
-        });
+      }
+    } catch (err) {
+      console.error(`[Toncenter V3] Failed to fetch transactions:`, err);
+    }
+
+    // 2. Only fetch from API v2 as fallback if API v3 failed or returned nothing
+    if (!v3Success || txs.length === 0) {
+      try {
+        const url = `https://${host}/api/v2/getTransactions?address=${address}&limit=20`;
+        console.log(`[Toncenter V2 Fallback] Fetching: ${url}`);
+        let res = await fetchWithRetry(url, { headers }, 3, 1500);
+        if (res.status === 401 && headers['X-API-Key']) {
+          console.warn(`[Toncenter V2] 401 Unauthorized with API key. Retrying WITHOUT API key.`);
+          const cleanHeaders = { ...headers };
+          delete cleanHeaders['X-API-Key'];
+          res = await fetchWithRetry(url, { headers: cleanHeaders }, 3, 1500);
+        }
+        const data = await res.json();
+        if (data && data.ok && Array.isArray(data.result)) {
+          console.log(`[Toncenter V2] Successfully fetched ${data.result.length} transactions.`);
+          for (const tx of data.result) {
+            txs.push({
+              version: 'v2',
+              hash: tx.transaction_id ? tx.transaction_id.hash : "",
+              lt: tx.transaction_id ? tx.transaction_id.lt : "",
+              now: tx.utime,
+              in_msg: tx.in_msg ? {
+                source: tx.in_msg.source,
+                destination: tx.in_msg.destination,
+                value: tx.in_msg.value,
+                message: tx.in_msg.message,
+                decoded_body: tx.in_msg.decoded_body || (tx.in_msg.msg_data && tx.in_msg.msg_data.text ? { text: tx.in_msg.msg_data.text } : null)
+              } : null
+            });
+          }
+        }
+      } catch (err) {
+        console.error(`[Toncenter V2] Failed to fetch transactions:`, err);
       }
     }
-  } catch (err) {
-    console.error(`[Toncenter V3] Failed to fetch transactions:`, err);
-  }
 
-  // 2. Also fetch from API v2 (standard JSON-RPC REST): GET /api/v2/getTransactions?address=address&limit=20
+    if (txs.length > 0) {
+      cachedTransactions = txs;
+      cacheTimestamp = Date.now();
+    }
+    return txs;
+  })();
+
   try {
-    const url = `https://${host}/api/v2/getTransactions?address=${address}&limit=20`;
-    console.log(`[Toncenter V2] Fetching: ${url}`);
-    let res = await fetchWithRetry(url, { headers });
-    if (res.status === 401 && headers['X-API-Key']) {
-      console.warn(`[Toncenter V2] 401 Unauthorized with API key. Retrying WITHOUT API key.`);
-      const cleanHeaders = { ...headers };
-      delete cleanHeaders['X-API-Key'];
-      res = await fetchWithRetry(url, { headers: cleanHeaders });
-    }
-    const data = await res.json();
-    if (data && data.ok && Array.isArray(data.result)) {
-      console.log(`[Toncenter V2] Successfully fetched ${data.result.length} transactions.`);
-      for (const tx of data.result) {
-        txs.push({
-          version: 'v2',
-          hash: tx.transaction_id ? tx.transaction_id.hash : "",
-          lt: tx.transaction_id ? tx.transaction_id.lt : "",
-          now: tx.utime,
-          in_msg: tx.in_msg ? {
-            source: tx.in_msg.source,
-            destination: tx.in_msg.destination,
-            value: tx.in_msg.value,
-            message: tx.in_msg.message,
-            decoded_body: tx.in_msg.decoded_body || (tx.in_msg.msg_data && tx.in_msg.msg_data.text ? { text: tx.in_msg.msg_data.text } : null)
-          } : null
-        });
-      }
-    }
-  } catch (err) {
-    console.error(`[Toncenter V2] Failed to fetch transactions:`, err);
+    return await activeFetchPromise;
+  } finally {
+    activeFetchPromise = null;
   }
-
-  return txs;
 }
 
 async function getOnChainBalance(address: string): Promise<number> {
@@ -2901,10 +2945,16 @@ async function processWithdrawals() {
           continue;
         }
 
+        // Sleep to avoid rate limits
+        await new Promise(r => setTimeout(r, 1500));
+
         const seqno = await runWithRetry(async () => {
           return await walletContract.getSeqno();
         });
         console.log(`[WITHDRAWAL_WORKER] seqno to use: ${seqno}`);
+
+        // Sleep to avoid rate limits
+        await new Promise(r => setTimeout(r, 1500));
 
         // Broadcast the real transaction on-chain
         await runWithRetry(async () => {
@@ -2961,9 +3011,15 @@ async function processWithdrawals() {
           }
           if (found) break;
 
-          const currentSeqno = await walletContract.getSeqno();
-          if (currentSeqno > seqno) {
-            console.log(`[WITHDRAWAL_WORKER] seqno increased to ${currentSeqno}, transaction completed but not indexed yet.`);
+          try {
+            const currentSeqno = await runWithRetry(async () => {
+              return await walletContract.getSeqno();
+            }, 3, 1000);
+            if (currentSeqno > seqno) {
+              console.log(`[WITHDRAWAL_WORKER] seqno increased to ${currentSeqno}, transaction completed but not indexed yet.`);
+            }
+          } catch (seqErr) {
+            console.error(`[WITHDRAWAL_WORKER] Error checking seqno in poll loop:`, seqErr);
           }
         }
 

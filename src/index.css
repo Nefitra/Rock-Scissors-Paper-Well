@@ -11,3 +11,17 @@
   --font-size-4xl: 2.7rem;     /* 36px -> 43.2px */
   --font-size-5xl: 3.6rem;     /* 48px -> 57.6px */
 }
+
+html, body, #root {
+  background-color: #0e1621 !important;
+  background: #0e1621 !important;
+  color: #ffffff;
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+canvas {
+  background-color: transparent !important;
+  background: transparent !important;
+}
