@@ -1898,8 +1898,8 @@ function GameAppInner() {
         setActiveGame(data.game);
         setIsSearching(false);
       }
-    } catch (err) {
-      setErrorMessage("Server matchmaking failure.");
+    } catch (err: any) {
+      setErrorMessage(err?.message || "Server matchmaking failure.");
       setIsSearching(false);
     }
   };
@@ -2126,7 +2126,7 @@ function GameAppInner() {
             animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
             exit={{ opacity: 0, y: -50, scale: 0.9, x: '-50%' }}
             transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-            className="fixed top-5 left-1/2 -translate-x-1/2 z-[9999] w-[90%] max-w-sm bg-[#17212b] border-2 border-emerald-500/80 rounded-2xl p-4 shadow-[0_10px_30px_rgba(16,185,129,0.25)] flex items-start gap-3"
+            className="fixed top-5 left-1/2 z-[9999] w-[90%] max-w-sm bg-[#17212b] border-2 border-emerald-500/80 rounded-2xl p-4 shadow-[0_10px_30px_rgba(16,185,129,0.25)] flex items-start gap-3"
           >
             <span className="text-xl shrink-0">✅</span>
             <div className="flex-1">
@@ -5121,7 +5121,12 @@ function GameAppInner() {
                 </button>
               </div>
 
-              {tonConfig?.pauseWithdrawals ? (
+              {tonConfig?.withdrawalsDisabledByConfigError ? (
+                <div className="bg-red-500/15 border border-red-500/30 text-red-400 p-4 rounded-2xl text-xs font-medium text-center space-y-2">
+                  <p className="font-bold uppercase tracking-wider">⚠️ Withdrawal Config Error</p>
+                  <p className="text-[11px] opacity-85 leading-relaxed font-mono break-all">{tonConfig?.configErrorMessage || "Derived hot wallet address does not match TON_HOT_WALLET_ADDRESS"}</p>
+                </div>
+              ) : tonConfig?.pauseWithdrawals ? (
                 <div className="bg-red-500/15 border border-red-500/30 text-red-400 p-4 rounded-2xl text-xs font-medium text-center space-y-2">
                   <p className="font-bold uppercase tracking-wider">Withdrawals Suspended</p>
                   <p className="text-[11px] opacity-80 leading-relaxed">Outbound TON withdrawals are temporarily paused for backend ledger balancing. Please try again later.</p>
@@ -5260,11 +5265,12 @@ function GameAppInner() {
                             <span className="font-bold text-white text-[11px] block truncate">
                               {item.type === 'deposit' ? 'TON Deposit' :
                                item.type === 'withdrawal' ? 'Outbound Withdrawal' :
+                               item.type === 'withdrawal_requested' ? 'Withdrawal Requested' :
                                item.type === 'game_win' ? 'Arena Match Win' :
                                item.type === 'game_loss' ? 'Arena Match Loss' :
                                item.type === 'stake_reservation' ? 'Staking Lock' :
                                item.type === 'refund' ? 'Staking Refund' :
-                               item.type === 'draw' ? 'Match Draw' : item.type}
+                               item.type === 'draw' || item.type === 'game_draw' ? 'Match Draw' : item.type}
                             </span>
                             <div className="flex items-center gap-1.5">
                               <span className="text-[8.5px] text-[#708499] block font-mono">
@@ -5278,6 +5284,20 @@ function GameAppInner() {
                                 {item.status}
                               </span>
                             </div>
+                            {(item.explorerLink || item.txHash) && (
+                              <a
+                                href={item.explorerLink || (tonConfig?.network === 'testnet'
+                                  ? `https://testnet.tonviewer.com/${item.txHash}`
+                                  : `https://tonviewer.com/${item.txHash}`)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-[9px] text-[#3390ec] hover:underline font-mono flex items-center gap-0.5 mt-1.5"
+                              >
+                                <ExternalLink className="w-2.5 h-2.5" />
+                                View Transaction
+                              </a>
+                            )}
                           </div>
                         </div>
 
