@@ -64,7 +64,7 @@ async function stop() {if(child && child.exitCode===null){const done=once(child,
     await delay(3100);
     assert.equal((await call('/api/game/move',{gameId:pvpId,userId:id,move:'rock'})).status,200);
     const masked=await call('/api/game/'+pvpId,undefined,true,other);
-    assert.ok(!masked.data.game.player1Move,'Opponent move must remain hidden');
+    assert.equal(masked.data.game.player1Move,'secret','Opponent move must remain hidden');
     const finished=await call('/api/game/move',{gameId:pvpId,userId:other,move:'scissors'},true,other);
     assert.equal(finished.status,200,JSON.stringify(finished));
     assert.equal(finished.data.game.status,'completed');
