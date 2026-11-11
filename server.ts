@@ -1,3 +1,4 @@
+import { registerAdmin } from './server/admin';
 import { adjustPoints } from './server/points-ledger';
 import { PostgresStore } from './server/postgres-store';
 import { verifyTelegram } from './server/telegram-auth';
@@ -5472,111 +5473,13 @@ app.get('/api/game/:gameId', async (req, res) => {
   }
 });
 
-// Global cache variables for Admin Metrics (Optimizes reads and eliminates exhaustion)
-let adminMetricsCache: any = null;
-let adminMetricsCacheTime = 0;
-const ADMIN_METRICS_CACHE_TTL = 120000; // 2 minutes
-
-// 6. Admin Panel data retrieval
-app.get('/api/admin/metrics', async (req, res) => {
-  try {
-    const verifiedUser = getRequestUser(req);
-    const requestorId = verifiedUser.userId || req.query.requestorId;
-
-    if (!requestorId) {
-      return res.status(403).json({ error: "Access Denied. Unauthorized admin identity." });
-    }
-
-    const idToCheck = String(requestorId).toLowerCase();
-    const isApprovedAdmin = ADMIN_TELEGRAM_IDS.includes(idToCheck);
-
-    if (!isApprovedAdmin) {
-      return res.status(403).json({ error: `Access Denied. User @${requestorId} is not an approved Telegram Admin.` });
-    }
-
-    const nowTime = Date.now();
-    if (adminMetricsCache && (nowTime - adminMetricsCacheTime < ADMIN_METRICS_CACHE_TTL)) {
-      console.log("[CACHE LOG] Serving admin metrics from memory cache...");
-      return res.json({
-        authorized: true,
-        ...adminMetricsCache
-      });
-    }
-
-    console.log("[CACHE LOG] Admin metrics cache expired or empty. Fetching from Firestore with limits...");
-
-    // Fetch users (limit to 100 to avoid reading thousands of documents)
-    const usersSnap = await db.collection('users').limit(100).get();
-    const usersList: any[] = [];
-    usersSnap.forEach((d) => {
-      usersList.push(d.data());
-    });
-
-    // Fetch games (limit 100)
-    const gamesSnap = await db.collection('games').orderBy('createdAt', 'desc').limit(100).get();
-    const gamesList: any[] = [];
-    gamesSnap.forEach((d) => {
-      gamesList.push(d.data());
-    });
-
-    // Sort games by date descending
-    gamesList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-    // Aggregates
-    const stats = {
-      totalUsers: usersList.length,
-      totalWallets: usersList.filter(u => u.walletAddress && u.walletAddress.length > 0).length,
-      totalGames: gamesList.length,
-      totalReferrals: usersList.reduce((acc, u) => acc + (u.referralsCountL1 || 0) + (u.referralsCountL2 || 0), 0)
-    };
-
-    // Fetch matchmakingQueue (limit 100)
-    const queueSnap = await db.collection('matchmakingQueue').orderBy('createdAt', 'desc').limit(100).get();
-    const queueList: any[] = [];
-    queueSnap.forEach((d) => {
-      queueList.push(d.data());
-    });
-
-    const now = Date.now();
-    const waitingEntries = queueList.filter(q => q.status === 'waiting' && new Date(q.expiresAt).getTime() > now);
-    const matchedEntries = queueList.filter(q => q.status === 'matched');
-    const expiredEntries = queueList.filter(q => q.status === 'expired' || (q.status === 'waiting' && new Date(q.expiresAt).getTime() <= now));
-
-    let totalAge = 0;
-    waitingEntries.forEach(q => {
-      const ageSec = Math.max(0, (now - new Date(q.createdAt).getTime()) / 1000);
-      totalAge += ageSec;
-    });
-    const avgQueueAgeSec = waitingEntries.length > 0 ? Math.round(totalAge / waitingEntries.length) : 0;
-
-    const activeMatchesCount = gamesList.filter(g => ['searching', 'waiting', 'matched', 'countdown', 'move_selection', 'resolving'].includes(g.status)).length;
-
-    const matchmakingStats = {
-      usersWaiting: waitingEntries.length,
-      avgQueueAgeSec,
-      matchedPairsCount: matchedEntries.length,
-      activeMatchesCount,
-      expiredCount: expiredEntries.length,
-      failedTransactionsCount,
-      cloudRunRevision: process.env.K_REVISION || "local_dev"
-    };
-
-    adminMetricsCache = {
-      stats,
-      users: usersList,
-      games: gamesList.slice(0, 50), // output last 50 games for high performance
-      matchmakingQueue: queueList,
-      matchmakingStats
-    };
-    adminMetricsCacheTime = nowTime;
-
-    res.json({
-      authorized: true,
-      ...adminMetricsCache
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+// Administrative reads and settings are isolated from match and balance logic.
+registerAdmin(app, {
+  db: adminDb, pool: usePostgres ? adminFirestoreInstance.pool : undefined, circuit,
+  adminIds: ADMIN_TELEGRAM_IDS, identity: getRequestUser,
+  appUrl: process.env.APP_URL || 'https://play.cyberduel.app',
+  economy: ECONOMY_CONFIG, ton: TON_CONFIG, financialActionsEnabled,
+  invalidateSettings: () => { settingsCache = null; settingsCacheTime = 0; }
 });
 
 // 6b. Admin Matchmaking Manual Cleanup
@@ -5604,6 +5507,7 @@ app.post('/api/admin/matchmaking/cleanup', async (req, res) => {
 
     for (const d of queueSnap.docs) {
       const qData = d.data() || {};
+      if (qData.gameMode === 'ton' && !financialActionsEnabled) continue;
       const expiresAtMs = qData.expiresAt ? new Date(qData.expiresAt).getTime() : 0;
       if (qData.status === 'waiting' && expiresAtMs <= now) {
         await db.collection('matchmakingQueue').doc(d.id).update({
@@ -5975,45 +5879,13 @@ app.get('/api/settings', async (req, res) => {
       // Default configurations
       const defaultSettings = {
         botUsername: "CyberDuellitebot",
-        appName: "CYBER DUEL",
+        appName: "CyberDuel Lite",
         webUrl: process.env.APP_URL || "https://play.cyberduel.app"
       };
       res.json(defaultSettings);
     }
   } catch (error: any) {
     console.error("Error retrieving settings:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// POST global settings (restricted to approved admins)
-app.post('/api/settings', async (req, res) => {
-  try {
-    const verifiedUser = getRequestUser(req);
-    const requestorId = verifiedUser.userId || req.body.requestorId;
-    if (!requestorId) {
-      return res.status(403).json({ error: "Access Denied. Unauthorized." });
-    }
-    const idToCheck = String(requestorId).toLowerCase();
-    if (!ADMIN_TELEGRAM_IDS.includes(idToCheck)) {
-      return res.status(403).json({ error: "Access Denied. Admins only." });
-    }
-
-    const { botUsername, appName, webUrl } = req.body;
-    const settingsDocName = 'global_settings';
-    await db.collection('settings').doc(settingsDocName).set({
-      botUsername: botUsername || "",
-      appName: appName || "",
-      webUrl: webUrl || ""
-    });
-
-    // Invalidate settings cache
-    settingsCache = null;
-    settingsCacheTime = 0;
-
-    res.json({ success: true });
-  } catch (error: any) {
-    console.error("Error saving settings:", error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+const AdminPanel = React.lazy(() => import('./components/AdminPanel'));
 import { detectLanguage, getTranslation, languageNames } from './lib/i18n';
 import confetti from 'canvas-confetti';
 import { 
@@ -567,9 +568,9 @@ function GameAppInner() {
 
   // Global Configured TG Settings
   const [globalSettings, setGlobalSettings] = useState<{ botUsername: string; appName: string; webUrl: string }>({
-    botUsername: "RpsRockPaperBot",
-    appName: "play",
-    webUrl: ""
+    botUsername: "CyberDuellitebot",
+    appName: "CyberDuel Lite",
+    webUrl: "https://play.cyberduel.app"
   });
   const [settingsBotUsername, setSettingsBotUsername] = useState<string>('');
   const [settingsAppName, setSettingsAppName] = useState<string>('');
@@ -1799,9 +1800,6 @@ function GameAppInner() {
   };
 
   useEffect(() => {
-    if (activeTab === 'admin') {
-      fetchAdminMetrics();
-    }
     if (activeTab === 'leaderboard') {
       fetchLeaderboard();
     }
@@ -2207,7 +2205,7 @@ function GameAppInner() {
                 PvP
               </span>
             </div>
-            <h1 className="text-3xl font-black text-white uppercase tracking-tight">VIRAL ARENA</h1>
+            <h1 className="text-3xl font-black text-white uppercase tracking-tight">{globalSettings.appName}</h1>
             <p className="text-[#708499] text-sm mt-2 font-medium">Rock Paper Scissors Well Duals</p>
           </div>
 
@@ -2339,7 +2337,7 @@ function GameAppInner() {
               R
             </div>
             <div className="min-w-0">
-              <h1 className="text-sm font-bold leading-none text-white truncate">Rock Paper Well</h1>
+              <h1 className="text-sm font-bold leading-none text-white truncate">{globalSettings.appName}</h1>
               <p className="text-emerald-400 text-[9px] uppercase tracking-widest mt-0.5 font-bold">Real PvP Mode</p>
             </div>
           </div>
@@ -4256,188 +4254,16 @@ function GameAppInner() {
                   className="w-full bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/20 py-3 px-4 rounded-xl transition text-amber-400 text-xs font-bold flex items-center justify-center gap-2"
                 >
                   <ShieldAlert className="w-4 h-4" />
-                  <span>Open Developer Admin Dashboard</span>
+                  <span>Открыть управление игрой</span>
                 </button>
               )}
             </motion.div>
           )}
 
-          {/* TAB 5: ADMIN PANEL (VISIBLE ON ADMIN TG IDS & DEV FORCE SWITCH) */}
-          {activeTab === 'admin' && (
-            <motion.div
-              key="admin"
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              transition={{ duration: 0.15 }}
-              className="space-y-6"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-bold text-white flex items-center gap-1.5">
-                    <ShieldAlert className="w-5 h-5 text-amber-500" />
-                    Admin Insights
-                  </h3>
-                  <span className="text-[10px] text-[#708499]">Read-Only Statistics Dashboard</span>
-                </div>
-                
-                <button
-                  onClick={fetchAdminMetrics}
-                  className="bg-[#242f3d] hover:bg-[#2b3745] p-2 rounded-lg border border-[#2b3745] transition"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-[#3390ec]" />
-                </button>
-              </div>
-
-              {/* Metrics Grid */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-[#17212b] p-4 rounded-xl border border-[#242f3d] text-center">
-                  <span className="text-[10px] text-[#708499] block uppercase font-bold">Total Space Users</span>
-                  <span className="text-2xl font-mono font-bold text-white block mt-1">{adminData?.stats?.totalUsers || 0}</span>
-                </div>
-                
-                <div className="bg-[#17212b] p-4 rounded-xl border border-[#242f3d] text-center">
-                  <span className="text-[10px] text-[#708499] block uppercase font-bold">Active Wallets</span>
-                  <span className="text-2xl font-mono font-bold text-[#3390ec] block mt-1">{adminData?.stats?.totalWallets || 0}</span>
-                </div>
-
-                <div className="bg-[#17212b] p-4 rounded-xl border border-[#242f3d] text-center">
-                  <span className="text-[10px] text-[#708499] block uppercase font-bold">Referral Counts</span>
-                  <span className="text-2xl font-mono font-bold text-indigo-400 block mt-1">{adminData?.stats?.totalReferrals || 0}</span>
-                </div>
-
-                <div className="bg-[#17212b] p-4 rounded-xl border border-[#242f3d] text-center">
-                  <span className="text-[10px] text-[#708499] block uppercase font-bold">Total Match Logs</span>
-                  <span className="text-2xl font-mono font-bold text-amber-400 block mt-1">{adminData?.stats?.totalGames || 0}</span>
-                </div>
-              </div>
-
-              {/* Matchmaking Diagnostics */}
-              <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-5 space-y-4">
-                <div className="flex items-center justify-between border-b border-[#242f3d]/60 pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <ShieldAlert className="w-4 h-4 text-emerald-400" />
-                    <span className="text-xs font-bold text-white uppercase tracking-wider">Matchmaking Diagnostics</span>
-                  </div>
-                  <span className="text-[10px] font-mono text-[#708499]">{adminData?.matchmakingStats?.cloudRunRevision || 'N/A'}</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3.5 text-xs">
-                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
-                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Waiting Players</span>
-                    <span className="text-lg font-mono font-bold text-emerald-400 block mt-0.5">{adminData?.matchmakingStats?.usersWaiting ?? 0}</span>
-                  </div>
-                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
-                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Average Queue Age</span>
-                    <span className="text-lg font-mono font-bold text-blue-400 block mt-0.5">{adminData?.matchmakingStats?.avgQueueAgeSec ?? 0}s</span>
-                  </div>
-                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
-                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Matched Pairs</span>
-                    <span className="text-lg font-mono font-bold text-indigo-400 block mt-0.5">{adminData?.matchmakingStats?.matchedPairsCount ?? 0}</span>
-                  </div>
-                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
-                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Active PvP Matches</span>
-                    <span className="text-lg font-mono font-bold text-amber-400 block mt-0.5">{adminData?.matchmakingStats?.activeMatchesCount ?? 0}</span>
-                  </div>
-                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
-                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Expired Queue Records</span>
-                    <span className="text-lg font-mono font-bold text-red-400 block mt-0.5">{adminData?.matchmakingStats?.expiredCount ?? 0}</span>
-                  </div>
-                  <div className="bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/50">
-                    <span className="text-[#708499] text-[10px] uppercase font-bold block">Failed Transactions</span>
-                    <span className="text-lg font-mono font-bold text-rose-500 block mt-0.5">{adminData?.matchmakingStats?.failedTransactionsCount ?? 0}</span>
-                  </div>
-                </div>
-
-                {adminSuccessMessage && (
-                  <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 text-center text-xs text-emerald-400 font-medium">
-                    {adminSuccessMessage}
-                  </div>
-                )}
-
-                <button
-                  onClick={async () => {
-                    try {
-                      const headers: any = { 'Content-Type': 'application/json' };
-                      const initData = (window as any).Telegram?.WebApp?.initData;
-                      if (initData) {
-                        headers['x-telegram-init-data'] = initData;
-                      }
-                      const res = await fetch(`/api/admin/matchmaking/cleanup?requestorId=${currentTgId}`, {
-                        method: 'POST',
-                        headers
-                      });
-                      const rData = await res.json();
-                      if (rData.success) {
-                        setAdminSuccessMessage(`Cleared ${rData.cleanedCount} stale queue entries.`);
-                        setTimeout(() => setAdminSuccessMessage(null), 5000);
-                        fetchAdminMetrics();
-                      } else {
-                        setAdminSuccessMessage(`Cleanup failed: ${rData.error}`);
-                        setTimeout(() => setAdminSuccessMessage(null), 5000);
-                      }
-                    } catch (e: any) {
-                      setAdminSuccessMessage(`Error: ${e.message}`);
-                      setTimeout(() => setAdminSuccessMessage(null), 5000);
-                    }
-                  }}
-                  className="w-full bg-[#242f3d] hover:bg-[#2b3745] text-xs font-bold text-white uppercase py-3 rounded-xl border border-[#2b3745] transition flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  🧹 Clear Stale Queue Entries
-                </button>
-              </div>
-
-              {/* Bot Referral Link Customizer */}
-              <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-5 space-y-4">
-                <div className="flex items-center gap-2 border-b border-[#242f3d]/60 pb-2.5">
-                  <Bot className="w-4 h-4 text-[#3390ec]" />
-                  <span className="text-xs font-bold text-white uppercase tracking-wider">Telegram Referral Configuration</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3.5 text-xs">
-                  <div className="space-y-1">
-                    <label className="text-[#708499] font-bold text-[10px] uppercase">Telegram Bot Name</label>
-                    <input
-                      type="text"
-                      value={settingsBotUsername}
-                      onChange={(e) => setSettingsBotUsername(e.target.value)}
-                      placeholder="e.g. CyberDuellitebot"
-                      className="w-full bg-[#242f3d] border border-[#2b3745] hover:border-[#3390ec]/50 focus:border-[#3390ec] rounded-xl px-3 py-2 text-white text-xs focus:outline-none transition font-medium"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-[#708499] font-bold text-[10px] uppercase">Web App name (shortname)</label>
-                    <input
-                      type="text"
-                      value={settingsAppName}
-                      onChange={(e) => setSettingsAppName(e.target.value)}
-                      placeholder="e.g. play"
-                      className="w-full bg-[#242f3d] border border-[#2b3745] hover:border-[#3390ec]/50 focus:border-[#3390ec] rounded-xl px-3 py-2 text-white text-xs focus:outline-none transition font-medium"
-                    />
-                  </div>
-                </div>
-
-                {settingsSaveSuccess && (
-                  <div className="text-emerald-400 text-xs font-semibold bg-emerald-500/10 p-2.5 rounded-xl border border-emerald-500/25 text-center transition">
-                    {settingsSaveSuccess}
-                  </div>
-                )}
-
-                <div className="flex justify-between items-center bg-[#242f3d]/30 p-3 rounded-xl border border-[#2b3745]/30">
-                  <span className="text-[9.5px] text-[#708499] leading-tight max-w-[65%]">
-                    This dynamically updates all invite URLs to use the official short Telegram URL. Set blank to default to raw web URLs.
-                  </span>
-                  <button
-                    onClick={handleSaveSettings}
-                    disabled={savingSettings}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold text-white transition cursor-pointer select-none shadow-md ${savingSettings ? 'bg-[#3390ec]/50 cursor-not-allowed' : 'bg-[#3390ec] hover:bg-[#2b7ad0]'}`}
-                  >
-                    {savingSettings ? "Saving..." : "Save Config"}
-                  </button>
-                </div>
-              </div>
-
+          {/* Administration is loaded only for the verified owner. */}
+          {activeTab === 'admin' && isUserAnAdmin && (
+            <React.Suspense fallback={<p className="py-6 text-center text-slate-400">Загрузка админки…</p>}>
+              <AdminPanel onSettingsSaved={value => setGlobalSettings({botUsername:value.botUsername,appName:value.appName,webUrl:value.webUrl})}>
               {/* Tournament Announcements & Pins (New Admin Features) */}
               <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-5 space-y-4">
                 <div className="flex items-center gap-2 border-b border-[#242f3d]/60 pb-2.5">
@@ -4485,70 +4311,8 @@ function GameAppInner() {
                 </div>
               </div>
 
-              {/* Users Details Lists */}
-              <div className="space-y-3">
-                <span className="text-xs font-bold text-white block">Registered Players</span>
-                <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl overflow-hidden divide-y divide-[#242f3d]/60 max-h-48 overflow-y-auto">
-                  {adminData?.users && adminData.users.length > 0 ? (
-                    adminData.users.map((usr, i) => (
-                      <div key={i} className="p-3 text-xs flex justify-between items-center bg-[#17212b]">
-                        <div>
-                          <span className="font-semibold text-slate-200">@{usr.telegramId}</span>
-                          <span className="text-[10px] text-[#708499] block">
-                            {usr.walletAddress ? `${usr.walletAddress.slice(0, 8)}...` : 'No wallet connected'}
-                          </span>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-emerald-400 font-bold block">{usr.wins}W - {usr.losses}L</span>
-                          <span className="text-[10px] text-[#708499]">Refs: {usr.referralsCountL1 + usr.referralsCountL2}</span>
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <span className="text-[#708499] text-xs p-4 block text-center">No synchronized users yet.</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Matches History Lists */}
-              <div className="space-y-3">
-                <span className="text-xs font-bold text-white block">Latest Lobbies & Challenges</span>
-                {cancelSuccess && (
-                  <div className="text-emerald-400 text-[11px] font-semibold bg-emerald-500/10 p-2.5 rounded-xl border border-emerald-500/20 text-center transition">
-                    {cancelSuccess}
-                  </div>
-                )}
-                <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl overflow-hidden divide-y divide-[#242f3d]/60 max-h-48 overflow-y-auto">
-                  {adminData?.games && adminData.games.length > 0 ? (
-                    adminData.games.map((gm, i) => (
-                      <div key={i} className="p-3 text-xs flex justify-between items-center bg-[#17212b]">
-                        <div>
-                          <span className="block text-slate-200">@{gm.player1Username} vs @{gm.player2Username}</span>
-                          <span className="text-[10px] text-[#708499]">Moves: {gm.player1Move || '(none)'} vs {gm.player2Move || '(none)'}</span>
-                          {gm.stake > 0 && <span className="text-[9px] text-amber-500 font-bold block">Stake: {gm.stake} vVIRAL</span>}
-                        </div>
-                        <div className="text-right flex flex-col items-end gap-1">
-                          <span className="text-xs font-mono font-semibold uppercase block text-[#3390ec]">{gm.status}</span>
-                          {(gm.status === 'waiting' || gm.status === 'matched') ? (
-                            <button
-                              onClick={() => { playClickSound(); handleCancelActiveChallenge(gm.id); }}
-                              disabled={cancelLoading}
-                              className="px-2 py-1 bg-red-500/15 hover:bg-red-500/20 border border-red-500/30 text-red-400 text-[10px] font-bold rounded-lg transition transform active:scale-95 cursor-pointer"
-                            >
-                              {cancelLoading ? "Refunding..." : "Cancel & Refund"}
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-amber-400 font-medium">Winner: {gm.winnerId === 'draw' ? 'Draw' : `@${gm.winnerId}`}</span>
-                          )}
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <span className="text-[#708499] text-xs p-4 block text-center">No processed game logs.</span>
-                  )}
-                </div>
-              </div>
-            </motion.div>
+              </AdminPanel>
+            </React.Suspense>
           )}
 
           {/* TAB 6: WINDOWS GAME */}
