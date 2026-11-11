@@ -21,10 +21,11 @@ async function put(collection,id,data){const path=collection+'/'+id;created.push
  const now=new Date().toISOString();
  for(let i=0;i<137;i++)await put('users',String(userBase+i),{telegramId:String(userBase+i),username:prefix+'_'+i,vViral:500,gamesPlayed:0,wins:0,losses:0,createdAt:now});
  const user=String(userBase);
+ await put('users',String(userBase+200),{telegramId:String(userBase+200),username:{invalid:true},vViral:{invalid:true},walletAddress:{invalid:true},createdAt:now});
  await put('games',prefix+'_placeholder',{player1Id:user,player2Id:'waiting',status:'searching',createdAt:now});
  await put('games',prefix+'_match',{player1Id:user,player2Id:ordinary,player1Move:'rock',player2Move:'',status:'resolving',mode:'free',createdAt:now});
  await put('transactions',prefix+'_points',{userId:user,type:'credit',amount:20,prevBalance:480,newBalance:500,source:'validation',status:'completed',timestamp:now});
- await put('ledgerTransactions',prefix+'_ledger',{telegramUserId:user,amountNano:'9007199254740993123',type:'validation',status:'posted',createdAt:now});
+ await put('ledgerTransactions',prefix+'_ledger',{telegramUserId:user,amountNano:'9007199254740993123',type:'validation',status:'posted',transactionHash:'test-hash',transactionLt:'123456789',createdAt:now});
  await put('tonDeposits',prefix+'_deposit',{telegramUserId:user,expectedAmountNano:'1000000000',status:'created',createdAt:now});
  await put('tonWithdrawals',prefix+'_withdrawal',{telegramUserId:user,amountNano:'1000000000',status:'requested',createdAt:now});
  await put('matchmakingQueue',prefix+'_ton',{telegramUserId:user,gameMode:'ton',status:'waiting',expiresAt:'2020-01-01T00:00:00.000Z',createdAt:now});
@@ -34,13 +35,13 @@ async function put(collection,id,data){const path=collection+'/'+id;created.push
   assert.equal((await call(route,undefined,ordinary)).status,403,route);
  }
  const metrics=(await call('/api/admin/metrics')).data;
- assert.equal(metrics.stats.totalUsers,baseline.totalUsers+137);assert.equal(metrics.stats.totalGames,baseline.totalGames+1);assert.equal(metrics.runtime.financialActionsEnabled,false);
+ assert.equal(metrics.stats.totalUsers,baseline.totalUsers+138);assert.equal(metrics.stats.totalGames,baseline.totalGames+1);assert.equal(metrics.runtime.financialActionsEnabled,false);
  const players=await call('/api/admin/players?q='+prefix+'&limit=25&page=6');assert.equal(players.data.total,137);assert.equal(players.data.items.length,12);
  assert.equal((await call('/api/admin/players?q='+encodeURIComponent("%' OR true --"))).data.total,0);
  assert.equal((await call('/api/admin/players?limit=101')).status,400);
- const detail=await call('/api/admin/players/'+user);assert.equal(detail.data.player.vViral,500);
+ const detail=await call('/api/admin/players/'+user);assert.equal(detail.data.player.vViral,500);const malformed=await call('/api/admin/players/'+(userBase+200));assert.equal(malformed.data.player.username,'');assert.equal(malformed.data.player.vViral,'—');
  const notes=await Promise.all([call('/api/admin/players/'+user+'/note',{note:'first',expectedVersion:0}),call('/api/admin/players/'+user+'/note',{note:'second',expectedVersion:0})]);assert.deepEqual(notes.map(r=>r.status).sort(),[200,409]);
- const ledger=await call('/api/admin/transactions?currency=TON&kind=ledgerTransactions&userId='+user);assert.equal(ledger.data.items.find(x=>x.id===prefix+'_ledger').amount,'9007199254740993123');
+ const ledger=await call('/api/admin/transactions?currency=TON&kind=ledgerTransactions&userId='+user);assert.equal(ledger.data.items.find(x=>x.id===prefix+'_ledger').amount,'9007199254740993123');assert.equal(ledger.data.items.find(x=>x.id===prefix+'_ledger').transactionHash,'test-hash');
  const points=await call('/api/admin/transactions?currency=vVIRAL&userId='+user);assert.ok(points.data.items.some(x=>x.id===prefix+'_points'));assert.ok(points.data.items.every(x=>x.currency==='vVIRAL'));
  assert.equal((await call('/api/admin/transactions?from=invalid')).status,400);
  const masked=await call('/api/admin/games?userId='+user);assert.equal(masked.data.items.find(x=>x.id===prefix+'_match').player1Move,'secret');
