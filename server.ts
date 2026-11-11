@@ -7899,7 +7899,15 @@ async function startServer() {
   }
   let servicesStarted = false;
   const preflight = async () => {
-    const ready = await circuit.probe(() => adminFirestoreInstance.doc('_health/readiness').get());
+    const ready = await circuit.probe(async () => {
+      // A VPS has no Google metadata identity. Do not invoke the SDK without an
+      // explicit credential source: some gax versions reject internally first.
+      const credentialPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      if (!process.env.K_SERVICE && (!credentialPath || !fs.existsSync(credentialPath))) {
+        throw new Error('SERVER_CREDENTIALS_REQUIRED');
+      }
+      return adminFirestoreInstance.doc('_health/readiness').get();
+    });
     if (!ready || servicesStarted) return;
     servicesStarted = true;
     if (financialActionsEnabled) {
@@ -7911,9 +7919,9 @@ async function startServer() {
   };
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(JSON.stringify({ event: 'HTTP_STARTED', port: PORT, financialActionsEnabled }));
-    void preflight();
+    void preflight().catch(error => circuit.fail(error));
   });
-  const healthTimer = setInterval(() => { void preflight(); }, 1000);
+  const healthTimer = setInterval(() => { void preflight().catch(error => circuit.fail(error)); }, 1000);
   const shutdown = () => {
     clearInterval(healthTimer); workers.stop();
     server.close(() => { void adminFirestoreInstance.terminate().finally(() => process.exit(0)); });
