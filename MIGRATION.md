@@ -29,3 +29,11 @@ TypeScript, storage circuit tests, Telegram signature tests and production build
 This is a fresh game launch, not a completed financial audit. Keep real TON actions disabled until treasury/wallet configuration, settlement/withdrawal concurrency, chain reconciliation and deposit notification idempotency have been verified. No production funds are moved by this migration.
 
 Run a single app instance. Matchmaking and reward paths beyond the atomic point ledger still need concurrency review before wider public release. Preserve a database dump before further upgrades; local snapshots alone do not protect against loss of the VPS.
+
+## Verified server checkpoint
+
+On 2026-11-11 the PostgreSQL integration suite passed on the VPS, and scripts/validate-game.cjs passed against the separate cyberduel_validation database. The latter checked unsigned/forged access rejection, admin denial, paused TON, registration, a single welcome award, free bot match completion, duplicate move rejection and persistence after process restart. No synthetic accounts were inserted into the game database by that game-flow test.
+
+The existing @CyberDuellitebot was switched to play.cyberduel.app with a secret-protected webhook. Real inbound Telegram updates reached the new server. The owner's previously confirmed numeric Telegram ID is configured on the server, not hardcoded in the client.
+
+Backups: scripts/backup-postgres.sh writes a private PostgreSQL custom-format dump on the VPS and checks its archive listing before publishing the completed file. Schedule with the server cron if required. Restore only into a separate recovery database first; verify records before any production cutover. An external copy is still needed for protection against loss of the VPS.
