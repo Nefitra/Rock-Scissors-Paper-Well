@@ -27,7 +27,7 @@ export class FirestoreCircuit {
     catch (error: any) {
       const code = String(error?.code ?? '').toLowerCase();
       const message = String(error?.message ?? '').toLowerCase();
-      if (['4','7','8','14','16','permission-denied','resource-exhausted','unavailable','deadline-exceeded','unauthenticated'].includes(code) || /quota|resource_exhausted|permission_denied|credentials/.test(message)) {
+      if (['4','7','8','14','16','permission-denied','resource-exhausted','unavailable','deadline-exceeded','unauthenticated','econnrefused','econnreset','etimedout','57p01','57p02','57p03','53300','08000','08003','08006'].includes(code) || /quota|resource_exhausted|permission_denied|credentials/.test(message)) {
         this.fail(error);
         throw new StoreUnavailable();
       }

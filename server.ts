@@ -1,3 +1,6 @@
+import { adjustPoints } from './server/points-ledger';
+import { PostgresStore } from './server/postgres-store';
+import { verifyTelegram } from './server/telegram-auth';
 import 'dotenv/config';
 import { FirestoreCircuit, guardedFirestore, workerRegistry, unavailableMessage } from './server/firestore-safety';
 import express from 'express';
@@ -47,10 +50,29 @@ const PORT = Number(process.env.PORT || 3000);
 const circuit = new FirestoreCircuit();
 const workers = workerRegistry(circuit);
 const financialActionsEnabled = process.env.FINANCIAL_ACTIONS_ENABLED === 'true';
+const appWritesEnabled = process.env.APP_WRITES_ENABLED === 'true';
 app.get('/health/live', (_req, res) => res.json({ status: 'ok' }));
 app.get('/health/ready', (_req, res) => res.status(circuit.ready ? 200 : 503).json({ status: circuit.ready ? 'ready' : 'degraded', financialActionsEnabled }));
 app.use('/api', (req, res, next) => {
-  if (!circuit.ready || (!financialActionsEnabled && !['GET', 'HEAD', 'OPTIONS'].includes(req.method))) {
+  if (!financialActionsEnabled && (req.path.startsWith('/ton/') && req.path !== '/ton/config' || req.path.includes('/admin/ton/'))) return res.status(503).json({error: unavailableMessage});
+  if (req.path === '/firestore-test') return res.sendStatus(404);
+  if (req.path === '/user/reward-wins') return res.status(503).json({error:'This reward is currently unavailable.'});
+  if (!financialActionsEnabled && (req.body?.mode === 'ton' || req.body?.gameMode === 'ton')) return res.status(503).json({error:unavailableMessage});
+  if (req.path === '/telegram-webhook') {
+    if (!process.env.TELEGRAM_WEBHOOK_SECRET || req.headers['x-telegram-bot-api-secret-token'] !== process.env.TELEGRAM_WEBHOOK_SECRET) return res.sendStatus(403);
+  } else if (!['/health','/settings','/leaderboard','/ton/config'].includes(req.path) || req.method !== 'GET') {
+    const user = getRequestUser(req);
+    if (!user.isVerified) return res.status(401).json({error:'Please reopen the game inside Telegram.'});
+    if ((req.path.startsWith('/admin/') || req.path === '/settings') && !ADMIN_TELEGRAM_IDS.includes(user.userId)) return res.status(403).json({error:'Administrators only.'});
+    if (!req.path.startsWith('/admin/') && req.path !== '/settings') {
+      for (const claim of [req.body?.userId,req.body?.telegramId,req.query?.userId,req.query?.telegramId,req.query?.requestorId]) {
+        if (claim !== undefined && String(claim) !== user.userId) return res.sendStatus(403);
+      }
+    }
+    if (req.path === '/telegram-diag' && !ADMIN_TELEGRAM_IDS.includes(user.userId)) return res.sendStatus(403);
+    if (req.path.startsWith('/user/') && req.method === 'GET' && req.path.slice(6) !== user.userId) return res.sendStatus(403);
+  }
+  if (!circuit.ready || (!appWritesEnabled && !['GET', 'HEAD', 'OPTIONS'].includes(req.method))) {
     return res.status(503).json({ error: unavailableMessage });
   }
   next();
@@ -65,17 +87,12 @@ if (!fs.existsSync(configPath)) {
 
 const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
 
-// Initialize Firebase Admin SDK for server-side operations
-let adminApp: any;
-if (getAdminApps().length === 0) {
-  adminApp = initAdminApp({
-    projectId: firebaseConfig.projectId,
-  });
-} else {
-  adminApp = getAdminApps()[0];
-}
-
-const adminFirestoreInstance = getAdminFirestore(adminApp, firebaseConfig.firestoreDatabaseId);
+// Fresh PostgreSQL deployments never initialize the old Firebase connection.
+const usePostgres = process.env.DATABASE_PROVIDER === 'postgres';
+const adminApp: any = usePostgres ? null : (getAdminApps()[0] ?? initAdminApp({ projectId: firebaseConfig.projectId }));
+const adminFirestoreInstance: any = usePostgres
+  ? new PostgresStore(process.env.DATABASE_URL || '')
+  : getAdminFirestore(adminApp, firebaseConfig.firestoreDatabaseId);
 
 const adminDb: any = guardedFirestore(adminFirestoreInstance, circuit);
 const db = adminDb;
@@ -452,35 +469,11 @@ async function detectUserLanguage(tgId: string, telegramLangCode?: string): Prom
 }
 
 // Admin Telegram IDs (user can edit these or we auto-include Besker/Boris and other testers)
-const ADMIN_TELEGRAM_IDS = ["beskerboris", "admin", "123456789", "711279376", "525364261"];
+const ADMIN_TELEGRAM_IDS = (process.env.ADMIN_TELEGRAM_IDS || '').split(',').map(s => s.trim()).filter(s => /^\d+$/.test(s));
 
 // Cryptographical Telegram Mini App InitData validator
 function verifyTelegramWebAppData(initData: string, botToken: string): { verified: boolean; user?: any } {
-  try {
-    const params = new URLSearchParams(initData);
-    const hash = params.get('hash');
-    if (!hash) return { verified: false };
-
-    // Sort all key-value pairs alphabetically, excluding 'hash'
-    const keys = Array.from(params.keys()).filter(k => k !== 'hash').sort();
-    const dataCheckArr = keys.map(k => `${k}=${params.get(k)}`);
-    const dataCheckString = dataCheckArr.join('\n');
-
-    // Create a SHA-256 HMAC of 'WebAppData' string using bot token as key
-    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
-    // Compute HMAC with SHA-256 using that secret
-    const computedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
-
-    if (computedHash === hash) {
-      const userStr = params.get('user');
-      const user = userStr ? JSON.parse(userStr) : null;
-      return { verified: true, user };
-    }
-    return { verified: false };
-  } catch (err) {
-    console.error("Telegram WebApp Signature verification failed:", err);
-    return { verified: false };
-  }
+  return verifyTelegram(initData, botToken);
 }
 
 // Helper to normalize the user identifier for case-insensitive lookup safety (string-based usernames are converted to lowercase)
@@ -531,6 +524,7 @@ function getRequestUser(req: express.Request): { userId: string; username?: stri
     }
   }
 
+  if (process.env.NODE_ENV === 'production') return {userId:'',isVerified:false};
   // Fallback to body or query params for local sandbox play-tester
   const requestorId = (req.body?.userId || req.body?.telegramId || req.query?.requestorId || "");
   const requestorUsername = (req.body?.username || "");
@@ -546,7 +540,7 @@ function getLaunchButton(text: string, startappParam: string, isPrivate: boolean
     return {
       text,
       web_app: {
-        url: `https://rock-scissors-paper-well-52536426129.us-west1.run.app?startapp=${startappParam}`
+        url: `https://play.cyberduel.app?startapp=${startappParam}`
       }
     };
   } else {
@@ -817,57 +811,7 @@ async function adjustUserVViral(
   referenceId?: string,
   idempotencyKey?: string
 ): Promise<{ success: boolean; newBalance: number }> {
-  try {
-    const userRef = adminDb.collection('users').doc(userId);
-    const userSnap = await userRef.get();
-    if (!userSnap.exists) {
-      throw new Error("User not found");
-    }
-
-    const userData = userSnap.data() || {};
-    const currentBalance = userData.vViral !== undefined ? userData.vViral : 0;
-
-    // Check idempotency if a key is provided
-    if (idempotencyKey) {
-      const existingTx = await adminDb.collection('transactions')
-        .where('idempotencyKey', '==', idempotencyKey)
-        .limit(1)
-        .get();
-      if (existingTx.docs.length > 0) {
-        return { success: true, newBalance: currentBalance };
-      }
-    }
-
-    const newBalance = Math.max(0, currentBalance + amount);
-
-    // Record immutable ledger entry
-    const txId = adminDb.collection('transactions').doc().id;
-    const txRecord = {
-      id: txId,
-      userId,
-      type, // 'credit' | 'debit'
-      amount,
-      prevBalance: currentBalance,
-      newBalance,
-      source, // e.g. 'welcome_bonus', 'free_duel_win', 'stake_duel_win', 'stake_duel_entry', 'daily_mission', 'referral', etc.
-      referenceId: referenceId || "",
-      timestamp: new Date().toISOString(),
-      status: 'completed',
-      idempotencyKey: idempotencyKey || ""
-    };
-
-    await adminDb.collection('transactions').doc(txId).set(txRecord);
-
-    // Update player profile
-    await userRef.update({
-      vViral: newBalance
-    });
-
-    return { success: true, newBalance };
-  } catch (err: any) {
-    console.error(`Error adjusting vVIRAL balance for user ${userId}:`, err);
-    throw err;
-  }
+  return adjustPoints(adminDb, userId, amount, type, source, referenceId, idempotencyKey);
 }
 
 // Daily Mission progress helper
@@ -1082,7 +1026,7 @@ app.post('/api/user/sync', async (req, res) => {
         }
       };
 
-      return res.json({ profile: freshUserData, user: syncResponseUser, tonConfig });
+      return res.json({ profile: freshUserData, user: syncResponseUser, tonConfig, isAdmin: ADMIN_TELEGRAM_IDS.includes(userId) });
     }
 
     // New user signup
@@ -1124,7 +1068,7 @@ app.post('/api/user/sync', async (req, res) => {
       referralsCountL2: 0,
       streak: 0,
       xp: 0,
-      vViral: ECONOMY_CONFIG.welcomeBonus,
+      vViral: 0,
       welcomeRewardClaimed: true,
       missions: {},
       lastLoginDate: "",
@@ -1132,7 +1076,7 @@ app.post('/api/user/sync', async (req, res) => {
       createdAt: new Date().toISOString()
     };
 
-    await userRef.set(newProfile);
+    await userRef.create(newProfile);
 
     // Record welcome bonus transaction in ledger
     await adjustUserVViral(
@@ -1164,7 +1108,8 @@ app.post('/api/user/sync', async (req, res) => {
       }
     };
 
-    res.json({ profile: newProfile, user: syncResponseUser, tonConfig });
+    const savedProfile = (await userRef.get()).data();
+    res.json({ profile: savedProfile, user: syncResponseUser, tonConfig, isAdmin: ADMIN_TELEGRAM_IDS.includes(userId) });
   } catch (error: any) {
     console.error("Sync error:", error);
     res.status(500).json({ error: error.message });
@@ -3909,7 +3854,7 @@ app.post('/api/user/claim-daily', async (req, res) => {
     }
 
     const userData = userSnap.data() || {};
-    const todayStr = clientDateString || new Date().toISOString().split('T')[0];
+    const todayStr = new Date().toISOString().split('T')[0];
     const lastClaimDate = userData.lastLoginDate || "";
 
     if (lastClaimDate === todayStr) {
@@ -5500,6 +5445,7 @@ app.get('/api/game/:gameId', async (req, res) => {
     }
 
     const gameData = gameSnap.data() || {};
+    if (![gameData.player1Id,gameData.player2Id].includes(verifiedUser.userId)) return res.sendStatus(403);
 
     // Dynamic heartbeat: if player 1 is actively on the matchmaking queue screen, we keep the updatedAt fresh 
     if (gameData.status === 'searching' && gameData.player1Id === verifiedUser.userId) {
@@ -6040,9 +5986,9 @@ app.get('/api/settings', async (req, res) => {
     } else {
       // Default configurations
       const defaultSettings = {
-        botUsername: "RpsRockPaperBot",
-        appName: "play",
-        webUrl: ""
+        botUsername: "CyberDuellitebot",
+        appName: "CYBER DUEL",
+        webUrl: process.env.APP_URL || "https://play.cyberduel.app"
       };
       res.json(defaultSettings);
     }
@@ -7485,7 +7431,7 @@ app.get('/api/firestore-test', async (req, res) => {
 
 // Configure and start background Telegram Bot worker (Webhook primary with fallback Polling)
 async function startTelegramBot() {
-  if (process.env.TELEGRAM_BOT_ENABLED !== 'true' || !financialActionsEnabled) return;
+  if (process.env.TELEGRAM_BOT_ENABLED !== 'true' || !appWritesEnabled) return;
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) {
     console.log("No TELEGRAM_BOT_TOKEN found in environment. Telegram Bot is inactive.");
@@ -7675,6 +7621,7 @@ async function startTelegramBot() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: webhookUrl,
+          secret_token: process.env.TELEGRAM_WEBHOOK_SECRET,
           allowed_updates: ["message", "callback_query", "my_chat_member"]
         })
       });
@@ -7902,6 +7849,7 @@ async function startServer() {
     const ready = await circuit.probe(async () => {
       // A VPS has no Google metadata identity. Do not invoke the SDK without an
       // explicit credential source: some gax versions reject internally first.
+      if (usePostgres) { await adminFirestoreInstance.initialize(); return; }
       const credentialPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
       if (!process.env.K_SERVICE && (!credentialPath || !fs.existsSync(credentialPath))) {
         throw new Error('SERVER_CREDENTIALS_REQUIRED');
@@ -7914,8 +7862,8 @@ async function startServer() {
       await runStartupFinancialDiagnostic();
       if (process.env.TON_WITHDRAWAL_WORKER_ENABLED === 'true') workers.start('withdrawal_worker', WITHDRAWAL_WORKER_INTERVAL, processWithdrawals);
       startDepositMonitor();
-      await startTelegramBot();
     }
+    if (appWritesEnabled) await startTelegramBot();
   };
   const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(JSON.stringify({ event: 'HTTP_STARTED', port: PORT, financialActionsEnabled }));

@@ -388,7 +388,7 @@ const getNextRank = (wins: number): { rank: RankConfig | null; winsNeeded: numbe
   };
 };
 
-const ADMIN_TELEGRAM_IDS = ["beskerboris", "admin", "123456789", "711279376", "525364261"];
+
 
 const getUniqueGuestId = (): string => {
   if (typeof window === 'undefined') return 'sandbox_guest';
@@ -1205,8 +1205,10 @@ function GameAppInner() {
   
   // Admin Data
   const [adminData, setAdminData] = useState<AdminMetrics | null>(null);
-  const isUserAnAdmin = ADMIN_TELEGRAM_IDS.includes(String(currentTgId).toLowerCase());
+  const [isUserAnAdmin, setIsUserAnAdmin] = useState(false);
   const [adminModeEnabled, setAdminModeEnabled] = useState<boolean>(isDevelopEnvironment || isUserAnAdmin);
+
+  useEffect(() => { setAdminModeEnabled(isUserAnAdmin); }, [isUserAnAdmin]);
 
   const [announcementText, setAnnouncementText] = useState<string>('');
   const [announcementLoading, setAnnouncementLoading] = useState<boolean>(false);
@@ -1348,6 +1350,7 @@ function GameAppInner() {
         setErrorMessage(data.error);
       } else {
         setProfile(data.profile);
+        if (data.isAdmin !== undefined) setIsUserAnAdmin(data.isAdmin === true);
         if (data.tonConfig) {
           setTonConfig(data.tonConfig);
         }
@@ -1519,6 +1522,7 @@ function GameAppInner() {
         playNotificationSound();
         if (data.profile) {
           setProfile(data.profile);
+        if (data.isAdmin !== undefined) setIsUserAnAdmin(data.isAdmin === true);
         }
       }
     } catch (e) {
