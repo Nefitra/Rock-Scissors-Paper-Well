@@ -974,23 +974,8 @@ app.post('/api/user/sync', async (req, res) => {
         updated = true;
       }
       if (!currentData.welcomeRewardClaimed) {
-        try {
-          await adjustUserVViral(
-            telegramUserId,
-            ECONOMY_CONFIG.welcomeBonus,
-            'credit',
-            'welcome_bonus',
-            'welcome',
-            `welcome_${telegramUserId}`
-          );
-        } catch (e) {
-          // ignore error if already credited or failed
-        }
+        await adjustUserVViral(telegramUserId, ECONOMY_CONFIG.welcomeBonus, 'credit', 'welcome_bonus', 'welcome', `welcome_${telegramUserId}`);
         upData.welcomeRewardClaimed = true;
-        upData.vViral = (currentData.vViral !== undefined ? currentData.vViral : 0) + ECONOMY_CONFIG.welcomeBonus;
-        updated = true;
-      } else if (currentData.vViral === undefined) {
-        upData.vViral = ECONOMY_CONFIG.welcomeBonus;
         updated = true;
       }
       if (!currentData.missions) {
@@ -1069,7 +1054,7 @@ app.post('/api/user/sync', async (req, res) => {
       streak: 0,
       xp: 0,
       vViral: 0,
-      welcomeRewardClaimed: true,
+      welcomeRewardClaimed: false,
       missions: {},
       lastLoginDate: "",
       lang: lang || "en",
@@ -1087,6 +1072,7 @@ app.post('/api/user/sync', async (req, res) => {
       'welcome',
       `welcome_${telegramUserId}`
     );
+    await userRef.update({welcomeRewardClaimed:true});
 
     const upAccount = getOrCreateTonAccount(newProfile, userId);
     newProfile.tonAccount = upAccount;
@@ -4481,6 +4467,8 @@ app.post('/api/matchmaking/join', async (req, res) => {
     }
 
     const targetMode = mode || "free";
+    if (!['free','stake','ton'].includes(targetMode)) return res.status(400).json({error:'Invalid game mode'});
+    if (playWithBot && targetMode !== 'free') return res.status(400).json({error:'Bot practice is available in free mode only.'});
     const targetStake = typeof stake === 'number' ? Math.max(0, stake) : 0;
 
     // Validate stake preset if mode is 'stake'
