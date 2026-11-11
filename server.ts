@@ -1,3 +1,5 @@
+import 'dotenv/config';
+import { FirestoreCircuit, guardedFirestore, workerRegistry, unavailableMessage } from './server/firestore-safety';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -7,26 +9,6 @@ import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import crypto from 'crypto';
 import { mnemonicToWalletKey } from '@ton/crypto';
 import { WalletContractV3R1, WalletContractV3R2, WalletContractV4, WalletContractV5Beta, WalletContractV5R1, TonClient, internal } from '@ton/ton';
-import { initializeApp as initializeClientApp } from 'firebase/app';
-import {
-  initializeFirestore,
-  doc as clientDoc,
-  collection as clientCollection,
-  getDoc as clientGetDoc,
-  getDocs as clientGetDocs,
-  setDoc as clientSetDoc,
-  updateDoc as clientUpdateDoc,
-  deleteDoc as clientDeleteDoc,
-  addDoc as clientAddDoc,
-  query as clientQuery,
-  where as clientWhere,
-  limit as clientLimit,
-  orderBy as clientOrderBy,
-  runTransaction as clientRunTransaction,
-  writeBatch as clientWriteBatch,
-  memoryLocalCache
-} from 'firebase/firestore';
-
 // Initialize Express
 const app = express();
 app.use(express.json());
@@ -61,777 +43,24 @@ app.use((req, res, next) => {
   next();
 });
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
+const circuit = new FirestoreCircuit();
+const workers = workerRegistry(circuit);
+const financialActionsEnabled = process.env.FINANCIAL_ACTIONS_ENABLED === 'true';
+app.get('/health/live', (_req, res) => res.json({ status: 'ok' }));
+app.get('/health/ready', (_req, res) => res.status(circuit.ready ? 200 : 503).json({ status: circuit.ready ? 'ready' : 'degraded', financialActionsEnabled }));
+app.use('/api', (req, res, next) => {
+  if (!circuit.ready || (!financialActionsEnabled && !['GET', 'HEAD', 'OPTIONS'].includes(req.method))) {
+    return res.status(503).json({ error: unavailableMessage });
+  }
+  next();
+});
 
 // Load Firebase configuration
 const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
 if (!fs.existsSync(configPath)) {
   console.error("Missing firebase-applet-config.json. Please run set_up_firebase first.");
   process.exit(1);
-}
-
-function logFirestoreRequest(collectionPath: string, operation: string) {
-  const pId = firebaseConfig.projectId;
-  const dbId = firebaseConfig.firestoreDatabaseId || '(default)';
-  console.log(`[FIRESTORE_REQUEST] projectId=${pId} | databaseId=${dbId} | collection=${collectionPath} | operation=${operation}`);
-}
-
-class DocumentSnapshotWrapper {
-  id: string;
-  exists: boolean;
-  private _data: any;
-
-  constructor(snap: any) {
-    this.id = snap.id;
-    this.exists = typeof snap.exists === 'function' ? snap.exists() : !!snap.exists;
-    this._data = typeof snap.data === 'function' ? snap.data() : snap._data;
-  }
-
-  data() {
-    return this._data;
-  }
-
-  get(field: string) {
-    return this._data ? this._data[field] : undefined;
-  }
-}
-
-class QuerySnapshotWrapper {
-  empty: boolean;
-  size: number;
-  docs: DocumentSnapshotWrapper[];
-
-  constructor(snap: any) {
-    this.empty = snap.empty;
-    this.size = typeof snap.size === 'number' ? snap.size : (snap.docs ? snap.docs.length : 0);
-    this.docs = snap.docs ? snap.docs.map((doc: any) => new DocumentSnapshotWrapper(doc)) : [];
-  }
-
-  forEach(callback: (doc: DocumentSnapshotWrapper) => void) {
-    this.docs.forEach(callback);
-  }
-}
-
-// In-Memory Fallback State for Firestore Quota Exceeded situations
-let isQuotaExceeded = false;
-
-const inMemoryDb: Record<string, Record<string, any>> = {
-  settings: {
-    global_settings: {
-      botUsername: "CyberDuellitebot",
-      appName: "CyberDuellite",
-      webUrl: "https://rock-scissors-paper-well-52536426129.us-west1.run.app",
-      communityChatId: "@VIRAL_App_Community"
-    }
-  },
-  users: {},
-  games: {},
-  challenges: {},
-  tonDeposits: {},
-  tonWithdrawals: {},
-  tonProcessedTransactions: {},
-  ledgerTransactions: {},
-  ledgerEntries: {}
-};
-
-function isQuotaError(err: any): boolean {
-  if (!err) return false;
-  const msg = (err.message || String(err)).toLowerCase();
-  return msg.includes('quota') || msg.includes('resource_exhausted') || msg.includes('limit exceeded');
-}
-
-function handleQuotaExceeded(error: any) {
-  if (!isQuotaExceeded) {
-    isQuotaExceeded = true;
-    console.error("=========================================================");
-    console.error("CRITICAL FIRESTORE QUOTA EXCEEDED ERROR ENCOUNTERED!");
-    console.error("The Spark (free tier) daily read/write limits for this database have been exhausted.");
-    console.error("Please visit your Firebase Console to manage quota limits or upgrade database:");
-    console.error("https://console.firebase.google.com/project/majestic-metrics-d7k72/firestore/databases/ai-studio-8a8ccd56-f6a2-4be1-a666-859917405e4f/data?openUpgradeDialog=true");
-    console.error("The application will seamlessly fallback to a highly realistic, responsive in-memory fallback store to ensure all gameplay, user registration, and admin capabilities continue working without errors!");
-    console.error("=========================================================");
-  }
-}
-
-function getNestedValue(obj: any, path: string): any {
-  if (!obj || !path) return undefined;
-  const parts = path.split('.');
-  let current = obj;
-  for (const part of parts) {
-    if (current === null || current === undefined) return undefined;
-    current = current[part];
-  }
-  return current;
-}
-
-class DocumentReferenceWrapper {
-  id: string;
-  path: string;
-  _ref: any;
-  private _db: any;
-  private _isClient: boolean;
-
-  constructor(ref: any, db: any, isClient: boolean = false) {
-    this._ref = ref;
-    this._db = db;
-    this.id = ref.id;
-    this.path = ref.path;
-    this._isClient = isClient;
-  }
-
-  getInMemory() {
-    const parts = this.path.split('/');
-    const coll = parts[0];
-    const docId = parts[1];
-    const data = inMemoryDb[coll]?.[docId];
-    const mockSnap = {
-      id: docId,
-      exists: data !== undefined,
-      data: () => data || null,
-      _data: data || null
-    };
-    return new DocumentSnapshotWrapper(mockSnap);
-  }
-
-  async get() {
-    logFirestoreRequest(this.path, 'get');
-    if (isQuotaExceeded) {
-      return this.getInMemory();
-    }
-    try {
-      if (this._isClient) {
-        const snap = await clientGetDoc(this._ref);
-        return new DocumentSnapshotWrapper(snap);
-      } else {
-        const snap = await this._ref.get();
-        return new DocumentSnapshotWrapper(snap);
-      }
-    } catch (error: any) {
-      if (isQuotaError(error)) {
-        handleQuotaExceeded(error);
-        return this.getInMemory();
-      }
-      throw error;
-    }
-  }
-
-  async set(data: any, options?: { merge?: boolean }) {
-    logFirestoreRequest(this.path, 'set');
-    const parts = this.path.split('/');
-    const coll = parts[0];
-    const docId = parts[1];
-    
-    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
-    if (options?.merge) {
-      inMemoryDb[coll][docId] = { ...(inMemoryDb[coll][docId] || {}), ...data };
-    } else {
-      inMemoryDb[coll][docId] = { ...data };
-    }
-
-    if (isQuotaExceeded) {
-      return;
-    }
-    try {
-      if (this._isClient) {
-        await clientSetDoc(this._ref, data, { merge: !!options?.merge });
-      } else {
-        await this._ref.set(data, { merge: !!options?.merge });
-      }
-    } catch (error: any) {
-      if (isQuotaError(error)) {
-        handleQuotaExceeded(error);
-        return;
-      }
-      throw error;
-    }
-  }
-
-  async update(data: any) {
-    logFirestoreRequest(this.path, 'update');
-    const parts = this.path.split('/');
-    const coll = parts[0];
-    const docId = parts[1];
-
-    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
-    const current = inMemoryDb[coll][docId] || {};
-    for (const key of Object.keys(data)) {
-      if (key.includes('.')) {
-        const pathKeys = key.split('.');
-        let target = current;
-        for (let i = 0; i < pathKeys.length - 1; i++) {
-          if (!target[pathKeys[i]]) target[pathKeys[i]] = {};
-          target = target[pathKeys[i]];
-        }
-        target[pathKeys[pathKeys.length - 1]] = data[key];
-      } else {
-        current[key] = data[key];
-      }
-    }
-    inMemoryDb[coll][docId] = current;
-
-    if (isQuotaExceeded) {
-      return;
-    }
-    try {
-      if (this._isClient) {
-        await clientUpdateDoc(this._ref, data);
-      } else {
-        await this._ref.update(data);
-      }
-    } catch (error: any) {
-      if (isQuotaError(error)) {
-        handleQuotaExceeded(error);
-        return;
-      }
-      throw error;
-    }
-  }
-
-  async delete() {
-    logFirestoreRequest(this.path, 'delete');
-    const parts = this.path.split('/');
-    const coll = parts[0];
-    const docId = parts[1];
-    if (inMemoryDb[coll]) {
-      delete inMemoryDb[coll][docId];
-    }
-
-    if (isQuotaExceeded) {
-      return;
-    }
-    try {
-      if (this._isClient) {
-        await clientDeleteDoc(this._ref);
-      } else {
-        await this._ref.delete();
-      }
-    } catch (error: any) {
-      if (isQuotaError(error)) {
-        handleQuotaExceeded(error);
-        return;
-      }
-      throw error;
-    }
-  }
-
-  get firestore() {
-    return this._db;
-  }
-}
-
-class QueryWrapper {
-  protected _query: any;
-  protected _db: any;
-  protected _path: string;
-  protected _isClient: boolean;
-  protected _clientClauses: any[] = [];
-  protected _memoryFilters: { field: string, op: string, value: any }[] = [];
-  protected _memoryLimit?: number;
-  protected _memoryOrderBy?: { field: string, dir: 'asc' | 'desc' };
-
-  constructor(
-    q: any,
-    db: any,
-    path: string,
-    isClient: boolean = false,
-    clauses: any[] = [],
-    memoryFilters: any[] = [],
-    memoryLimit?: number,
-    memoryOrderBy?: any
-  ) {
-    this._query = q;
-    this._db = db;
-    this._path = path;
-    this._isClient = isClient;
-    this._clientClauses = clauses;
-    this._memoryFilters = memoryFilters;
-    this._memoryLimit = memoryLimit;
-    this._memoryOrderBy = memoryOrderBy;
-  }
-
-  where(field: string, op: any, value: any) {
-    const mappedOp = op === '===' ? '==' : op;
-    const newFilters = [...this._memoryFilters, { field, op: mappedOp, value }];
-    if (this._isClient) {
-      return new QueryWrapper(
-        this._query,
-        this._db,
-        this._path,
-        true,
-        [...this._clientClauses, clientWhere(field, mappedOp, value)],
-        newFilters,
-        this._memoryLimit,
-        this._memoryOrderBy
-      );
-    } else {
-      return new QueryWrapper(
-        this._query.where(field, mappedOp, value),
-        this._db,
-        this._path,
-        false,
-        [],
-        newFilters,
-        this._memoryLimit,
-        this._memoryOrderBy
-      );
-    }
-  }
-
-  limit(count: number) {
-    if (this._isClient) {
-      return new QueryWrapper(
-        this._query,
-        this._db,
-        this._path,
-        true,
-        [...this._clientClauses, clientLimit(count)],
-        this._memoryFilters,
-        count,
-        this._memoryOrderBy
-      );
-    } else {
-      return new QueryWrapper(
-        this._query.limit(count),
-        this._db,
-        this._path,
-        false,
-        [],
-        this._memoryFilters,
-        count,
-        this._memoryOrderBy
-      );
-    }
-  }
-
-  orderBy(field: string, dir?: 'asc' | 'desc') {
-    const order = { field, dir: dir || 'asc' };
-    if (this._isClient) {
-      return new QueryWrapper(
-        this._query,
-        this._db,
-        this._path,
-        true,
-        [...this._clientClauses, clientOrderBy(field, dir || 'asc')],
-        this._memoryFilters,
-        this._memoryLimit,
-        order
-      );
-    } else {
-      return new QueryWrapper(
-        this._query.orderBy(field, dir || 'asc'),
-        this._db,
-        this._path,
-        false,
-        [],
-        this._memoryFilters,
-        this._memoryLimit,
-        order
-      );
-    }
-  }
-
-  getInMemory() {
-    const coll = this._path;
-    const allDocs = inMemoryDb[coll] ? Object.entries(inMemoryDb[coll]).map(([id, data]) => ({ id, ...data })) : [];
-    
-    let filtered = allDocs;
-    for (const filter of this._memoryFilters) {
-      filtered = filtered.filter(doc => {
-        const val = getNestedValue(doc, filter.field);
-        const expected = filter.value;
-        
-        switch (filter.op) {
-          case '==':
-            return val == expected;
-          case '!=':
-            return val != expected;
-          case '>':
-            return val > expected;
-          case '<':
-            return val < expected;
-          case '>=':
-            return val >= expected;
-          case '<=':
-            return val <= expected;
-          case 'in':
-            return Array.isArray(expected) && expected.includes(val);
-          case 'array-contains':
-            return Array.isArray(val) && val.includes(expected);
-          default:
-            return true;
-        }
-      });
-    }
-
-    if (this._memoryOrderBy) {
-      const { field, dir } = this._memoryOrderBy;
-      filtered.sort((a, b) => {
-        const valA = getNestedValue(a, field);
-        const valB = getNestedValue(b, field);
-        if (valA === undefined && valB === undefined) return 0;
-        if (valA === undefined) return 1;
-        if (valB === undefined) return -1;
-        
-        const numA = Number(valA);
-        const numB = Number(valB);
-        if (!isNaN(numA) && !isNaN(numB)) {
-          return dir === 'asc' ? numA - numB : numB - numA;
-        }
-        
-        const strA = String(valA);
-        const strB = String(valB);
-        return dir === 'asc' ? strA.localeCompare(strB) : strB.localeCompare(strA);
-      });
-    }
-
-    if (this._memoryLimit !== undefined) {
-      filtered = filtered.slice(0, this._memoryLimit);
-    }
-
-    const docs = filtered.map(item => {
-      const { id, ...data } = item;
-      const mockDocSnap = {
-        id,
-        exists: true,
-        data: () => data,
-        _data: data
-      };
-      return new DocumentSnapshotWrapper(mockDocSnap);
-    });
-
-    const mockQuerySnap = {
-      empty: docs.length === 0,
-      size: docs.length,
-      docs
-    };
-
-    return new QuerySnapshotWrapper(mockQuerySnap);
-  }
-
-  async get() {
-    logFirestoreRequest(this._path, 'get_query');
-    if (isQuotaExceeded) {
-      return this.getInMemory();
-    }
-    try {
-      if (this._isClient) {
-        const q = this._clientClauses.length > 0
-          ? clientQuery(this._query, ...this._clientClauses)
-          : this._query;
-        const snap = await clientGetDocs(q);
-        return new QuerySnapshotWrapper(snap);
-      } else {
-        const snap = await this._query.get();
-        return new QuerySnapshotWrapper(snap);
-      }
-    } catch (error: any) {
-      if (isQuotaError(error)) {
-        handleQuotaExceeded(error);
-        return this.getInMemory();
-      }
-      throw error;
-    }
-  }
-}
-
-class CollectionReferenceWrapper extends QueryWrapper {
-  id: string;
-  path: string;
-
-  constructor(ref: any, db: any, isClient: boolean = false) {
-    super(ref, db, ref.path, isClient);
-    this.id = ref.id;
-    this.path = ref.path;
-  }
-
-  doc(id?: string) {
-    if (this._isClient) {
-      const ref = id ? clientDoc(this._query, id) : clientDoc(this._query);
-      return new DocumentReferenceWrapper(ref, this._db, true);
-    } else {
-      const ref = id ? this._query.doc(id) : this._query.doc();
-      return new DocumentReferenceWrapper(ref, this._db, false);
-    }
-  }
-
-  async add(data: any) {
-    logFirestoreRequest(this.path, 'add');
-    if (this._isClient) {
-      const ref = clientDoc(this._query);
-      const wrapper = new DocumentReferenceWrapper(ref, this._db, true);
-      await wrapper.set(data);
-      return wrapper;
-    } else {
-      const ref = this._query.doc();
-      const wrapper = new DocumentReferenceWrapper(ref, this._db, false);
-      await wrapper.set(data);
-      return wrapper;
-    }
-  }
-}
-
-class TransactionWrapper {
-  private _tx: any;
-  private _db: any;
-  private _isClient: boolean;
-
-  constructor(tx: any, db: any, isClient: boolean = false) {
-    this._tx = tx;
-    this._db = db;
-    this._isClient = isClient;
-  }
-
-  async get(docRefWrapper: DocumentReferenceWrapper) {
-    logFirestoreRequest(docRefWrapper.path, 'transaction_get');
-    if (isQuotaExceeded || !this._tx) {
-      return docRefWrapper.getInMemory();
-    }
-    try {
-      const snap = await this._tx.get(docRefWrapper._ref);
-      return new DocumentSnapshotWrapper(snap);
-    } catch (error: any) {
-      if (isQuotaError(error)) {
-        handleQuotaExceeded(error);
-        return docRefWrapper.getInMemory();
-      }
-      throw error;
-    }
-  }
-
-  set(docRefWrapper: DocumentReferenceWrapper, data: any, options?: { merge?: boolean }) {
-    logFirestoreRequest(docRefWrapper.path, 'transaction_set');
-    const parts = docRefWrapper.path.split('/');
-    const coll = parts[0];
-    const docId = parts[1];
-    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
-    if (options?.merge) {
-      inMemoryDb[coll][docId] = { ...(inMemoryDb[coll][docId] || {}), ...data };
-    } else {
-      inMemoryDb[coll][docId] = { ...data };
-    }
-
-    if (this._tx) {
-      this._tx.set(docRefWrapper._ref, data, { merge: !!options?.merge });
-    }
-    return this;
-  }
-
-  update(docRefWrapper: DocumentReferenceWrapper, data: any) {
-    logFirestoreRequest(docRefWrapper.path, 'transaction_update');
-    const parts = docRefWrapper.path.split('/');
-    const coll = parts[0];
-    const docId = parts[1];
-    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
-    const current = inMemoryDb[coll][docId] || {};
-    for (const key of Object.keys(data)) {
-      if (key.includes('.')) {
-        const pathKeys = key.split('.');
-        let target = current;
-        for (let i = 0; i < pathKeys.length - 1; i++) {
-          if (!target[pathKeys[i]]) target[pathKeys[i]] = {};
-          target = target[pathKeys[i]];
-        }
-        target[pathKeys[pathKeys.length - 1]] = data[key];
-      } else {
-        current[key] = data[key];
-      }
-    }
-    inMemoryDb[coll][docId] = current;
-
-    if (this._tx) {
-      this._tx.update(docRefWrapper._ref, data);
-    }
-    return this;
-  }
-
-  delete(docRefWrapper: DocumentReferenceWrapper) {
-    logFirestoreRequest(docRefWrapper.path, 'transaction_delete');
-    const parts = docRefWrapper.path.split('/');
-    const coll = parts[0];
-    const docId = parts[1];
-    if (inMemoryDb[coll]) {
-      delete inMemoryDb[coll][docId];
-    }
-
-    if (this._tx) {
-      this._tx.delete(docRefWrapper._ref);
-    }
-    return this;
-  }
-}
-
-class BatchWrapper {
-  private _batch: any;
-  private _db: any;
-  private _isClient: boolean;
-
-  constructor(batch: any, db: any, isClient: boolean = false) {
-    this._batch = batch;
-    this._db = db;
-    this._isClient = isClient;
-  }
-
-  set(docRefWrapper: DocumentReferenceWrapper, data: any, options?: { merge?: boolean }) {
-    logFirestoreRequest(docRefWrapper.path, 'batch_set');
-    const parts = docRefWrapper.path.split('/');
-    const coll = parts[0];
-    const docId = parts[1];
-    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
-    if (options?.merge) {
-      inMemoryDb[coll][docId] = { ...(inMemoryDb[coll][docId] || {}), ...data };
-    } else {
-      inMemoryDb[coll][docId] = { ...data };
-    }
-
-    if (this._batch) {
-      this._batch.set(docRefWrapper._ref, data, { merge: !!options?.merge });
-    }
-    return this;
-  }
-
-  update(docRefWrapper: DocumentReferenceWrapper, data: any) {
-    logFirestoreRequest(docRefWrapper.path, 'batch_update');
-    const parts = docRefWrapper.path.split('/');
-    const coll = parts[0];
-    const docId = parts[1];
-    if (!inMemoryDb[coll]) inMemoryDb[coll] = {};
-    const current = inMemoryDb[coll][docId] || {};
-    for (const key of Object.keys(data)) {
-      if (key.includes('.')) {
-        const pathKeys = key.split('.');
-        let target = current;
-        for (let i = 0; i < pathKeys.length - 1; i++) {
-          if (!target[pathKeys[i]]) target[pathKeys[i]] = {};
-          target = target[pathKeys[i]];
-        }
-        target[pathKeys[pathKeys.length - 1]] = data[key];
-      } else {
-        current[key] = data[key];
-      }
-    }
-    inMemoryDb[coll][docId] = current;
-
-    if (this._batch) {
-      this._batch.update(docRefWrapper._ref, data);
-    }
-    return this;
-  }
-
-  delete(docRefWrapper: DocumentReferenceWrapper) {
-    logFirestoreRequest(docRefWrapper.path, 'batch_delete');
-    const parts = docRefWrapper.path.split('/');
-    const coll = parts[0];
-    const docId = parts[1];
-    if (inMemoryDb[coll]) {
-      delete inMemoryDb[coll][docId];
-    }
-
-    if (this._batch) {
-      this._batch.delete(docRefWrapper._ref);
-    }
-    return this;
-  }
-
-  async commit() {
-    logFirestoreRequest('batch', 'commit');
-    if (isQuotaExceeded || !this._batch) {
-      return;
-    }
-    try {
-      await this._batch.commit();
-    } catch (error: any) {
-      if (isQuotaError(error)) {
-        handleQuotaExceeded(error);
-        return;
-      }
-      throw error;
-    }
-  }
-}
-
-class FirestoreWrapper {
-  private _adminDb: any;
-  private _clientDb: any;
-  private _isClient: boolean;
-
-  constructor(adminDb: any, clientDb: any = null, isClient: boolean = false) {
-    this._adminDb = adminDb;
-    this._clientDb = clientDb;
-    this._isClient = isClient;
-  }
-
-  setClientMode(val: boolean) {
-    this._isClient = val;
-  }
-
-  collection(path: string) {
-    if (this._isClient) {
-      const ref = clientCollection(this._clientDb, path);
-      return new CollectionReferenceWrapper(ref, this, true);
-    } else {
-      const ref = this._adminDb.collection(path);
-      return new CollectionReferenceWrapper(ref, this, false);
-    }
-  }
-
-  doc(path: string) {
-    if (this._isClient) {
-      const ref = clientDoc(this._clientDb, path);
-      return new DocumentReferenceWrapper(ref, this, true);
-    } else {
-      const ref = this._adminDb.doc(path);
-      return new DocumentReferenceWrapper(ref, this, false);
-    }
-  }
-
-  async runTransaction(callback: (transaction: TransactionWrapper) => Promise<any>) {
-    logFirestoreRequest('transaction', 'start');
-    if (isQuotaExceeded) {
-      const txWrapper = new TransactionWrapper(null, this, this._isClient);
-      return await callback(txWrapper);
-    }
-    try {
-      if (this._isClient) {
-        return await clientRunTransaction(this._clientDb, async (clientTx: any) => {
-          const txWrapper = new TransactionWrapper(clientTx, this, true);
-          return await callback(txWrapper);
-        });
-      } else {
-        return await this._adminDb.runTransaction(async (adminTx: any) => {
-          const txWrapper = new TransactionWrapper(adminTx, this, false);
-          return await callback(txWrapper);
-        });
-      }
-    } catch (error: any) {
-      if (isQuotaError(error)) {
-        handleQuotaExceeded(error);
-        const txWrapper = new TransactionWrapper(null, this, this._isClient);
-        return await callback(txWrapper);
-      }
-      throw error;
-    }
-  }
-
-  batch() {
-    if (isQuotaExceeded) {
-      return new BatchWrapper(null, this, this._isClient);
-    }
-    try {
-      if (this._isClient) {
-        const clientBatch = clientWriteBatch(this._clientDb);
-        return new BatchWrapper(clientBatch, this, true);
-      } else {
-        const adminBatch = this._adminDb.batch();
-        return new BatchWrapper(adminBatch, this, false);
-      }
-    } catch (error: any) {
-      if (isQuotaError(error)) {
-        handleQuotaExceeded(error);
-        return new BatchWrapper(null, this, this._isClient);
-      }
-      throw error;
-    }
-  }
 }
 
 const firebaseConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
@@ -848,18 +77,7 @@ if (getAdminApps().length === 0) {
 
 const adminFirestoreInstance = getAdminFirestore(adminApp, firebaseConfig.firestoreDatabaseId);
 
-// Initialize Firebase Client SDK for server-side fallback
-const clientApp = initializeClientApp(firebaseConfig);
-const clientDb = initializeFirestore(clientApp, {
-  experimentalForceLongPolling: true,
-  useFetchStreams: false,
-  localCache: memoryLocalCache()
-} as any, firebaseConfig.firestoreDatabaseId);
-
-// Dual-mode database selection and startup validation (initially in Admin mode)
-let isClientMode = false;
-const adminDb: any = new FirestoreWrapper(adminFirestoreInstance, clientDb, false);
-
+const adminDb: any = guardedFirestore(adminFirestoreInstance, circuit);
 const db = adminDb;
 const firestoreInstance = adminDb; // Compatibility reference
 
@@ -921,7 +139,7 @@ function query(baseRef: any, ...constraints: any[]) {
 // TON Authoritative Financial System variables
 let serviceAccountEmail = "unknown";
 let actualProjectId = "unknown";
-let tonFinancialsEnabled = true;
+let tonFinancialsEnabled = false;
 let tonConfigurationError = "";
 let withdrawalsDisabledByConfigError = false;
 let withdrawalWorkerEnabled = false; // Disabled until deposit ledger is verified
@@ -977,18 +195,8 @@ async function runStartupFinancialDiagnostic() {
     serviceAccountEmail = resolvedEmail;
     console.log(`[DIAGNOSTIC] Resolved Service Account Email: ${serviceAccountEmail}`);
 
-    // 3. Probe Admin Firestore access and activate Client SDK fallback if needed
-    try {
-      console.log("[DIAGNOSTIC] Probing Admin SDK Firestore permissions...");
-      const probeRef = adminFirestoreInstance.collection('tonProcessedTransactions').doc('diagnostic_probe');
-      await probeRef.get();
-      console.log("[DIAGNOSTIC] Admin SDK Firestore permission check PASSED. Operating in ADMIN SDK mode.");
-    } catch (probeErr: any) {
-      console.warn(`[DIAGNOSTIC] Admin SDK Firestore permission check FAILED (${probeErr.message}). Activating CLIENT SDK mode fallback...`);
-      adminDb.setClientMode(true);
-      isClientMode = true;
-    }
-
+    // Admin-only preflight is enforced by startServer before this diagnostic.
+    circuit.assertReady();
     // 4. Verify write/read access to tonProcessedTransactions (Access Test - Commented out to eliminate startup reads/writes)
     /*
     const testRef = adminDb.collection('tonProcessedTransactions').doc('diagnostic_startup_test');
@@ -1129,9 +337,9 @@ async function runStartupFinancialDiagnostic() {
     }
 
     // All checks passed!
-    tonFinancialsEnabled = true;
+    tonFinancialsEnabled = financialActionsEnabled;
     startupDiagnosticResult = "PASSED";
-    console.log("[DIAGNOSTIC] All startup financial diagnostics PASSED. Financial systems are ONLINE.");
+    console.log("[DIAGNOSTIC] All startup financial diagnostics PASSED. Wallet configuration check completed; financial actions follow the explicit deployment flag.");
     
     // Enable withdrawal worker safely since deposit ledger is verified, unless disabled by config error
     if (withdrawalsDisabledByConfigError) {
@@ -1141,24 +349,10 @@ async function runStartupFinancialDiagnostic() {
       withdrawalWorkerEnabled = true;
     }
   } catch (err: any) {
-    if (process.env.TON_WITHDRAWAL_WORKER_ENABLED === 'true') {
-      console.log("[DIAGNOSTIC_OVERRIDE] TON_WITHDRAWAL_WORKER_ENABLED=true. Forcing financial systems and withdrawal worker to remain enabled despite diagnostic failure.");
-      tonFinancialsEnabled = true;
-      startupDiagnosticResult = "OVERRIDDEN_BY_ENV";
-      // Still disable if there is a config/mnemonic error
-      if (withdrawalsDisabledByConfigError) {
-        console.error("[DIAGNOSTIC] ❌ Withdrawal worker remains DISABLED due to hot wallet address mismatch or missing mnemonic.");
-        withdrawalWorkerEnabled = false;
-      } else {
-        withdrawalWorkerEnabled = true;
-      }
-    } else {
-      tonFinancialsEnabled = false;
-      startupDiagnosticResult = err.message || String(err);
-      console.error("[DIAGNOSTIC_FAILURE] ❌ TON FINANCIAL SYSTEMS ARE DISABLED:", startupDiagnosticResult);
-      // Explicitly keep withdrawal worker disabled
-      withdrawalWorkerEnabled = false;
-    }
+    tonFinancialsEnabled = false;
+    withdrawalWorkerEnabled = false;
+    startupDiagnosticResult = 'FAILED';
+    console.error('[DIAGNOSTIC_FAILURE] Financial systems remain disabled.');
   }
 }
 
@@ -1174,7 +368,7 @@ async function testConnection() {
     console.error("Firestore connection test: FAILED.", error);
   }
 }
-testConnection();
+// Connection probes are scheduled centrally after server startup.
 
 // Load locales for bot i18n
 const locales: Record<string, any> = {};
@@ -1764,7 +958,7 @@ async function runUserMigration() {
     console.error("Migration error:", error);
   }
 }
-setTimeout(runUserMigration, 2000);
+// Migration is intentionally not called during normal startup.
 
 // REST APIs
 // 1. Health check
@@ -3213,8 +2407,8 @@ async function processWithdrawals() {
       return;
     }
 
-    const overrideEnabled = process.env.TON_WITHDRAWAL_WORKER_ENABLED === 'true';
-    if (!withdrawalWorkerEnabled && !overrideEnabled) {
+    if (!circuit.ready || !financialActionsEnabled) return;
+    if (!withdrawalWorkerEnabled) {
       console.log("[WITHDRAWAL_WORKER] Withdrawal worker is disabled.");
       return;
     }
@@ -4691,8 +3885,7 @@ async function adjustUserTonBalance(
 
 // Start background withdrawal worker
 const WITHDRAWAL_WORKER_INTERVAL = 15000;
-setInterval(processWithdrawals, WITHDRAWAL_WORKER_INTERVAL);
-console.log("[WITHDRAWAL_WORKER] Automated withdrawal worker initialized.");
+// Started centrally only after successful Admin SDK preflight.
 
 // 3.1 Claim Daily Login Streak reward (XP + vVIRAL 7-day loop)
 app.post('/api/user/claim-daily', async (req, res) => {
@@ -8292,6 +7485,7 @@ app.get('/api/firestore-test', async (req, res) => {
 
 // Configure and start background Telegram Bot worker (Webhook primary with fallback Polling)
 async function startTelegramBot() {
+  if (process.env.TELEGRAM_BOT_ENABLED !== 'true' || !financialActionsEnabled) return;
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) {
     console.log("No TELEGRAM_BOT_TOKEN found in environment. Telegram Bot is inactive.");
@@ -8347,7 +7541,7 @@ async function startTelegramBot() {
           type: "web_app",
           text: "⚔️ PLAY ARENA",
           web_app: {
-            url: "https://rock-scissors-paper-well-52536426129.us-west1.run.app?startapp=arena"
+            url: `${process.env.APP_URL}?startapp=arena`
           }
         }
       })
@@ -8358,13 +7552,14 @@ async function startTelegramBot() {
   }
 
   // 3. Setup active challenge expiration background monitor (polls every 30 seconds)
-  setInterval(async () => {
+  workers.start('challenge_monitor', 30000, async () => {
     try {
       // (a) Handle legacy game challenges (backward compatibility)
       const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       const expiredGames = await db.collection('games')
         .where('status', '==', 'waiting')
         .where('createdAt', '<', tenMinutesAgo)
+        .orderBy('createdAt')
         .limit(15)
         .get();
 
@@ -8460,7 +7655,7 @@ async function startTelegramBot() {
     } catch (err) {
       console.error("Background challenge expiration checker error:", err);
     }
-  }, 30000);
+  });
 
   // 4. Configure webhook or fallback polling (Requirement 3 & 9)
   const appUrl = process.env.APP_URL;
@@ -8627,15 +7822,7 @@ function startDepositMonitor() {
   console.log(`[Monitor] pollInterval: 15000`);
   console.log(`[Monitor] provider: toncenter`);
 
-  // Run immediately on start
-  setTimeout(() => {
-    runDepositScanCycle();
-  }, 5000);
-
-  // Run every 15 seconds
-  setInterval(() => {
-    runDepositScanCycle();
-  }, 15000);
+  workers.start('deposit_monitor', 15000, runDepositScanCycle);
 }
 
 async function resetExistingWithdrawalForTesting() {
@@ -8700,63 +7887,38 @@ async function resetExistingWithdrawalForTesting() {
   }
 }
 
-// Configure Vite integration inside main async bootstrapper
+// HTTP is available even when credentials or Firestore are unavailable.
 async function startServer() {
-  // Execute the financial diagnostic check on boot to verify wallets and mnemonics
-  await runStartupFinancialDiagnostic().catch(err => {
-    console.error("[DIAGNOSTIC_UNHANDLED_ERROR] Unhandled error running startup diagnostics:", err);
-  });
-
-  // Print startup runtime diagnostics as requested
-  const gcpProjectId = firebaseConfig.projectId;
-  const firestoreDatabaseId = firebaseConfig.firestoreDatabaseId || '(default)';
-  const cloudRunRevision = process.env.K_REVISION || 'Unknown (local)';
-  const adminAppName = adminApp.name;
-  const firestoreInstancePath = `projects/${gcpProjectId}/databases/${firestoreDatabaseId}`;
-
-  console.log("======================================================================");
-  console.log("                      STARTUP RUNTIME DIAGNOSTICS                     ");
-  console.log("======================================================================");
-  console.log(`- GCP Project ID:          ${gcpProjectId}`);
-  console.log(`- Firestore Database ID:   ${firestoreDatabaseId}`);
-  console.log(`- Cloud Run Revision:      ${cloudRunRevision}`);
-  console.log(`- Cloud Run Service Account: ${serviceAccountEmail}`);
-  console.log(`- Firebase Admin App name: ${adminAppName}`);
-  console.log(`- Firestore instance path: ${firestoreInstancePath}`);
-  console.log(`- Database Mode:           ${isClientMode ? 'CLIENT SDK FALLBACK' : 'ADMIN SDK'}`);
-  console.log("======================================================================");
-
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa"
-    });
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')));
   }
-
-  // Trigger test withdrawal reset if worker is enabled in environment (Disabled to prevent unnecessary startup reads/writes)
-  /*
-  if (process.env.TON_WITHDRAWAL_WORKER_ENABLED === 'true') {
-    await resetExistingWithdrawalForTesting();
-  }
-  */
-
-  // Launch background Telegram Bot poller if token configured
-  startTelegramBot();
-
-  // Launch background TON deposit monitor
-  startDepositMonitor();
-
-  // Binds to 0.0.0.0:3000
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server launched on http://0.0.0.0:${PORT}`);
+  let servicesStarted = false;
+  const preflight = async () => {
+    const ready = await circuit.probe(() => adminFirestoreInstance.doc('_health/readiness').get());
+    if (!ready || servicesStarted) return;
+    servicesStarted = true;
+    if (financialActionsEnabled) {
+      await runStartupFinancialDiagnostic();
+      if (process.env.TON_WITHDRAWAL_WORKER_ENABLED === 'true') workers.start('withdrawal_worker', WITHDRAWAL_WORKER_INTERVAL, processWithdrawals);
+      startDepositMonitor();
+      await startTelegramBot();
+    }
+  };
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(JSON.stringify({ event: 'HTTP_STARTED', port: PORT, financialActionsEnabled }));
+    void preflight();
   });
+  const healthTimer = setInterval(() => { void preflight(); }, 1000);
+  const shutdown = () => {
+    clearInterval(healthTimer); workers.stop();
+    server.close(() => { void adminFirestoreInstance.terminate().finally(() => process.exit(0)); });
+    setTimeout(() => process.exit(1), 10000).unref();
+  };
+  process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 }
-
-startServer();
+startServer().catch(() => { console.error('SERVER_START_FAILED'); process.exitCode = 1; });
