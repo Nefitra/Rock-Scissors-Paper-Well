@@ -377,6 +377,7 @@
     "phoenix": "Großer Phönix",
     "overlord": "Serienmeister",
     "flame": "Flammenadept",
-    "spark": "Kleiner Funke"
+    "spark": "Kleiner Funke",
+    "reconciliationRequired": "Zahlungsabgleich erforderlich"
   }
 }

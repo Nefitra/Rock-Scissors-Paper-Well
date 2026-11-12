@@ -12,7 +12,7 @@ const enums:Record<string,string>={
   completed:'ui.completed',posted:'ui.posted',created:'ui.created',submitted:'ui.submittedRequest',requested:'ui.submittedRequest',
   credited:'ui.credited',Credited:'ui.credited',confirmed:'ui.confirmed',sent:'ui.sent',failed:'ui.failed',rejected:'ui.rejected',
   searching:'ui.searching',waiting:'ui.waitingPlayers',matched:'ui.matched',resolving:'ui.processing',expired:'ui.expired',canceled:'ui.cancelled',cancelled:'ui.cancelled',
-  pending:'ui.pending',queued:'ui.queue',signing:'ui.processing',success:'common.success',active:'ui.active',
+  reconciliation_required:'ui.reconciliationRequired',broadcasting:'ui.processing',pending:'ui.pending',queued:'ui.queue',signing:'ui.processing',success:'common.success',active:'ui.active',
   transactions:'ui.creditRecords',ledgerTransactions:'ui.ledger',tonDeposits:'ui.deposits',tonWithdrawals:'ui.withdrawals',
   credit:'ui.credited',debit:'ui.withdraw',deposit:'ui.deposit',withdrawal:'ui.withdraw',withdrawal_requested:'ui.submittedRequest',
   win:'ui.winReward',loss:'ui.loss',draw:'ui.draw',stake:'ui.stake',refund:'ui.balance',

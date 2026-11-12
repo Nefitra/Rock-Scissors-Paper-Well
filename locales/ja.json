@@ -377,6 +377,7 @@
     "phoenix": "グランドフェニックス",
     "overlord": "連続ログインの覇者",
     "flame": "炎の使い手",
-    "spark": "小さな火花"
+    "spark": "小さな火花",
+    "reconciliationRequired": "入金確認が必要"
   }
 }

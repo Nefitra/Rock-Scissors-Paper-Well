@@ -1,3 +1,5 @@
+import {reserveNativeWithdrawal} from './server/ton-withdrawal';
+import {parseNativeAmount,canonicalNativeAddress,normalizeChainTransaction,matchesNativeReceipt,transactionCacheKey,nativeComment} from './server/ton-safety';
 import { telegramProfile, telegramAvatars } from './server/telegram-profile';
 import { registerAdmin } from './server/admin';
 import { adjustPoints } from './server/points-ledger';
@@ -13,7 +15,7 @@ import { initializeApp as initAdminApp, getApps as getAdminApps } from 'firebase
 import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import crypto from 'crypto';
 import { mnemonicToWalletKey } from '@ton/crypto';
-import { WalletContractV3R1, WalletContractV3R2, WalletContractV4, WalletContractV5Beta, WalletContractV5R1, TonClient, internal } from '@ton/ton';
+import { WalletContractV3R1, WalletContractV3R2, WalletContractV4, WalletContractV5Beta, WalletContractV5R1, TonClient, internal, SendMode } from '@ton/ton';
 // Initialize Express
 const app = express();
 app.use(express.json());
@@ -56,6 +58,7 @@ const appWritesEnabled = process.env.APP_WRITES_ENABLED === 'true';
 app.get('/health/live', (_req, res) => res.json({ status: 'ok' }));
 app.get('/health/ready', (_req, res) => res.status(circuit.ready ? 200 : 503).json({ status: circuit.ready ? 'ready' : 'degraded', financialActionsEnabled }));
 app.use('/api', (req, res, next) => {
+  if(req.path.startsWith('/ton/admin/')||req.path.startsWith('/admin/ton/'))return res.status(503).json({error:'Legacy financial administration is disabled.'});
   if (!financialActionsEnabled && (req.path.startsWith('/ton/') && req.path !== '/ton/config' || req.path.includes('/admin/ton/'))) return res.status(503).json({error: unavailableMessage});
   if (req.path === '/firestore-test') return res.sendStatus(404);
   if (req.path === '/user/reward-wins') return res.status(503).json({error:'This reward is currently unavailable.'});
@@ -294,6 +297,7 @@ async function runStartupFinancialDiagnostic() {
     }
     */
 
+    canonicalNativeAddress(TON_CONFIG.treasuryAddress,TON_CONFIG.network);
     // 4. Derive and validate hot wallet from mnemonic
     const mnemonic = process.env.TON_HOT_WALLET_MNEMONIC;
     if (!mnemonic) {
@@ -365,7 +369,7 @@ async function runStartupFinancialDiagnostic() {
       console.error("[DIAGNOSTIC] ❌ Withdrawal worker will NOT be enabled due to hot wallet address mismatch or missing mnemonic.");
       withdrawalWorkerEnabled = false;
     } else {
-      withdrawalWorkerEnabled = true;
+      withdrawalWorkerEnabled = process.env.TON_WITHDRAWAL_WORKER_ENABLED === 'true';
     }
   } catch (err: any) {
     tonFinancialsEnabled = false;
@@ -1169,8 +1173,8 @@ app.get('/api/user/:userId', async (req, res) => {
 
 const TON_CONFIG = {
   network: process.env.TON_NETWORK || 'mainnet',
-  treasuryAddress: process.env.TON_TREASURY_ADDRESS || 'UQDvEOIDuulW4RuzJsF6LAUixTPorfnU_EaT_mk9JL5K7Uzd',
-  hotWalletAddress: process.env.TON_HOT_WALLET_ADDRESS || 'UQDvEOIDuulW4RuzJsF6LAUixTPorfnU_EaT_mk9JL5K7Uzd',
+  treasuryAddress: process.env.TON_TREASURY_ADDRESS || '',
+  hotWalletAddress: process.env.TON_HOT_WALLET_ADDRESS || '',
   minDepositNano: 1000000000,      // 1 TON
   maxDepositNano: 1000000000000,   // 1000 TON
   minWithdrawalNano: 1000000000,   // 1 TON
@@ -1391,45 +1395,8 @@ function getTonCenterHeaders(): Record<string, string> {
   return headers;
 }
 
-function normalizeTonAddress(address: string): string {
-  if (!address) return "";
-  const trimmed = address.trim();
-  
-  if (trimmed.includes(':')) {
-    const parts = trimmed.split(':');
-    if (parts.length === 2) {
-      const wc = parseInt(parts[0], 10);
-      const hex = parts[1].toLowerCase().replace(/[^0-9a-f]/g, '');
-      return `${wc}:${hex}`;
-    }
-  }
-
-  try {
-    let base64 = trimmed
-      .replace(/-/g, '+')
-      .replace(/_/g, '/');
-    
-    while (base64.length % 4 !== 0) {
-      base64 += '=';
-    }
-
-    const buffer = Buffer.from(base64, 'base64');
-    if (buffer.length === 36) {
-      let wc = buffer[1];
-      if (wc === 255) {
-        wc = -1;
-      } else if (wc > 127) {
-        wc = wc - 256;
-      }
-      
-      const hashHex = buffer.subarray(2, 34).toString('hex').toLowerCase();
-      return `${wc}:${hashHex}`;
-    }
-  } catch (e) {
-    console.error(`Error normalizing TON address "${address}":`, e);
-  }
-
-  return trimmed.toLowerCase();
+function normalizeTonAddress(address:string):string {
+  try{return canonicalNativeAddress(address);}catch{return '';}
 }
 
 interface DetectedWallet {
@@ -1609,121 +1576,30 @@ function extractMessageText(inMsg: any): string {
   return "";
 }
 
-let cachedTransactions: any[] = [];
-let cacheTimestamp = 0;
-let activeFetchPromise: Promise<any[]> | null = null;
-
-async function fetchTransactionsFromToncenter(address: string, network: string): Promise<any[]> {
-  const now = Date.now();
-  
-  // If we have a fresh cache (less than 4.5 seconds old), return it immediately
-  if (now - cacheTimestamp < 4500 && cachedTransactions.length > 0) {
-    console.log(`[Toncenter Cache] Returning ${cachedTransactions.length} cached transactions (cache age: ${now - cacheTimestamp}ms)`);
-    return cachedTransactions;
-  }
-  
-  // If there is an active fetch, reuse its promise to deduplicate concurrent calls
-  if (activeFetchPromise) {
-    console.log(`[Toncenter Cache] Reusing active transactions fetch promise...`);
-    return activeFetchPromise;
-  }
-  
-  activeFetchPromise = (async () => {
-    const host = network === 'mainnet' ? 'toncenter.com' : 'testnet.toncenter.com';
-    const headers = getTonCenterHeaders();
-    const txs: any[] = [];
-    let v3Success = false;
-
-    // 1. Try API v3 (REST): GET /api/v3/transactions?account=address&limit=20
-    try {
-      const url = `https://${host}/api/v3/transactions?account=${address}&limit=20`;
-      console.log(`[Toncenter V3] Fetching: ${url}`);
-      let res = await fetchWithRetry(url, { headers }, 3, 1500);
-      if (res.status === 401 && headers['X-API-Key']) {
-        console.warn(`[Toncenter V3] 401 Unauthorized with API key. Retrying WITHOUT API key.`);
-        const cleanHeaders = { ...headers };
-        delete cleanHeaders['X-API-Key'];
-        res = await fetchWithRetry(url, { headers: cleanHeaders }, 3, 1500);
-      }
-      const data = await res.json();
-      if (data && Array.isArray(data.transactions)) {
-        console.log(`[Toncenter V3] Successfully fetched ${data.transactions.length} transactions.`);
-        v3Success = true;
-        for (const tx of data.transactions) {
-          let normalizedHash = tx.hash || "";
-          if (normalizedHash && normalizedHash.length === 44) {
-            try {
-              normalizedHash = Buffer.from(normalizedHash, 'base64').toString('hex');
-            } catch {}
-          }
-          txs.push({
-            version: 'v3',
-            hash: normalizedHash,
-            lt: tx.lt,
-            now: tx.now,
-            in_msg: tx.in_msg ? {
-              source: tx.in_msg.source,
-              destination: tx.in_msg.destination,
-              value: tx.in_msg.value,
-              message: tx.in_msg.message,
-              decoded_body: tx.in_msg.decoded_body,
-              message_content: tx.in_msg.message_content
-            } : null
-          });
-        }
-      }
-    } catch (err) {
-      console.error(`[Toncenter V3] Failed to fetch transactions:`, err);
-    }
-
-    // 2. Only fetch from API v2 as fallback if API v3 failed or returned nothing
-    if (!v3Success || txs.length === 0) {
+const chainTransactionCache=new Map<string,{at:number;data:any[];pending?:Promise<any[]>}>();
+async function fetchTransactionsFromToncenter(address:string,network:string):Promise<any[]> {
+  const key=transactionCacheKey(address,network);
+  let entry=chainTransactionCache.get(key);
+  if(entry?.pending)return entry.pending;
+  if(entry&&Date.now()-entry.at<4500)return entry.data;
+  entry={at:0,data:[]};chainTransactionCache.set(key,entry);
+  if(chainTransactionCache.size>100)for(const [cacheKey,value]of chainTransactionCache){if(cacheKey!==key&&!value.pending){chainTransactionCache.delete(cacheKey);break;}}
+  const host=network==='mainnet'?'toncenter.com':'testnet.toncenter.com';
+  entry.pending=(async()=>{
+    for(const version of ['v3','v2'] as const){
       try {
-        const url = `https://${host}/api/v2/getTransactions?address=${address}&limit=20`;
-        console.log(`[Toncenter V2 Fallback] Fetching: ${url}`);
-        let res = await fetchWithRetry(url, { headers }, 3, 1500);
-        if (res.status === 401 && headers['X-API-Key']) {
-          console.warn(`[Toncenter V2] 401 Unauthorized with API key. Retrying WITHOUT API key.`);
-          const cleanHeaders = { ...headers };
-          delete cleanHeaders['X-API-Key'];
-          res = await fetchWithRetry(url, { headers: cleanHeaders }, 3, 1500);
-        }
-        const data = await res.json();
-        if (data && data.ok && Array.isArray(data.result)) {
-          console.log(`[Toncenter V2] Successfully fetched ${data.result.length} transactions.`);
-          for (const tx of data.result) {
-            txs.push({
-              version: 'v2',
-              hash: tx.transaction_id ? tx.transaction_id.hash : "",
-              lt: tx.transaction_id ? tx.transaction_id.lt : "",
-              now: tx.utime,
-              in_msg: tx.in_msg ? {
-                source: tx.in_msg.source,
-                destination: tx.in_msg.destination,
-                value: tx.in_msg.value,
-                message: tx.in_msg.message,
-                decoded_body: tx.in_msg.decoded_body || (tx.in_msg.msg_data && tx.in_msg.msg_data.text ? { text: tx.in_msg.msg_data.text } : null)
-              } : null
-            });
-          }
-        }
-      } catch (err) {
-        console.error(`[Toncenter V2] Failed to fetch transactions:`, err);
-      }
+        const path=version==='v3'?`/api/v3/transactions?account=${encodeURIComponent(address)}&limit=100`:`/api/v2/getTransactions?address=${encodeURIComponent(address)}&limit=100`;
+        const response=await fetchWithRetry(`https://${host}${path}`,{headers:getTonCenterHeaders()},3,1500);
+        if(!response.ok)continue;
+        const body=await response.json();
+        const transactions=version==='v3'?body.transactions:body.ok?body.result:null;
+        if(Array.isArray(transactions))return transactions.map((tx:any)=>normalizeChainTransaction(tx,version));
+      }catch{console.warn('TON_HISTORY_PROVIDER_UNAVAILABLE',version);}
     }
-
-    if (txs.length > 0) {
-      cachedTransactions = txs;
-      cacheTimestamp = Date.now();
-    }
-    return txs;
+    throw new Error('TON history providers are unavailable.');
   })();
-
-  try {
-    return await activeFetchPromise;
-  } finally {
-    activeFetchPromise = null;
-  }
+  try {entry.data=await entry.pending;entry.at=Date.now();return entry.data;}
+  finally{entry.pending=undefined;}
 }
 
 async function getOnChainBalance(address: string): Promise<number> {
@@ -1741,7 +1617,7 @@ async function getOnChainBalance(address: string): Promise<number> {
   } catch (err) {
     console.error(`Error fetching on-chain balance for ${address}:`, err);
   }
-  return 1000000000000; // Fallback / simulated 1000 TON
+  throw new Error('TON balance unavailable; reconciliation must not invent reserves.');
 }
 
 async function moveUserTonBalance(
@@ -2353,7 +2229,21 @@ async function settleTonGame(matchId: string, winnerId: string, player1Id: strin
   });
 }
 
+let withdrawalRunActive=false;
 async function processWithdrawals() {
+  if(withdrawalRunActive || !financialActionsEnabled || !tonFinancialsEnabled || process.env.TON_WITHDRAWAL_WORKER_ENABLED!=='true' || !usePostgres)return;
+  withdrawalRunActive=true;let lockClient:any;
+  try {
+    lockClient=await adminFirestoreInstance.pool.connect();
+    const result=await lockClient.query('SELECT pg_try_advisory_lock(8819553553) AS locked');
+    if(!result.rows[0]?.locked)return;
+    await processWithdrawalsLocked();
+  }finally{
+    if(lockClient){try{await lockClient.query('SELECT pg_advisory_unlock(8819553553)');}finally{lockClient.release();}}
+    withdrawalRunActive=false;
+  }
+}
+async function processWithdrawalsLocked() {
   try {
     if (withdrawalsDisabledByConfigError) {
       console.error(`[WITHDRAWAL_WORKER] Withdrawals are strictly disabled due to hot wallet configuration error: ${tonConfigurationError}`);
@@ -2401,10 +2291,11 @@ async function processWithdrawals() {
         continue;
       }
 
+      let broadcastAttempted=false;
       const destAddress = wData.walletAddress;
       const reqAmount = Number(wData.amountNano);
 
-      if (!destAddress || (!destAddress.startsWith('EQ') && !destAddress.startsWith('UQ'))) {
+      if (!normalizeTonAddress(destAddress) || !Number.isSafeInteger(reqAmount) || reqAmount<=0) {
         await wRef.update({
           status: 'failed',
           failureReason: 'Invalid TON wallet address format.',
@@ -2495,7 +2386,7 @@ async function processWithdrawals() {
           fetchBalanceFailed = true;
         }
 
-        if (senderOnChainBalance < BigInt(reqAmount) || fetchBalanceFailed) {
+        if (senderOnChainBalance < BigInt(reqAmount)+50000000n || fetchBalanceFailed) {
           const reason = fetchBalanceFailed
             ? "Network error fetching hot wallet balance."
             : `Insufficient hot wallet on-chain balance. Required: ${reqAmount} Nano, Available: ${senderOnChainBalance.toString()} Nano.`;
@@ -2535,8 +2426,10 @@ async function processWithdrawals() {
         await new Promise(r => setTimeout(r, 1500));
 
         // Broadcast the real transaction on-chain
-        await runWithRetry(async () => {
-          await walletContract.sendTransfer({
+        await wRef.update({status:'broadcasting',broadcastAttemptedAt:new Date().toISOString(),updatedAt:new Date().toISOString()});
+        broadcastAttempted=true;
+        await walletContract.sendTransfer({
+            sendMode:SendMode.PAY_GAS_SEPARATELY,
             seqno: seqno,
             secretKey: keyPair.secretKey,
             messages: [
@@ -2548,7 +2441,6 @@ async function processWithdrawals() {
               })
             ]
           });
-        });
 
         console.log(`[WITHDRAWAL_WORKER] Transaction sent to network. Waiting for confirmation/index...`);
 
@@ -2560,30 +2452,12 @@ async function processWithdrawals() {
         for (let attempt = 0; attempt < 8; attempt++) {
           await new Promise(resolve => setTimeout(resolve, 6000));
           try {
-            const txs = await fetchTransactionsFromToncenter(derivedAddressStr, TON_CONFIG.network);
-            for (const tx of txs) {
-              let matchesComment = false;
-              if (tx.in_msg && (tx.in_msg.message === wId || (tx.in_msg.decoded_body && tx.in_msg.decoded_body.text === wId))) {
-                matchesComment = true;
-              }
-              if (tx.out_msgs && Array.isArray(tx.out_msgs)) {
-                for (const out of tx.out_msgs) {
-                  if (out.message === wId || (out.decoded_body && out.decoded_body.text === wId)) {
-                    matchesComment = true;
-                  }
-                }
-              }
-              if (!matchesComment && tx.in_msg && tx.in_msg.destination === destAddress && String(tx.in_msg.value) === String(reqAmount)) {
-                matchesComment = true;
-              }
-
-              if (matchesComment) {
-                txHash = tx.hash;
-                txLt = String(tx.lt);
-                found = true;
-                break;
-              }
-            }
+            const txs = await fetchTransactionsFromToncenter(destAddress,TON_CONFIG.network);
+            const confirmed=txs.find(tx=>matchesNativeReceipt(tx,{
+              source:derivedAddressStr,destination:destAddress,amountNano:reqAmount,comment:wId,
+              network:TON_CONFIG.network,createdAt:wData.createdAt
+            }));
+            if(confirmed){txHash=confirmed.hash;txLt=String(confirmed.lt);found=true;}
           } catch (fetchErr) {
             console.error(`[WITHDRAWAL_WORKER] Error fetching transactions during poll:`, fetchErr);
           }
@@ -2601,27 +2475,9 @@ async function processWithdrawals() {
           }
         }
 
-        // Fallback: If not found by comment in 48s, check the last on-chain transactions of this sender
-        if (!found) {
-          try {
-            const txs = await fetchTransactionsFromToncenter(derivedAddressStr, TON_CONFIG.network);
-            if (txs.length > 0) {
-              txHash = txs[0].hash;
-              txLt = String(txs[0].lt);
-              found = true;
-              console.log(`[WITHDRAWAL_WORKER] Fallback: Used most recent transaction hash: ${txHash}, lt: ${txLt}`);
-            }
-          } catch (fallbackErr) {
-            console.error(`[WITHDRAWAL_WORKER] Fallback transaction retrieval failed:`, fallbackErr);
-          }
-        }
-
-        // If still not found, we generate a highly accurate unique mock hash so the UI can link/render it correctly,
-        // and avoid blocking the state machine indefinitely.
-        if (!found) {
-          txHash = crypto.createHash('sha256').update(`${wId}_${Date.now()}`).digest('hex');
-          txLt = String(Date.now());
-          console.warn(`[WITHDRAWAL_WORKER] Transaction completed on-chain but could not find transaction hash. Generated deterministic hash: ${txHash}`);
+        if(!found){
+          await wRef.update({status:'reconciliation_required',failureReason:'Broadcast attempted; exact finalized recipient receipt not found. Do not resend or refund automatically.',updatedAt:new Date().toISOString()});
+          continue;
         }
 
         const explorerLink = TON_CONFIG.network === 'testnet'
@@ -2662,6 +2518,10 @@ async function processWithdrawals() {
         console.log(`[WITHDRAWAL_WORKER] Confirmed and ledger finalized for ${wId}`);
 
       } catch (signErr: any) {
+        if(broadcastAttempted){
+          await wRef.update({status:'reconciliation_required',failureReason:'Broadcast outcome requires reconciliation. No automatic resend or refund.',updatedAt:new Date().toISOString()});
+          continue;
+        }
         const signErrStr = String(signErr);
         const isTransient = signErr && (
           signErrStr.includes('429') ||
@@ -2781,10 +2641,12 @@ app.get('/api/ton/config', (req, res) => {
   res.json({
     network: TON_CONFIG.network,
     chainId: isMainnet ? "-239" : "-3",
-    enabled: true,
-    pauseDeposits: TON_CONFIG.pauseDeposits,
-    pauseGames: TON_CONFIG.pauseGames,
-    pauseWithdrawals: TON_CONFIG.pauseWithdrawals,
+    enabled: financialActionsEnabled && tonFinancialsEnabled,
+    asset: 'GRAM',
+    ledgerCurrency: 'TON',
+    pauseDeposits: !financialActionsEnabled || !tonFinancialsEnabled || TON_CONFIG.pauseDeposits,
+    pauseGames: !financialActionsEnabled || !tonFinancialsEnabled || TON_CONFIG.pauseGames,
+    pauseWithdrawals: !financialActionsEnabled || !tonFinancialsEnabled || withdrawalsDisabledByConfigError || TON_CONFIG.pauseWithdrawals,
     treasuryConfigured: !!process.env.TON_TREASURY_ADDRESS,
     hotWalletConfigured: !!process.env.TON_HOT_WALLET_ADDRESS
   });
@@ -2816,14 +2678,15 @@ app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
       return res.status(400).json({ error: "Deposits are temporarily paused for maintenance." });
     }
 
-    const amountNano = Math.floor(Number(amount) * 1000000000);
+    let amountNano:number;
+    try { amountNano=parseNativeAmount(amount,TON_CONFIG.minDepositNano,TON_CONFIG.maxDepositNano); }
+    catch(error:any){return res.status(400).json({error:error.message});}
     if (isNaN(amountNano) || amountNano < TON_CONFIG.minDepositNano || amountNano > TON_CONFIG.maxDepositNano) {
       return res.status(400).json({ error: `Amount must be between 1 and 1000 TON.` });
     }
 
-    if (!walletAddress) {
-      return res.status(400).json({ error: "walletAddress is required to bind transaction." });
-    }
+    try {canonicalNativeAddress(walletAddress,TON_CONFIG.network);}
+    catch{return res.status(400).json({error:'Valid TON wallet address is required.'});}
 
     const userSnap = await adminDb.collection('users').doc(targetUserId).get();
     const userData = userSnap.exists ? userSnap.data() : {};
@@ -2834,7 +2697,7 @@ app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
       return res.status(400).json({ error: `Deposit would exceed maximum allowed balance of 5000 TON.` });
     }
 
-    const depositId = `VIRAL_ARENA_DEP_${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    const depositId = `VIRAL_ARENA_DEP_${crypto.randomBytes(16).toString('hex').toUpperCase()}`;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 15 * 60 * 1000); // 15 minutes validity
 
@@ -2852,7 +2715,7 @@ app.post('/api/ton/deposit/intent', checkTonNetwork, async (req, res) => {
       idempotencyKey: `intent_${depositId}`
     };
 
-    await adminDb.collection('tonDeposits').doc(depositId).set(depositIntent);
+    await adminDb.collection('tonDeposits').doc(depositId).create(depositIntent);
 
     res.json({
       success: true,
@@ -2896,11 +2759,6 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
     };
   }
 
-  if (new Date(depData.expiresAt).getTime() < Date.now() && !simulateOnChain) {
-    console.log(`[Verification Failed] Session expired. Variable: expiresAt. Value: "${depData.expiresAt}". Current: "${new Date().toISOString()}"`);
-    await depRef.update({ status: 'failed', failureCode: 'EXPIRED', failureReason: 'Deposit verification session has expired.' });
-    return { status: 'failed', error: "Deposit verification session has expired. Please create a new intent." };
-  }
 
   let foundOnChain = false;
   let detectedAmountNano = 0;
@@ -2951,45 +2809,12 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
         console.log(`receiver: ${tx.in_msg.destination || ""}`);
       }
 
-      // 1. Destination check
-      if (normOnChainDest !== normTreasury) {
-        console.log(`[Verification Match Failed] Destination mismatch. Reason: Destination address is not the treasury wallet. Variable: normOnChainDest. Value: "${normOnChainDest}". Expected: "${normTreasury}"`);
-        continue;
-      }
-
-      // 2. Source/Sender check (Warning only, proceed if comment matches to avoid stuck funds)
-      const sourceMatches = (normOnChainSource === normExpectedSource);
-      if (!sourceMatches) {
-        console.log(`[Verification Warning] Source address did not match exactly. Variable: normOnChainSource. Value: "${normOnChainSource}". Expected: "${normExpectedSource}". We will still proceed if the unique comment matches perfectly to ensure no stuck funds.`);
-      }
-
-      // 3. Amount check
-      const rawValue = tx.in_msg.value;
-      if (rawValue === undefined || rawValue === null) {
-        console.log(`[Verification Match Failed] Value field is missing in transaction. Variable: rawValue. Value: ${rawValue}`);
-        continue;
-      }
-      const onChainValStr = String(rawValue).trim();
-      const expectedValStr = String(depData.expectedAmountNano).trim();
-      if (onChainValStr !== expectedValStr) {
-        console.log(`[Verification Match Failed] Amount mismatch. Reason: On-chain value does not match expected amount. Variable: onChainValStr. Value: "${onChainValStr}". Expected: "${expectedValStr}"`);
-        continue;
-      }
-
-      // 4. Timing check
-      const txTimeMs = tx.now * 1000;
-      const intentTimeMs = new Date(depData.createdAt).getTime();
-      if (txTimeMs < intentTimeMs - 60000) {
-        console.log(`[Verification Match Failed] Timing check failed. Reason: Transaction is too old or pre-dates the intent. Variable: txTimeMs. Value: ${txTimeMs} (${new Date(txTimeMs).toISOString()}). Expected threshold: >= ${intentTimeMs - 60000} (${new Date(intentTimeMs - 60000).toISOString()})`);
-        continue;
-      }
-
-      // 5. Comment check
-      if (comment.trim().toUpperCase() !== depositId.trim().toUpperCase()) {
-        console.log(`[Verification Match Failed] Comment mismatch. Reason: The transaction comment does not match the deposit intent ID. Variable: comment. Value: "${comment}". Expected: "${depositId}"`);
-        continue;
-      }
-
+      if (!matchesNativeReceipt(tx,{
+        source:depData.expectedWalletAddress,destination:depData.treasuryAddress,
+        amountNano:depData.expectedAmountNano,comment:depositId,network:depData.network,
+        createdAt:depData.createdAt,expiresAt:depData.expiresAt
+      })) continue;
+      const onChainValStr=String(tx.in_msg.value);
       // Match found!
       foundOnChain = true;
       
@@ -3040,7 +2865,7 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
 
     console.log("TON_DEPOSIT_CREDIT_TRANSACTION_STARTED", { depositId, userId: targetUserId, confirmKey });
 
-    await adminDb.runTransaction(async (transaction) => {
+    const creditedNow=await adminDb.runTransaction(async (transaction) => {
       // 1. Load deposit intent.
       const dRef = adminDb.collection('tonDeposits').doc(depositId);
       const dSnap = await transaction.get(dRef);
@@ -3051,7 +2876,7 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
       
       // 2. Confirm it is not already credited.
       if (dData.status === 'credited' || dData.status === 'confirmed') {
-        return; // Idempotent success
+        return false; // Idempotent success
       }
 
       // 3. Load unique transaction usage record.
@@ -3067,7 +2892,7 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
       const ledgerRef = adminDb.collection('ledgerTransactions').doc(confirmKey);
       const ledgerSnap = await transaction.get(ledgerRef);
       if (ledgerSnap.exists) {
-        return;
+        return false;
       }
 
       // Load player
@@ -3114,6 +2939,7 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
       console.log(`oldBalance: ${oldBalance}`);
       console.log(`newBalance: ${available}`);
 
+      if (!Number.isSafeInteger(available) || available+Number(tonAccount.reservedNano||0)+Number(tonAccount.pendingWithdrawalNano||0)>TON_CONFIG.maxInternalBalanceNano) throw new Error('Maximum TON balance exceeded.');
       // 5. Create the unique transaction usage record.
       transaction.set(txUsageRef, {
         processedAt: nowIso,
@@ -3176,7 +3002,7 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
         creditedAt: nowIso,
         updatedAt: nowIso
       });
-      // 10. Commit atomically is handled automatically by runTransaction.
+      return true;
     });
 
     console.log(`[TON_DEPOSIT_FINISHED]`);
@@ -3197,7 +3023,7 @@ async function verifyAndCreditDeposit(depositId: string, targetUserId: string, s
 
     // Notify the user via the Telegram Bot automatically (Requirement 8)
     const botToken = process.env.TELEGRAM_BOT_TOKEN;
-    if (botToken && targetUserId) {
+    if (creditedNow && process.env.TELEGRAM_BOT_ENABLED === 'true' && botToken && targetUserId) {
       console.log(`[Telegram Notification] Attempting to send deposit success message to user ${targetUserId}...`);
       try {
         const textMessage = `💎 <b>Deposit Credited Successfully!</b>\n\n` +
@@ -3398,68 +3224,18 @@ app.post('/api/ton/withdrawal/request', checkTonNetwork, async (req, res) => {
       return res.status(400).json({ error: "Withdrawals are temporarily paused for system maintenance." });
     }
 
-    const amountNano = Math.floor(Number(amount) * 1000000000);
-    if (isNaN(amountNano) || amountNano < TON_CONFIG.minWithdrawalNano || amountNano > TON_CONFIG.maxWithdrawalNano) {
-      return res.status(400).json({ error: `Amount must be between 1 and 100 TON.` });
-    }
-
-    if (!walletAddress || (!walletAddress.startsWith('EQ') && !walletAddress.startsWith('UQ'))) {
-      return res.status(400).json({ error: "Valid connected TON wallet address is required for withdrawals." });
-    }
-
-    const todayStr = new Date().toISOString().split('T')[0];
-    const userWithdrawalsToday = await adminDb.collection('tonWithdrawals')
-      .where('telegramUserId', '==', targetUserId)
-      .where('createdAt', '>=', todayStr)
-      .get();
-    
-    let totalWithdrawnTodayNano = 0;
-    userWithdrawalsToday.forEach(d => {
-      const wd = d.data() || {};
-      if (wd.status !== 'failed') {
-        totalWithdrawnTodayNano += Number(wd.amountNano || 0);
-      }
-    });
-
-    if (totalWithdrawnTodayNano + amountNano > TON_CONFIG.dailyWithdrawalLimitNano) {
-      return res.status(400).json({ error: "Daily withdrawal limit of 500 TON exceeded." });
-    }
-
-    const withdrawalId = `WD_${Date.now()}_${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
-    const reserveKey = `withdraw_reserve_${withdrawalId}`;
-
+    if(withdrawalsDisabledByConfigError)return res.status(503).json({error:'Withdrawal wallet configuration is incomplete.'});
+    let request:any;
     try {
-      await adminDb.runTransaction(async (transaction) => {
-        await moveUserTonBalanceAdmin(
-          transaction,
-          targetUserId,
-          amountNano,
-          'available',
-          'pendingWithdrawal',
-          'WITHDRAWAL_REQUESTED',
-          { withdrawalId, walletAddress },
-          reserveKey
-        );
+      request=await reserveNativeWithdrawal(adminDb,{
+        userId:targetUserId,amount,walletAddress,requestKey:req.body.requestKey,
+        network:TON_CONFIG.network,min:TON_CONFIG.minWithdrawalNano,max:TON_CONFIG.maxWithdrawalNano,dailyLimit:TON_CONFIG.dailyWithdrawalLimitNano
+      },async(transaction,amountNano,withdrawalId,address)=>{
+        await moveUserTonBalanceAdmin(transaction,targetUserId,amountNano,'available','pendingWithdrawal','WITHDRAWAL_REQUESTED',
+          {withdrawalId,walletAddress:address},`withdraw_reserve_${withdrawalId}`);
       });
-    } catch (balErr: any) {
-      return res.status(400).json({ error: balErr.message || "Insufficient TON available balance to withdraw." });
-    }
-
-    const isSuspicious = amountNano > TON_CONFIG.suspiciousTxThresholdNano;
-    const withdrawalRequest = {
-      withdrawalId,
-      telegramUserId: targetUserId,
-      walletAddress,
-      amountNano,
-      network: TON_CONFIG.network,
-      status: 'requested',
-      suspicious: isSuspicious,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    await adminDb.collection('tonWithdrawals').doc(withdrawalId).set(withdrawalRequest);
-
+    }catch(error:any){return res.status(error.message.includes('conflicts')?409:400).json({error:error.message});}
+    const {withdrawalId,amountNano}=request;
     const userRef = adminDb.collection('users').doc(targetUserId);
     const userSnap = await userRef.get();
     const updatedProfile = userSnap.exists ? userSnap.data() : {};
@@ -3469,7 +3245,8 @@ app.post('/api/ton/withdrawal/request', checkTonNetwork, async (req, res) => {
     res.json({
       success: true,
       withdrawalId,
-      status: 'requested',
+      status: request.status,
+      idempotent:request.idempotent,
       amountNano,
       profile: updatedProfile
     });

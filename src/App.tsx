@@ -1,3 +1,4 @@
+import {depositTransaction} from './lib/ton-connect';
 import WeaponIcon from './components/WeaponIcon';
 import {getSoundVolume, setSoundVolume, setMuted} from './sound';
 import { enumLabel, localizedError, translateCopy } from './lib/copy';
@@ -471,11 +472,12 @@ function GameAppInner() {
   const [tonConfig, setTonConfig] = useState<any>({
     network: 'mainnet',
     treasuryAddress: '',
-    pauseDeposits: false,
-    pauseGames: false,
-    pauseWithdrawals: false
+    pauseDeposits: true,
+    pauseGames: true,
+    pauseWithdrawals: true
   });
   const [showDepositModal, setShowDepositModal] = useState<boolean>(false);
+  const withdrawalRetryRef=useRef<{signature:string;key:string}|null>(null);
   const [showWithdrawModal, setShowWithdrawModal] = useState<boolean>(false);
   const [showTonHistoryModal, setShowTonHistoryModal] = useState<boolean>(false);
   const [showDepositSuccessOverlay, setShowDepositSuccessOverlay] = useState<boolean>(false);
@@ -638,47 +640,6 @@ function GameAppInner() {
     }
   };
 
-  const buildTextCommentBoc = (comment: string): string => {
-    const encoder = new TextEncoder();
-    const textBytes = encoder.encode(comment);
-    
-    // Total bits of data: (4 bytes zero prefix + text length) * 8
-    const dataLen = 4 + textBytes.length;
-    
-    const d1 = 0;
-    const d2 = dataLen * 2;
-    
-    const cellData = new Uint8Array(2 + dataLen);
-    cellData[0] = d1;
-    cellData[1] = d2;
-    cellData[2] = 0;
-    cellData[3] = 0;
-    cellData[4] = 0;
-    cellData[5] = 0;
-    cellData.set(textBytes, 6);
-    
-    const header = new Uint8Array([
-      0xb5, 0xee, 0x9c, 0x72, // magic
-      0x01,                   // flags (size_bytes=1)
-      0x01,                   // off_bytes=1
-      0x01,                   // cells=1
-      0x01,                   // roots=1
-      0x00,                   // absent=0
-      cellData.length,        // tot_cells_size
-      0x00                    // root_idx=0
-    ]);
-    
-    const boc = new Uint8Array(header.length + cellData.length);
-    boc.set(header, 0);
-    boc.set(cellData, header.length);
-    
-    let binary = '';
-    const len = boc.byteLength;
-    for (let i = 0; i < len; i++) {
-      binary += String.fromCharCode(boc[i]);
-    }
-    return btoa(binary);
-  };
 
   const handleCreateDepositIntent = async () => {
     if (!wallet || !walletAddress) {
@@ -707,7 +668,7 @@ function GameAppInner() {
         method: 'POST',
         headers,
         body: JSON.stringify({ 
-          amount: parseFloat(depositAmount),
+          amount: depositAmount,
           walletAddress: walletAddress
         })
       });
@@ -993,11 +954,14 @@ function GameAppInner() {
       if (initData) {
         headers['x-telegram-init-data'] = initData;
       }
+      const signature=JSON.stringify([currentTgId,walletAddress,withdrawAmount]);
+      if(withdrawalRetryRef.current?.signature!==signature)withdrawalRetryRef.current={signature,key:crypto.randomUUID()};
       const res = await fetch('/api/ton/withdrawal/request', {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          amount: amt,
+          amount: withdrawAmount,
+          requestKey:withdrawalRetryRef.current!.key,
           walletAddress: walletAddress
         })
       });
@@ -1014,6 +978,7 @@ function GameAppInner() {
         setIsWithdrawalSuccess(true);
         setSubmittedWithdrawalAmount(amt.toFixed(2));
         setWithdrawSuccess(`Success! Your withdrawal request of ${amt.toFixed(2)} TON has been submitted and is processing.`);
+        withdrawalRetryRef.current=null;
         setWithdrawAmount('');
         setWithdrawLoading(false);
 
@@ -4834,17 +4799,7 @@ function GameAppInner() {
                         }
                         setDepositLoading(true);
                         try {
-                          const txParams = {
-                            validUntil: Math.floor(Date.now() / 1000) + 300,
-                            messages: [
-                              {
-                                address: depositTreasuryAddress,
-                                amount: String(depositAmountNano),
-                                payload: buildTextCommentBoc(depositMessage)
-                              }
-                            ]
-                          };
-                          console.log("TON Connect sendTransaction parameters:", JSON.stringify(txParams, null, 2));
+                          const txParams=depositTransaction(tonConfig.network,wallet,{address:depositTreasuryAddress,amountNano:String(depositAmountNano),comment:depositMessage});
                           await tonConnectUI.sendTransaction(txParams);
                           
                           // After transaction is signed, we automatically start polling the backend

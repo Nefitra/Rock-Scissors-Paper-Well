@@ -377,6 +377,7 @@
     "phoenix": "Grand Phoenix",
     "overlord": "Streak Overlord",
     "flame": "Flame Adept",
-    "spark": "Little Spark"
+    "spark": "Little Spark",
+    "reconciliationRequired": "Requires reconciliation"
   }
 }

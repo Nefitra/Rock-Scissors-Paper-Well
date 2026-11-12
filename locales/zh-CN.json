@@ -377,6 +377,7 @@
     "phoenix": "大凤凰",
     "overlord": "连胜领主",
     "flame": "火焰达人",
-    "spark": "小火花"
+    "spark": "小火花",
+    "reconciliationRequired": "需要核对交易"
   }
 }
