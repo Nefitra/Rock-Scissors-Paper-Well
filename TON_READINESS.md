@@ -61,3 +61,15 @@ harness files, not production API hooks. Neither test sends or signs a chain tra
 
 References: https://docs.ton.org/applications/payments/overview,
 https://docs.ton.org/applications/ton-connect/get-started, https://ton.org/media/.
+
+## Recorded outcome of this pass
+
+- Live production was inspected read-only: all three financial/worker flags were false;
+  treasury address, payout address, recovery phrase and provider API key were absent.
+- Local TypeScript and production build passed. Backend tests: 20 passed, 2 PostgreSQL
+  integration tests skipped without DATABASE_TEST_URL. UI/audio/wallet tests: 7 passed.
+- Fixes were pushed to migration/spaceship-safe-start. Production was NOT switched.
+  The Spaceship console's browser transport stopped responding before backup/build dispatch;
+  no successful new server command was observed. The existing live release is unchanged.
+- The new PostgreSQL concurrency and fixture HTTP scripts still need execution on the
+  isolated server databases. Do not interpret the fixture scripts as a real wallet test.
