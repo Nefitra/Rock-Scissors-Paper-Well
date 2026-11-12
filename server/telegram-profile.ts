@@ -27,9 +27,13 @@ export function telegramAvatars(fetcher:typeof fetch=fetch,clock=Date.now) {
     if(typeof file.file_path!=='string'||!/^photos\/[a-zA-Z0-9_/-]+\.(jpg|jpeg|png|webp)$/i.test(file.file_path)||file.file_size>2_000_000)throw new Error('Invalid Telegram photo');
     const r=await fetcher(`https://api.telegram.org/file/bot${token}/${file.file_path}`,{signal:AbortSignal.timeout(8000),redirect:'error'});
     const type=(r.headers.get('content-type')||'').split(';')[0];
-    if(!r.ok||!['image/jpeg','image/png','image/webp'].includes(type)||Number(r.headers.get('content-length')||0)>2_000_000)throw new Error('Invalid Telegram photo');
+    if(!r.ok||!['image/jpeg','image/png','image/webp','application/octet-stream'].includes(type)||Number(r.headers.get('content-length')||0)>2_000_000)throw new Error('Invalid Telegram photo');
     const bytes=Buffer.from(await r.arrayBuffer());if(!bytes.length||bytes.length>2_000_000)throw new Error('Invalid Telegram photo');
-    return {bytes,type};
+    const detected=bytes.subarray(0,3).equals(Buffer.from([255,216,255]))?'image/jpeg'
+      :bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))?'image/png'
+      :bytes.subarray(0,4).toString()==='RIFF'&&bytes.subarray(8,12).toString()==='WEBP'?'image/webp':'';
+    if(!detected)throw new Error('Invalid Telegram photo');
+    return {bytes,type:detected};
   };
   return {
     async get(userId:string,token:string) {

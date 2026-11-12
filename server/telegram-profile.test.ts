@@ -22,3 +22,13 @@ test('private or absent photos return no image and unsafe file paths never get d
   const unsafe=telegramAvatars((async()=>{calls++;return Response.json({ok:true,result:calls===1?{photos:[[{file_id:'x',width:320}]]}:{file_path:'../secret.jpg'}});}) as typeof fetch);
   await assert.rejects(unsafe.get('123','test-token'));assert.equal(calls,2);
 });
+
+test('Telegram octet-stream photos are identified by image bytes; non-images are rejected',async()=>{
+  const make=(bytes:Uint8Array)=>telegramAvatars((async(url:any)=>{
+    if(url.endsWith('getUserProfilePhotos'))return Response.json({ok:true,result:{photos:[[{file_id:'x',width:320}]]}});
+    if(url.endsWith('getFile'))return Response.json({ok:true,result:{file_path:'photos/file_0.jpg'}});
+    return new Response(bytes,{headers:{'content-type':'application/octet-stream'}});
+  }) as typeof fetch);
+  assert.equal((await make(new Uint8Array([255,216,255,0])).get('123','test-token'))?.type,'image/jpeg');
+  await assert.rejects(make(new TextEncoder().encode('<html>not an image</html>')).get('123','test-token'));
+});
