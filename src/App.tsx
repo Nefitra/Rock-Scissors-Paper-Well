@@ -61,8 +61,12 @@ import {
   Hourglass
 } from 'lucide-react';
 import WindowGame from './components/WindowGame';
+import TelegramAvatar from './components/TelegramAvatar';
 
 interface UserProfile {
+  telegramUsername?: string;
+  telegramDisplayName?: string;
+  telegramPhotoUrl?: string;
   telegramId: string;
   username: string;
   walletAddress: string;
@@ -541,11 +545,14 @@ function GameAppInner() {
   const currentTgId = sanitizeUserId(rawTgId);
 
   const currentUsername = isInsideTMA 
-    ? ((window as any).Telegram?.WebApp?.initDataUnsafe?.user?.first_name || (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.username || simulatedUsername) 
+    ? ((window as any).Telegram?.WebApp?.initDataUnsafe?.user?.username || (window as any).Telegram?.WebApp?.initDataUnsafe?.user?.first_name || simulatedUsername) 
     : simulatedUsername;
 
   // App & User state
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const telegramName = profile?.telegramDisplayName || currentUsername || currentTgId;
+  const telegramHandle = profile?.telegramUsername || '';
+  const accountLabel = telegramHandle ? '@' + telegramHandle : telegramName;
   const [walletBalance, setWalletBalance] = useState<string>('0.00');
   const [balanceLoading, setBalanceLoading] = useState<boolean>(false);
   const [balanceError, setBalanceError] = useState<boolean>(false);
@@ -2436,12 +2443,10 @@ function GameAppInner() {
                 {/* Dashboard Header: User & Rank */}
                 <div className="flex justify-between items-center pb-3 border-b border-[#242f3d]">
                   <div className="flex items-center space-x-2.5 min-w-0">
-                    <div className="w-9 h-9 rounded-xl bg-[#3390ec]/10 border border-[#3390ec]/20 flex items-center justify-center text-lg shrink-0">
-                      👤
-                    </div>
+                    <TelegramAvatar photoUrl={profile?.telegramPhotoUrl} name={telegramName} userId={currentTgId} verified={!!profile} className="w-9 h-9" />
                     <div className="min-w-0">
                       <p className="text-[9px] text-[#708499] uppercase tracking-wider font-bold leading-none">{t('profile.title').split(' ')[0]}</p>
-                      <h4 className="text-sm font-bold text-white truncate mt-1">@{currentUsername || currentTgId}</h4>
+                      <h4 className="text-sm font-bold text-white truncate mt-1">{accountLabel}</h4>
                     </div>
                   </div>
                   <div className="text-right">
@@ -3980,13 +3985,11 @@ function GameAppInner() {
             >
               <div className="bg-[#242f3d] rounded-3xl p-5 flex justify-between items-center px-6">
                 <div className="flex items-center space-x-3">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-purple-500 to-blue-500 flex items-center justify-center text-white text-xl">
-                    👤
-                  </div>
+                  <TelegramAvatar photoUrl={profile?.telegramPhotoUrl} name={telegramName} userId={currentTgId} verified={!!profile} className="w-12 h-12" />
                   <div>
                     <p className="font-bold text-base leading-tight text-white flex items-center gap-1.5 break-all">
-                      <span>@{currentUsername || currentTgId}</span>
-                      {profile?.streak && profile.streak > 0 && (
+                      <span>{telegramName}</span>
+                      {(profile?.streak ?? 0) > 0 && (
                         <span 
                           className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#3390ec]/15 text-[#3390ec] border border-[#3390ec]/20 inline-flex items-center gap-1 animate-pulse"
                           title={`Consecutive Streak: ${profile.streak} Days`}
@@ -4004,6 +4007,17 @@ function GameAppInner() {
                   <p className="text-green-500 font-bold text-sm">W: {profile?.wins || 0}</p>
                   <p className="text-red-400 font-bold text-xs">L: {profile?.losses || 0}</p>
                 </div>
+              </div>
+
+              <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-4 space-y-2 text-xs">
+                <p className="text-slate-300">Telegram: <span className="font-semibold text-white">{telegramHandle ? '@' + telegramHandle : 'username не установлен'}</span></p>
+                <p className="text-slate-400">Telegram ID: <span className="font-mono text-white select-all">{currentTgId}</span></p>
+                <p className="text-slate-400">Роль: <span className={isUserAnAdmin ? 'text-amber-300' : 'text-slate-300'}>{syncing ? 'проверяется…' : isUserAnAdmin ? 'администратор' : 'игрок'}</span></p>
+                {isUserAnAdmin ? (
+                  <button type="button" onClick={() => setActiveTab('admin')} className="w-full bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/20 py-3 px-4 rounded-xl text-amber-300 font-bold flex items-center justify-center gap-2">
+                    <ShieldAlert className="w-4 h-4" />Открыть управление игрой
+                  </button>
+                ) : <p className="text-[#708499]">Админка доступна аккаунту, назначенному владельцем по Telegram ID. Имя и nickname не дают права администратора.</p>}
               </div>
 
               {/* Dynamic Rank Badge & Progression Panel */}
@@ -4247,16 +4261,6 @@ function GameAppInner() {
                 </div>
               </div>
 
-              {/* Dev Admin panel redirection */}
-              {adminModeEnabled && (
-                <button
-                  onClick={() => setActiveTab('admin')}
-                  className="w-full bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/20 py-3 px-4 rounded-xl transition text-amber-400 text-xs font-bold flex items-center justify-center gap-2"
-                >
-                  <ShieldAlert className="w-4 h-4" />
-                  <span>Открыть управление игрой</span>
-                </button>
-              )}
             </motion.div>
           )}
 

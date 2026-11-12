@@ -12,7 +12,7 @@ const base = 'http://127.0.0.1:3100';
 let child;
 let logs = '';
 function identity(userId=id) {
-  const p = new URLSearchParams({auth_date:String(Math.floor(Date.now()/1000)),signature:'validation-signature',user:JSON.stringify({id:Number(userId),username:'validation'})});
+  const p = new URLSearchParams({auth_date:String(Math.floor(Date.now()/1000)),signature:'validation-signature',user:JSON.stringify({id:Number(userId),username:'validation',first_name:'Verified',last_name:'Player',photo_url:'https://t.me/i/userpic/320/validation.jpg'})});
   const secret = createHmac('sha256','WebAppData').update(token).digest();
   p.set('hash',createHmac('sha256',secret).update([...p.keys()].sort().map(k=>`${k}=${p.get(k)}`).join('\n')).digest('hex'));
   return p.toString();
@@ -37,9 +37,14 @@ async function stop() {if(child && child.exitCode===null){const done=once(child,
     assert.equal((await call('/api/user/sync',{telegramId:'123'})).status,403);
     assert.equal((await call('/api/admin/metrics')).status,403);
     assert.equal((await call('/api/ton/deposit/intent',{})).status,503);
-    const created=await call('/api/user/sync',{telegramId:id,username:'validation',lang:'en'});
+    const created=await call('/api/user/sync',{telegramId:id,username:'spoofed-name',telegramPhotoUrl:'https://evil.invalid/fake.jpg',lang:'en'});
     assert.equal(created.status,200,JSON.stringify(created));
     assert.equal(created.data.isAdmin,false);
+    assert.equal(created.data.profile.username,'validation');
+    assert.equal(created.data.profile.telegramUsername,'validation');
+    assert.equal(created.data.profile.telegramDisplayName,'Verified Player');
+    assert.equal(created.data.profile.telegramPhotoUrl,'https://t.me/i/userpic/320/validation.jpg');
+    assert.equal((await call('/api/telegram/avatar',undefined,false)).status,401);
     assert.ok(created.data.profile.vViral>0);
     const again=await call('/api/user/sync',{telegramId:id});
     assert.equal(again.data.profile.vViral,created.data.profile.vViral);

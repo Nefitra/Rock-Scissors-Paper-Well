@@ -1,3 +1,4 @@
+import { telegramProfile, telegramAvatars } from './server/telegram-profile';
 import { registerAdmin } from './server/admin';
 import { adjustPoints } from './server/points-ledger';
 import { PostgresStore } from './server/postgres-store';
@@ -490,7 +491,7 @@ function sanitizeUserId(id: string): string {
 // Helper to extract the authenticated user identity
 // Enforces cryptographic verification if TELEGRAM_BOT_TOKEN is configured in environment
 // Falls back graciously (with warnings) for external and dev sandbox clients
-function getRequestUser(req: express.Request): { userId: string; username?: string; isVerified: boolean } {
+function getRequestUser(req: express.Request): { userId: string; username?: string; isVerified: boolean; telegram?: ReturnType<typeof telegramProfile> } {
   const initDataHeader = req.headers['x-telegram-init-data'];
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -501,7 +502,8 @@ function getRequestUser(req: express.Request): { userId: string; username?: stri
         return {
           userId: sanitizeUserId(String(verification.user.id)),
           username: String(verification.user.username || verification.user.first_name || ""),
-          isVerified: true
+          isVerified: true,
+          telegram: telegramProfile(verification.user)
         };
       } else {
         console.warn("Incoming request failed Telegram cryptographic verification.");
@@ -911,6 +913,20 @@ app.get('/api/health', (req, res) => {
   res.json({ status: "ok", service: "VIRAL ARENA Server", power: "Powered by VIRAL ARENA" });
 });
 
+const avatarLoader = telegramAvatars();
+app.get('/api/telegram/avatar', async (req, res) => {
+  const user = getRequestUser(req);
+  if (!user.isVerified) return res.sendStatus(401);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Vary', 'x-telegram-init-data');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  try {
+    const avatar = await avatarLoader.get(user.userId, process.env.TELEGRAM_BOT_TOKEN || '');
+    if (!avatar) return res.status(204).end();
+    return res.type(avatar.type).send(avatar.bytes);
+  } catch { return res.status(502).json({error:'Telegram photo temporarily unavailable'}); }
+});
+
 // 2. User Sync & Registration (including referrers tracking L1 & L2)
 app.post('/api/user/sync', async (req, res) => {
   try {
@@ -927,7 +943,8 @@ app.post('/api/user/sync', async (req, res) => {
     const userSnap = await userRef.get();
 
     const cleanReferredBy = referredBy ? sanitizeUserId(referredBy) : "";
-    let targetUsername = username || verifiedUser.username || `telegram_${telegramUserId}`;
+    const telegramFields = verifiedUser.telegram || {};
+    const targetUsername = verifiedUser.telegram?.telegramUsername || verifiedUser.telegram?.telegramDisplayName || verifiedUser.username || `telegram_${telegramUserId}`;
 
     if (userSnap.exists) {
       // User already exists, update wallet address if changed
@@ -966,9 +983,12 @@ app.post('/api/user/sync', async (req, res) => {
         upData.walletAddress = walletAddress;
         updated = true;
       }
-      if (username && currentData.username !== username) {
-        upData.username = username;
+      if (currentData.username !== targetUsername) {
+        upData.username = targetUsername;
         updated = true;
+      }
+      for (const [key, value] of Object.entries(telegramFields)) {
+        if (currentData[key] !== value) { upData[key] = value; updated = true; }
       }
       if (lang && currentData.lang !== lang) {
         upData.lang = lang;
@@ -1045,6 +1065,7 @@ app.post('/api/user/sync', async (req, res) => {
     const newProfile: any = {
       telegramId: telegramUserId,
       username: targetUsername,
+      ...telegramFields,
       walletAddress: walletAddress || "",
       referredBy: finalReferredBy,
       gamesPlayed: 0,
