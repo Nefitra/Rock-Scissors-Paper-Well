@@ -20,6 +20,6 @@ export default function TelegramAvatar({photoUrl,name,userId,verified,className=
   const src=useDirect?direct:proxyFailed?'':proxy;
   const initials=name.trim().split(/\s+/).slice(0,2).map(p=>Array.from(p)[0]||'').join('').toUpperCase()||'?';
   return <span className={`${className} shrink-0 overflow-hidden rounded-full bg-gradient-to-tr from-purple-500 to-blue-500 inline-flex items-center justify-center font-semibold text-white`}>
-    {src?<img src={src} alt={`Фото Telegram: ${name}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" onError={()=>useDirect?setFailedDirect(direct):setProxyFailed(true)}/>:<span role="img" aria-label={`Профиль Telegram: ${name}`}>{initials}</span>}
+    {src?<img src={src} alt={name} className="h-full w-full object-cover" referrerPolicy="no-referrer" onError={()=>useDirect?setFailedDirect(direct):setProxyFailed(true)}/>:<span role="img" aria-label={name}>{initials}</span>}
   </span>;
 }

@@ -1,3 +1,6 @@
+import WeaponIcon from './components/WeaponIcon';
+import {getSoundVolume, setSoundVolume, setMuted} from './sound';
+import { enumLabel, localizedError, translateCopy } from './lib/copy';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -451,6 +454,7 @@ function GameAppInner() {
     };
   }, []);
 
+  const tx = (text:string) => translateCopy(currentLanguage,text);
   const t = (key: string, params?: Record<string, any>) => getTranslation(currentLanguage, key, params);
   
   // Tabs: 'home' | 'play' | 'leaderboard' | 'referrals' | 'profile' | 'admin' | 'windows' | 'missions'
@@ -588,6 +592,7 @@ function GameAppInner() {
   const [showRankTiersModal, setShowRankTiersModal] = useState<boolean>(false);
   const [showReferralQrModal, setShowReferralQrModal] = useState<boolean>(false);
   const [promotedRank, setPromotedRank] = useState<RankConfig | null>(null);
+  const [soundVolume, updateSoundVolume] = useState(getSoundVolume);
   const [soundsMuted, setSoundsMuted] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('rspw_muted') === 'true';
@@ -598,7 +603,7 @@ function GameAppInner() {
   const toggleSoundMute = () => {
     const nextMuted = !soundsMuted;
     setSoundsMuted(nextMuted);
-    localStorage.setItem('rspw_muted', String(nextMuted));
+    setMuted(nextMuted);
     if (!nextMuted) {
       setTimeout(() => {
         playClickSound();
@@ -2198,7 +2203,7 @@ function GameAppInner() {
 
   if (!isInsideTMA && !isDevelopEnvironment) {
     return (
-      <div className="min-h-screen bg-[#0e1621] text-white flex flex-col items-center justify-center font-sans selection:bg-[#3390ec] selection:text-white px-6 py-12 relative overflow-hidden">
+      <div className="cyber-app min-h-screen bg-[#0e1621] text-white flex flex-col items-center justify-center font-sans selection:bg-[#3390ec] selection:text-white px-6 py-12 relative overflow-hidden">
         {/* Abstract futuristic background decorations */}
         <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-[#3390ec]/5 blur-[120px] pointer-events-none" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-emerald-500/5 blur-[120px] pointer-events-none" />
@@ -2207,23 +2212,21 @@ function GameAppInner() {
           <div className="flex flex-col items-center">
             {/* Elegant App Logo Badge */}
             <div className="w-20 h-20 bg-gradient-to-tr from-[#3390ec] to-[#2b7ad0] rounded-3xl flex items-center justify-center font-black text-4xl text-white shadow-2xl shadow-[#3390ec]/20 border border-[#3390ec]/30 mb-6 relative">
-              R
-              <span className="absolute -bottom-1.5 -right-1.5 bg-emerald-500 text-[10px] text-black font-black uppercase tracking-wider py-0.5 px-1.5 rounded-md border border-emerald-400">
+              <WeaponIcon kind="rock" className="w-full h-full" />
+              <span className="absolute -bottom-1.5 -right-1.5 bg-emerald-500 text-[11px] text-black font-black uppercase tracking-wider py-0.5 px-1.5 rounded-md border border-emerald-400">
                 PvP
               </span>
             </div>
             <h1 className="text-3xl font-black text-white uppercase tracking-tight">{globalSettings.appName}</h1>
-            <p className="text-[#708499] text-sm mt-2 font-medium">Rock Paper Scissors Well Duals</p>
+            <p className="text-[#708499] text-sm mt-2 font-medium">{' '}{tx("Rock Paper Scissors Well Duals")}{' '}</p>
           </div>
 
           <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-6 space-y-4 shadow-xl">
-            <h2 className="text-sm font-bold text-white uppercase tracking-wider">Telegram-Only PvP Arena</h2>
-            <p className="text-xs text-[#708499] leading-relaxed">
-              This arena uses encrypted cryptographic signatures directly from the official Telegram app to prevent bots and verify secure duels. 
-            </p>
-            <p className="text-xs text-[#708499] leading-relaxed font-semibold text-emerald-400">
-              To challenge real players, wager vVIRAL, and secure your wins, please launch this Mini App inside Telegram.
-            </p>
+            <h2 className="text-sm font-bold text-white uppercase tracking-wider">{' '}{tx("Telegram-Only PvP Arena")}{' '}</h2>
+            <p className="text-xs text-[#708499] leading-relaxed">{' '}{tx("This arena uses encrypted cryptographic signatures directly from the official Telegram app to prevent bots and verify secure duels.")}{' '}</p>
+            <div className="grid grid-cols-4 gap-2 pt-2">
+              {(['rock','scissors','paper','well'] as const).map(kind=><div key={kind} className="rounded-2xl bg-white/5 p-2 flex flex-col items-center gap-1"><WeaponIcon kind={kind} className="w-14 h-14"/><span className="text-[11px] text-slate-200">{t(kind==='well'?'ui.well':'play.'+kind)}</span></div>)}
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -2233,9 +2236,9 @@ function GameAppInner() {
               rel="noopener noreferrer"
               className="w-full bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold py-4 px-6 rounded-2xl transition-all shadow-lg shadow-[#3390ec]/15 hover:shadow-[#3390ec]/25 flex items-center justify-center gap-2 border border-[#3390ec]/45 hover:scale-[1.02] active:scale-[0.98]"
             >
-              <span>🚀 Launch in Telegram Bot</span>
+              <span>{' '}{tx("🚀 Launch in Telegram Bot")}{' '}</span>
             </a>
-            <div className="text-[10px] text-[#708499] font-medium uppercase tracking-widest flex items-center justify-center gap-1.5">
+            <div className="text-[11px] text-[#708499] font-medium uppercase tracking-widest flex items-center justify-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
               <span>@CyberDuellitebot</span>
             </div>
@@ -2246,7 +2249,7 @@ function GameAppInner() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0e1621] text-white flex flex-col font-sans selection:bg-[#3390ec] selection:text-white max-w-full overflow-x-hidden">
+    <div className="cyber-app min-h-screen bg-[#0e1621] text-white flex flex-col font-sans selection:bg-[#3390ec] selection:text-white max-w-full overflow-x-hidden">
       
       {/* Floating Global Success Notification */}
       <AnimatePresence>
@@ -2281,7 +2284,7 @@ function GameAppInner() {
             <span className="px-2 py-0.5 bg-[#3390ec]/10 text-[#3390ec] font-semibold rounded border border-[#2b3745]">
               TMA Play-Tester Panel
             </span>
-            <span className="text-[10px] text-[#708499] whitespace-nowrap">
+            <span className="text-[11px] text-[#708499] whitespace-nowrap">
               Simulate Telegram environment inside AI Studio:
             </span>
           </div>
@@ -2341,11 +2344,11 @@ function GameAppInner() {
         <div className="max-w-md mx-auto w-full px-5 py-3 flex items-center justify-between">
           <div className="flex items-center space-x-2.5 min-w-0">
             <div className="w-8 h-8 bg-[#3390ec] rounded-xl flex items-center justify-center font-black text-lg text-white shrink-0">
-              R
+              <WeaponIcon kind="rock" className="w-full h-full" />
             </div>
             <div className="min-w-0">
               <h1 className="text-sm font-bold leading-none text-white truncate">{globalSettings.appName}</h1>
-              <p className="text-emerald-400 text-[9px] uppercase tracking-widest mt-0.5 font-bold">Real PvP Mode</p>
+              <p className="text-emerald-400 text-[11px] uppercase tracking-widest mt-0.5 font-bold">{' '}{tx("Real PvP Mode")}{' '}</p>
             </div>
           </div>
           
@@ -2356,7 +2359,7 @@ function GameAppInner() {
               id="btn_sound_toggle_header"
               onClick={toggleSoundMute}
               className="w-8 h-8 rounded-xl bg-[#242f3d]/60 hover:bg-[#2c394a] border border-[#2b3745] flex items-center justify-center text-slate-300 hover:text-white transition-all active:scale-95 cursor-pointer"
-              title={soundsMuted ? "Unmute Sounds" : "Mute Sounds"}
+              title={soundsMuted ? tx("Unmute Sounds") : tx("Mute Sounds")}
             >
               {soundsMuted ? (
                 <VolumeX className="w-4.5 h-4.5 text-rose-400" />
@@ -2367,7 +2370,7 @@ function GameAppInner() {
 
             <div id="ton-button-parent" className="scale-[0.82] origin-right flex items-center">
               <div className="bg-[#242f3d]/60 rounded-full px-2 py-0.5 flex items-center border border-[#2b3745]">
-                <TonConnectButton />
+                {walletAddress ? <TonConnectButton /> : <button type="button" onClick={()=>void tonConnectUI.openModal()} className="min-h-11 max-w-40 rounded-full bg-[#3390ec] px-3 py-2 text-xs font-semibold text-white">{t('home.connectWallet')}</button>}
               </div>
             </div>
           </div>
@@ -2377,8 +2380,8 @@ function GameAppInner() {
       {/* Error Banner */}
       {errorMessage && (
         <div className="bg-red-500/10 border-y border-red-500/30 text-red-400 px-5 py-2.5 text-xs flex justify-between items-center">
-          <span>{errorMessage}</span>
-          <button onClick={() => setErrorMessage(null)} className="font-bold underline cursor-pointer">Dismiss</button>
+          <span>{localizedError(currentLanguage,errorMessage)}</span>
+          <button onClick={() => setErrorMessage(null)} className="font-bold underline cursor-pointer">{' '}{tx("Dismiss")}{' '}</button>
         </div>
       )}
 
@@ -2397,18 +2400,18 @@ function GameAppInner() {
               className="space-y-6"
             >
               {/* Game Poster / Logo */}
-              <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 text-center space-y-4 shadow-lg relative overflow-hidden">
+              <div className="arcade-hero bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 text-center space-y-4 shadow-lg relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-[#3390ec] to-transparent opacity-50"></div>
                 <div className="relative inline-block">
                   <div className="w-20 h-20 mx-auto rounded-3xl bg-gradient-to-tr from-[#3390ec] to-indigo-600 flex items-center justify-center text-4xl shadow-lg relative z-10 transform scale-100 hover:scale-105 transition-transform">
-                    👊
+                    <WeaponIcon kind="rock" className="w-20 h-20" />
                   </div>
                   <div className="absolute inset-0 bg-[#3390ec]/20 blur-xl rounded-2xl scale-110" />
                 </div>
                 
                 <div>
-                  <h2 className="text-xl font-bold text-white">Rock • Scissors • Paper • Well</h2>
-                  <p className="text-[#708499] text-xs mt-1">{t('home.subtitle')}</p>
+                  <h2 className="text-xl font-bold text-white">{' '}{tx("Rock • Scissors • Paper • Well")}{' '}</h2>
+                  <p className="text-[#708499] text-xs mt-1">{' '}{t('home.subtitle')}{' '}</p>
                 </div>
 
                 <div className="grid grid-cols-4 gap-2 w-full pt-2">
@@ -2416,7 +2419,7 @@ function GameAppInner() {
                     { id: 'rock', emoji: '👊', label: t('play.rock') },
                     { id: 'scissors', emoji: '✂️', label: t('play.scissors') },
                     { id: 'paper', emoji: '📄', label: t('play.paper') },
-                    { id: 'well', emoji: '🕳️', label: currentLanguage === 'zh-CN' ? '井' : currentLanguage === 'es' ? 'Pozo' : currentLanguage === 'ru' ? 'Колодец' : currentLanguage === 'de' ? 'Brunnen' : currentLanguage === 'fr' ? 'Puits' : currentLanguage === 'pt' ? 'Poço' : currentLanguage === 'ja' ? '井' : currentLanguage === 'hi' ? 'कुआँ' : currentLanguage === 'tr' ? 'Kuyu' : currentLanguage === 'id' ? 'Sumur' : currentLanguage === 'ar' ? 'البئر' : 'Well' }
+                    { id: 'well', emoji: '🕳️', label: currentLanguage === 'zh-CN' ? '井' : currentLanguage === 'es' ? 'Pozo' : currentLanguage === 'ru' ? tx("Колодец") : currentLanguage === 'de' ? 'Brunnen' : currentLanguage === 'fr' ? 'Puits' : currentLanguage === 'pt' ? 'Poço' : currentLanguage === 'ja' ? '井' : currentLanguage === 'hi' ? 'कुआँ' : currentLanguage === 'tr' ? 'Kuyu' : currentLanguage === 'id' ? 'Sumur' : currentLanguage === 'ar' ? 'البئر' : tx("Well") }
                   ].map((item) => (
                     <button
                       key={item.id}
@@ -2427,7 +2430,7 @@ function GameAppInner() {
                           : 'bg-[#242f3d]/50 border-[#2b3745] hover:bg-[#3390ec] hover:border-[#3390ec] text-[#708499] hover:text-white active:scale-95 cursor-pointer'
                       }`}
                     >
-                      <span className="text-2xl mb-1 group-hover:scale-110 transition-transform">{item.emoji}</span>
+                      <span className="text-2xl mb-1 group-hover:scale-110 transition-transform"><WeaponIcon kind={item.id} className="w-14 h-14" /></span>
                       <span className={`text-[11px] font-bold tracking-tight ${preSelectedMove === item.id ? 'text-white' : 'text-[#708499] group-hover:text-white'}`}>
                         {item.label}
                       </span>
@@ -2445,12 +2448,12 @@ function GameAppInner() {
                   <div className="flex items-center space-x-2.5 min-w-0">
                     <TelegramAvatar photoUrl={profile?.telegramPhotoUrl} name={telegramName} userId={currentTgId} verified={!!profile} className="w-9 h-9" />
                     <div className="min-w-0">
-                      <p className="text-[9px] text-[#708499] uppercase tracking-wider font-bold leading-none">{t('profile.title').split(' ')[0]}</p>
+                      <p className="text-[11px] text-[#708499] uppercase tracking-wider font-bold leading-none">{t('profile.title').split(' ')[0]}</p>
                       <h4 className="text-sm font-bold text-white truncate mt-1">{accountLabel}</h4>
                     </div>
                   </div>
                   <div className="text-right">
-                    <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border flex items-center gap-1 leading-none ${currentRank.color} ${currentRank.bgColor} ${currentRank.borderColor}`}>
+                    <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full border flex items-center gap-1 leading-none ${currentRank.color} ${currentRank.bgColor} ${currentRank.borderColor}`}>
                       <span>{currentRank.badgeEmoji}</span>
                       <span>{getLocalizedRankName(currentRank.name, currentLanguage)}</span>
                     </span>
@@ -2461,44 +2464,42 @@ function GameAppInner() {
                 <div className="grid grid-cols-2 gap-3">
                   {/* vVIRAL Balance */}
                   <div className="bg-[#0e1621]/80 rounded-2xl p-3 border border-[#242f3d]">
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-amber-500 block leading-none">vVIRAL {t('home.balance')}</span>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-amber-500 block leading-none">vVIRAL {' '}{t('home.balance')}{' '}</span>
                     <div className="flex items-baseline space-x-1 mt-2">
                       <span className="text-xl font-black text-white leading-none">
                         {profile?.vViral !== undefined ? profile.vViral : 500}
                       </span>
-                      <span className="text-[9px] font-bold text-amber-500">vVIRAL</span>
+                      <span className="text-[11px] font-bold text-amber-500">vVIRAL</span>
                     </div>
-                    <span className="text-[8px] text-[#708499] block mt-1.5 leading-tight">vVIRAL Game Credits</span>
+                    <span className="text-[11px] text-[#708499] block mt-1.5 leading-tight">{' '}{tx("vVIRAL Game Credits")}{' '}</span>
                   </div>
 
                   {/* TON Wallet */}
                   <div className="bg-[#0e1621]/80 rounded-2xl p-3 border border-[#242f3d]">
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-[#3390ec] block leading-none">TON {t('home.balance')}</span>
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-[#3390ec] block leading-none">TON {' '}{t('home.balance')}{' '}</span>
                     <div className="flex items-center space-x-1 mt-2 min-h-[24px]">
                       {balanceLoading ? (
                         <div className="flex items-center space-x-1">
                           <RefreshCw className="animate-spin w-3 h-3 text-[#3390ec]" />
-                          <span className="text-xs text-[#708499]">{t('profile.loading') || 'Loading...'}</span>
+                          <span className="text-xs text-[#708499]">{t('profile.loading') || tx("Loading...")}</span>
                         </div>
                       ) : walletAddress && balanceError ? (
                         <button
                           onClick={() => setBalanceRefreshTrigger(prev => prev + 1)}
-                          className="text-[9px] px-2 py-0.5 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition flex items-center gap-1 font-bold uppercase tracking-wider cursor-pointer"
-                          title="Click to retry RPC call"
+                          className="text-[11px] px-2 py-0.5 rounded bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition flex items-center gap-1 font-bold uppercase tracking-wider cursor-pointer"
+                          title={tx("Click to retry RPC call")}
                         >
-                          <RefreshCw className="w-2.5 h-2.5 animate-pulse" />
-                          Retry
-                        </button>
+                          <RefreshCw className="w-2.5 h-2.5 animate-pulse" />{' '}{tx("Retry")}{' '}</button>
                       ) : (
                         <>
                           <span className="text-xl font-black text-white leading-none">
                             {walletAddress ? walletBalance : "0.00"}
                           </span>
-                          <span className="text-[9px] font-bold text-[#3390ec]">TON</span>
+                          <span className="text-[11px] font-bold text-[#3390ec]">TON</span>
                         </>
                       )}
                     </div>
-                    <span className="text-[8px] text-[#708499] block mt-1.5 leading-tight">
+                    <span className="text-[11px] text-[#708499] block mt-1.5 leading-tight">
                       {walletAddress ? t('profile.tonAddress').split(' ')[0] : t('profile.disconnected')}
                     </span>
                   </div>
@@ -2510,92 +2511,80 @@ function GameAppInner() {
                     <div className="absolute top-0 right-0 w-24 h-24 bg-[#3390ec]/5 rounded-full blur-xl pointer-events-none" />
                     <div className="flex justify-between items-center pb-2.5 border-b border-[#242f3d]">
                       <span className="text-[11px] font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-[#3390ec] animate-pulse" />
-                        TON Game Wallet (Custodial)
-                      </span>
-                      <span className="text-[9px] bg-[#3390ec]/10 text-[#3390ec] border border-[#3390ec]/20 px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
-                        {tonConfig?.network === 'testnet' ? 'Testnet' : 'Mainnet'}
+                        <span className="w-2 h-2 rounded-full bg-[#3390ec] animate-pulse" />{' '}{tx("TON Game Wallet (Custodial)")}{' '}</span>
+                      <span className="text-[11px] bg-[#3390ec]/10 text-[#3390ec] border border-[#3390ec]/20 px-2.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                        {tonConfig?.network === 'testnet' ? tx("Testnet") : tx("Mainnet")}
                       </span>
                     </div>
 
                     {!walletAddress ? (
                       <div className="text-center py-4 space-y-2.5">
-                        <p className="text-amber-500 text-[10.5px] font-bold uppercase tracking-widest flex items-center justify-center gap-1.5">
-                          ⚠️ CONNECT WALLET TO USE TON GAMES
-                        </p>
-                        <p className="text-[#708499] text-[9.5px] leading-relaxed max-w-xs mx-auto">
-                          Please connect your TON wallet via the TON Connect button at the top of the screen to deposit, withdraw, or enter the 1 TON Duel Arena.
-                        </p>
+                        <p className="text-amber-500 text-[10.5px] font-bold uppercase tracking-widest flex items-center justify-center gap-1.5">{' '}{tx("⚠️ CONNECT WALLET TO USE TON GAMES")}{' '}</p>
+                        <p className="text-[#708499] text-[11px] leading-relaxed max-w-xs mx-auto">{' '}{tx("Please connect your TON wallet via the TON Connect button at the top of the screen to deposit, withdraw, or enter the 1 TON Duel Arena.")}{' '}</p>
                       </div>
                     ) : (
                       <div className="space-y-3.5">
                         {/* 1. Main Premium Game Balance Card */}
                         <div className="bg-gradient-to-b from-[#182533] to-[#121b26] border border-[#3390ec]/20 rounded-xl p-4 text-center shadow-inner relative overflow-hidden">
                           <div className="absolute top-0 inset-x-0 h-[2px] bg-gradient-to-r from-transparent via-[#3390ec]/40 to-transparent" />
-                          <span className="text-[9px] text-[#3390ec] uppercase font-black tracking-widest block mb-1">
-                            AVAILABLE GAME BALANCE
-                          </span>
+                          <span className="text-[11px] text-[#3390ec] uppercase font-black tracking-widest block mb-1">{' '}{tx("AVAILABLE GAME BALANCE")}{' '}</span>
                           <div className="flex items-center justify-center space-x-1.5 py-0.5">
                             <span className="text-3xl font-black text-white tracking-tight font-mono tabular-nums">
                               {getTonValue(profile?.tonAccount?.availableNano)}
                             </span>
                             <span className="text-xs font-black text-[#3390ec] tracking-wider font-mono">TON</span>
                           </div>
-                          <span className="text-[8.5px] text-[#708499] uppercase font-bold block mt-1 tracking-wider">
-                            Internal Ledger • Instantly playable
-                          </span>
+                          <span className="text-[11px] text-[#708499] uppercase font-bold block mt-1 tracking-wider">{' '}{tx("Internal Ledger • Instantly playable")}{' '}</span>
                         </div>
 
                         {/* 2. Secondary Balances Grid */}
                         <div className="grid grid-cols-3 gap-2 text-xs">
                           {/* Connected Wallet Balance */}
                           <div className="bg-[#0e1621]/80 p-2.5 rounded-xl border border-[#242f3d] flex flex-col justify-between text-center">
-                            <span className="text-[8.5px] text-[#708499] uppercase font-bold tracking-wider block leading-none">Wallet Balance</span>
+                            <span className="text-[11px] text-[#708499] uppercase font-bold tracking-wider block leading-none">{' '}{tx("Wallet Balance")}{' '}</span>
                             <div className="flex items-center justify-center space-x-0.5 my-1.5 min-h-[16px]">
                               {balanceLoading ? (
                                 <RefreshCw className="animate-spin w-2.5 h-2.5 text-[#3390ec]" />
                               ) : balanceError ? (
                                 <button
                                   onClick={() => setBalanceRefreshTrigger(prev => prev + 1)}
-                                  className="text-[8px] px-1 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 transition flex items-center gap-0.5 font-bold uppercase tracking-wider cursor-pointer"
-                                  title="Retry"
-                                >
-                                  Retry
-                                </button>
+                                  className="text-[11px] px-1 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 transition flex items-center gap-0.5 font-bold uppercase tracking-wider cursor-pointer"
+                                  title={tx("Retry")}
+                                >{' '}{tx("Retry")}{' '}</button>
                               ) : (
                                 <>
                                   <span className="text-xs font-bold text-white leading-none font-mono tabular-nums truncate">
                                     {walletBalance}
                                   </span>
-                                  <span className="text-[8px] font-bold text-[#3390ec] font-mono shrink-0">T</span>
+                                  <span className="text-[11px] font-bold text-[#3390ec] font-mono shrink-0">T</span>
                                 </>
                               )}
                             </div>
-                            <span className="text-[7.5px] text-[#708499] block leading-none tracking-wider font-semibold">On-Chain</span>
+                            <span className="text-[11px] text-[#708499] block leading-none tracking-wider font-semibold">{' '}{tx("On-Chain")}{' '}</span>
                           </div>
 
                           {/* Reserved in TON Games */}
                           <div className="bg-[#0e1621]/80 p-2.5 rounded-xl border border-[#242f3d] flex flex-col justify-between text-center">
-                            <span className="text-[8.5px] text-[#708499] uppercase font-bold tracking-wider block leading-none">Reserved</span>
+                            <span className="text-[11px] text-[#708499] uppercase font-bold tracking-wider block leading-none">{' '}{tx("Reserved")}{' '}</span>
                             <div className="flex items-center justify-center space-x-0.5 my-1.5 min-h-[16px]">
                               <span className="text-xs font-bold text-amber-400 leading-none font-mono tabular-nums">
                                 {getTonValue(profile?.tonAccount?.reservedNano)}
                               </span>
-                              <span className="text-[8px] font-bold text-amber-500 font-mono shrink-0">T</span>
+                              <span className="text-[11px] font-bold text-amber-500 font-mono shrink-0">T</span>
                             </div>
-                            <span className="text-[7.5px] text-amber-500/70 block leading-none tracking-wider font-semibold" title="In Matchmaking Queue">In Queue</span>
+                            <span className="text-[11px] text-amber-500/70 block leading-none tracking-wider font-semibold" title={tx("In Matchmaking Queue")}>{' '}{tx("In Queue")}{' '}</span>
                           </div>
 
                           {/* Pending Outbound */}
                           <div className="bg-[#0e1621]/80 p-2.5 rounded-xl border border-[#242f3d] flex flex-col justify-between text-center">
-                            <span className="text-[8.5px] text-[#708499] uppercase font-bold tracking-wider block leading-none">Pending Out</span>
+                            <span className="text-[11px] text-[#708499] uppercase font-bold tracking-wider block leading-none">{' '}{tx("Pending Out")}{' '}</span>
                             <div className="flex items-center justify-center space-x-0.5 my-1.5 min-h-[16px]">
                               <span className="text-xs font-bold text-purple-400 leading-none font-mono tabular-nums">
                                 {getTonValue(profile?.tonAccount?.pendingWithdrawalNano)}
                               </span>
-                              <span className="text-[8px] font-bold text-purple-400 font-mono shrink-0">T</span>
+                              <span className="text-[11px] font-bold text-purple-400 font-mono shrink-0">T</span>
                             </div>
-                            <span className="text-[7.5px] text-purple-400/70 block leading-none tracking-wider font-semibold" title="Pending Withdrawal">Outbound</span>
+                            <span className="text-[11px] text-purple-400/70 block leading-none tracking-wider font-semibold" title={tx("Pending Withdrawal")}>{' '}{tx("Outbound")}{' '}</span>
                           </div>
                         </div>
 
@@ -2604,24 +2593,18 @@ function GameAppInner() {
                           <button
                             id="btn_ton_deposit"
                             onClick={() => { playClickSound(); setDepositVerifyError(null); setDepositPendingId(null); setDepositPendingStatus(''); setShowDepositModal(true); }}
-                            className="bg-[#3390ec] hover:bg-[#2081e2] text-[#0e1621] font-bold py-2.5 px-1 rounded-xl text-[10px] uppercase tracking-wider text-center transition-all duration-150 cursor-pointer active:scale-95 shadow-md shadow-[#3390ec]/10"
-                          >
-                            DEPOSIT
-                          </button>
+                            className="bg-[#3390ec] hover:bg-[#2081e2] text-[#0e1621] font-bold py-2.5 px-1 rounded-xl text-[11px] uppercase tracking-wider text-center transition-all duration-150 cursor-pointer active:scale-95 shadow-md shadow-[#3390ec]/10"
+                          >{' '}{tx("DEPOSIT")}{' '}</button>
                           <button
                             id="btn_ton_withdraw"
                             onClick={() => { playClickSound(); setWithdrawError(null); setWithdrawSuccess(null); setShowWithdrawModal(true); }}
-                            className="bg-[#242f3d] hover:bg-[#2e3b4d] text-white font-bold py-2.5 px-1 rounded-xl text-[10px] uppercase tracking-wider text-center border border-[#2b3745] transition-all duration-150 cursor-pointer active:scale-95"
-                          >
-                            WITHDRAW
-                          </button>
+                            className="bg-[#242f3d] hover:bg-[#2e3b4d] text-white font-bold py-2.5 px-1 rounded-xl text-[11px] uppercase tracking-wider text-center border border-[#2b3745] transition-all duration-150 cursor-pointer active:scale-95"
+                          >{' '}{tx("WITHDRAW")}{' '}</button>
                           <button
                             id="btn_ton_history"
                             onClick={() => { playClickSound(); handleFetchTonHistory(); }}
-                            className="bg-[#1c2430] hover:bg-[#232d3b] text-amber-400 font-bold py-2.5 px-1 rounded-xl text-[10px] uppercase tracking-wider text-center border border-amber-500/20 transition-all duration-150 cursor-pointer active:scale-95"
-                          >
-                            HISTORY
-                          </button>
+                            className="bg-[#1c2430] hover:bg-[#232d3b] text-amber-400 font-bold py-2.5 px-1 rounded-xl text-[11px] uppercase tracking-wider text-center border border-amber-500/20 transition-all duration-150 cursor-pointer active:scale-95"
+                          >{' '}{tx("HISTORY")}{' '}</button>
                         </div>
                       </div>
                     )}
@@ -2631,15 +2614,15 @@ function GameAppInner() {
                 {/* Dashboard Stats Summary */}
                 <div className="grid grid-cols-3 gap-2 bg-[#242f3d]/35 rounded-2xl p-2.5 text-center border border-[#242f3d]/40">
                   <div>
-                    <span className="text-[9px] text-[#708499] uppercase block font-bold">{t('profile.played')}</span>
+                    <span className="text-[11px] text-[#708499] uppercase block font-bold">{' '}{t('profile.played')}{' '}</span>
                     <span className="text-xs font-bold text-white mt-0.5 block">{profile?.gamesPlayed || 0}</span>
                   </div>
                   <div>
-                    <span className="text-[9px] text-emerald-400 uppercase block font-bold">{t('profile.won')}</span>
+                    <span className="text-[11px] text-emerald-400 uppercase block font-bold">{' '}{t('profile.won')}{' '}</span>
                     <span className="text-xs font-bold text-emerald-400 mt-0.5 block">{profile?.wins || 0}</span>
                   </div>
                   <div>
-                    <span className="text-[9px] text-[#3390ec] uppercase block font-bold">{t('profile.rate')}</span>
+                    <span className="text-[11px] text-[#3390ec] uppercase block font-bold">{' '}{t('profile.rate')}{' '}</span>
                     <span className="text-xs font-bold text-white mt-0.5 block">
                       {profile?.gamesPlayed && profile.gamesPlayed > 0 
                         ? `${Math.round(((profile.wins || 0) / profile.gamesPlayed) * 100)}%`
@@ -2656,8 +2639,8 @@ function GameAppInner() {
                   <div className="flex items-center space-x-2">
                     <span className="text-xl">🔥</span>
                     <div>
-                      <h4 className="text-sm font-bold text-white uppercase tracking-wider">{t('home.streak')}</h4>
-                      <p className="text-[#708499] text-[10px]">{currentLanguage === 'zh-CN' ? '领取您的每日经验奖励' : currentLanguage === 'es' ? 'Reclama tu bonificación de experiencia diaria' : currentLanguage === 'ru' ? 'Получите свой ежедневный бонус опыта' : currentLanguage === 'de' ? 'Fordere deinen täglichen Erfahrungsbonus an' : currentLanguage === 'fr' ? 'Réclamez votre bonus d\'expérience quotidien' : currentLanguage === 'pt' ? 'Resgate seu bônus diário de experiência' : currentLanguage === 'ja' ? '毎日の経験値ボーナスを獲得しよう' : currentLanguage === 'hi' ? 'अपने दैनिक अनुभव बोनस का दावा करें' : currentLanguage === 'tr' ? 'Günlük deneyim bonusunu talep et' : currentLanguage === 'id' ? 'Klaim bonus pengalaman harian Anda' : currentLanguage === 'ar' ? 'طالب بمكافأة الخبرة اليومية' : 'Claim your daily experience bonus'}</p>
+                      <h4 className="text-sm font-bold text-white uppercase tracking-wider">{' '}{t('home.streak')}{' '}</h4>
+                      <p className="text-[#708499] text-[11px]">{currentLanguage === 'zh-CN' ? '领取您的每日经验奖励' : currentLanguage === 'es' ? 'Reclama tu bonificación de experiencia diaria' : currentLanguage === 'ru' ? 'Получите свой ежедневный бонус опыта' : currentLanguage === 'de' ? 'Fordere deinen täglichen Erfahrungsbonus an' : currentLanguage === 'fr' ? 'Réclamez votre bonus d\'expérience quotidien' : currentLanguage === 'pt' ? 'Resgate seu bônus diário de experiência' : currentLanguage === 'ja' ? '毎日の経験値ボーナスを獲得しよう' : currentLanguage === 'hi' ? 'अपने दैनिक अनुभव बोनस का दावा करें' : currentLanguage === 'tr' ? 'Günlük deneyim bonusunu talep et' : currentLanguage === 'id' ? 'Klaim bonus pengalaman harian Anda' : currentLanguage === 'ar' ? 'طالب بمكافأة الخبرة اليومية' : 'Claim your daily experience bonus'}</p>
                     </div>
                   </div>
                   <div className="text-right">
@@ -2688,7 +2671,7 @@ function GameAppInner() {
 
                     return (
                       <div key={dayNum} className="flex flex-col items-center space-y-1.5">
-                        <span className="text-[9px] text-[#708499] font-bold">D{dayNum}</span>
+                        <span className="text-[11px] text-[#708499] font-bold">D{dayNum}</span>
                         <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold transition-all border ${
                           isCompleted
                             ? 'bg-gradient-to-tr from-amber-500 to-yellow-400 border-amber-500 text-[#0e1621] shadow-sm shadow-amber-500/20'
@@ -2698,7 +2681,7 @@ function GameAppInner() {
                         }`}>
                           {isCompleted ? "🔥" : `+${dayXpBonus}`}
                         </div>
-                        <span className={`text-[8px] font-mono scale-90 ${isCompleted ? 'text-amber-500 font-bold' : 'text-[#708499]'}`}>
+                        <span className={`text-[11px] font-mono scale-90 ${isCompleted ? 'text-amber-500 font-bold' : 'text-[#708499]'}`}>
                           {isCompleted ? (currentLanguage === 'zh-CN' ? '已领' : currentLanguage === 'es' ? 'Listo' : currentLanguage === 'ru' ? 'Ок' : currentLanguage === 'de' ? 'Erledigt' : currentLanguage === 'fr' ? 'Fait' : currentLanguage === 'pt' ? 'Feito' : currentLanguage === 'ja' ? '完了' : currentLanguage === 'hi' ? 'पूर्ण' : currentLanguage === 'tr' ? 'Bitti' : currentLanguage === 'id' ? 'Selesai' : currentLanguage === 'ar' ? 'تم' : 'Done') : `${dayXpBonus} XP`}
                         </span>
                       </div>
@@ -2711,9 +2694,9 @@ function GameAppInner() {
                   {profile?.lastLoginDate === new Date().toLocaleDateString('sv-SE') ? (
                     <div className="bg-[#242f3d]/50 border border-[#2b3745] rounded-2xl p-3 text-center space-y-1">
                       <p className="text-xs font-semibold text-emerald-400 flex items-center justify-center gap-1.5">
-                        <span>✅</span> {t('home.rewardClaimed')}
+                        <span>✅</span> {' '}{t('home.rewardClaimed')}{' '}
                       </p>
-                      <p className="text-[#708499] text-[10px]">
+                      <p className="text-[#708499] text-[11px]">
                         {currentLanguage === 'zh-CN' ? '在接下来的24小时内返回以保持连续登录！' : currentLanguage === 'es' ? '¡Regresa en las próximas 24 horas para mantener tu racha!' : currentLanguage === 'ru' ? 'Вернитесь в течение 24 часов, чтобы сохранить серию!' : currentLanguage === 'de' ? 'Kehre in den nächsten 24 Stunden zurück, um deine Serie aufrechtzuerhalten!' : currentLanguage === 'fr' ? 'Revenez dans les prochaines 24 heures pour conserver votre série !' : currentLanguage === 'pt' ? 'Volte nas próximas 24 horas para manter sua sequência!' : currentLanguage === 'ja' ? '連続記録を維持するために、次の24時間以内に戻ってきてください！' : currentLanguage === 'hi' ? 'अपनी स्ट्रीक बनाए रखने के लिए अगले 24 घंटों में वापस आएं!' : currentLanguage === 'tr' ? 'Serini devam ettirmek için önümüzdeki 24 saat içinde geri dön!' : currentLanguage === 'id' ? 'Kembali dalam 24 jam ke depan untuk menjaga beruntun Anda!' : currentLanguage === 'ar' ? 'عد خلال الـ 24 ساعة القادمة للحفاظ على سلسلة تسجيل الدخول!' : 'Return inside the next 24 hours to keep your streak burning!'}
                       </p>
                     </div>
@@ -2729,7 +2712,7 @@ function GameAppInner() {
                         <>
                           <span>⚡</span>
                           <span>{t('home.claimReward').toUpperCase()}</span>
-                          <span className="text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-mono">
+                          <span className="text-[11px] bg-white/20 px-2 py-0.5 rounded-full font-mono">
                             +{100 + (Math.min(7, (profile?.streak || 0) + 1) * 10)} XP
                           </span>
                         </>
@@ -2748,20 +2731,20 @@ function GameAppInner() {
                         <div className="flex items-center space-x-2.5 min-w-0">
                           <span className="text-2xl animate-bounce shrink-0">{badgeInfo.emoji}</span>
                           <div className="min-w-0">
-                            <span className="text-[10px] text-[#708499] uppercase tracking-wider font-bold block">{currentLanguage === 'zh-CN' ? '连续登录徽章' : currentLanguage === 'es' ? 'Insignia de racha activa' : currentLanguage === 'ru' ? 'Активный значок серии' : currentLanguage === 'de' ? 'Aktives Serien-Abzeichen' : currentLanguage === 'fr' ? 'Badge de série actif' : currentLanguage === 'pt' ? 'Emblema de sequência ativa' : currentLanguage === 'ja' ? 'アクティブな連続バッジ' : currentLanguage === 'hi' ? 'सक्रिय स्ट्रीक बैज' : currentLanguage === 'tr' ? 'Aktif Seri Rozeti' : currentLanguage === 'id' ? 'Lencana Beruntun Aktif' : currentLanguage === 'ar' ? 'شارة السلسلة النشطة' : 'Active Streak Badge'}</span>
-                            <span className="text-xs text-white font-bold block truncate">{badgeInfo.name}</span>
+                            <span className="text-[11px] text-[#708499] uppercase tracking-wider font-bold block">{currentLanguage === 'zh-CN' ? '连续登录徽章' : currentLanguage === 'es' ? 'Insignia de racha activa' : currentLanguage === 'ru' ? 'Активный значок серии' : currentLanguage === 'de' ? 'Aktives Serien-Abzeichen' : currentLanguage === 'fr' ? 'Badge de série actif' : currentLanguage === 'pt' ? 'Emblema de sequência ativa' : currentLanguage === 'ja' ? 'アクティブな連続バッジ' : currentLanguage === 'hi' ? 'सक्रिय स्ट्रीक बैज' : currentLanguage === 'tr' ? 'Aktif Seri Rozeti' : currentLanguage === 'id' ? 'Lencana Beruntun Aktif' : currentLanguage === 'ar' ? 'شارة السلسلة النشطة' : 'Active Streak Badge'}</span>
+                            <span className="text-xs text-white font-bold block truncate">{t('ui.'+({'Grand Phoenix':'phoenix','Streak Overlord':'overlord','Flame Adept':'flame','Minor Sparkler':'spark'}[badgeInfo.name]||'spark'))}</span>
                           </div>
                         </div>
                         <div className="text-right">
-                          <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border shadow-sm ${badgeInfo.color}`}>
-                            {badgeInfo.name === 'Grand Phoenix' ? 'MAX BADGE' : 'COSMETIC'}
+                          <span className={`text-[11px] font-mono px-2 py-0.5 rounded-full border shadow-sm ${badgeInfo.color}`}>
+                            {badgeInfo.name === 'Grand Phoenix' ? tx("MAX BADGE") : tx("COSMETIC")}
                           </span>
                         </div>
                       </div>
                     );
                   })()
                 ) : (
-                  <div className="text-center text-[10px] text-[#708499]">
+                  <div className="text-center text-[11px] text-[#708499]">
                     ℹ️ {currentLanguage === 'zh-CN' ? '保持连续每日登录以解锁高级装饰徽章。' : currentLanguage === 'es' ? 'Mantén inicios de sesión diarios consecutivos para desbloquear insignias cosméticas premium.' : currentLanguage === 'ru' ? 'Заходите каждый день подряд, чтобы разблокировать косметические значки.' : currentLanguage === 'de' ? 'Melde dich täglich an, um kosmetische Abzeichen freizuschalten.' : currentLanguage === 'fr' ? 'Connectez-vous tous les jours de suite pour débloquer des badges cosmétiques premium.' : currentLanguage === 'pt' ? 'Mantenha logins diários consecutivos para desbloquear emblemas cosméticos premium.' : currentLanguage === 'ja' ? '毎日の連続ログインを維持して、プレミアム装飾バッジをアンロックしよう。' : currentLanguage === 'hi' ? 'प्रीमियम कॉस्मेटिक बैज अनलॉक करने के लिए लगातार दैनिक लॉगिन बनाए रखें।' : currentLanguage === 'tr' ? 'Premium kozmetik rozetlerin kilidini açmak için her gün giriş yap.' : currentLanguage === 'id' ? 'Pertahankan login harian berturut-turut untuk membuka lencana kosmetik premium.' : currentLanguage === 'ar' ? 'حافظ على تسجيل الدخول اليومي المتتالي لفتح الشارات التجميلية المميزة.' : 'Maintain consecutive daily logins to unlock premium cosmetic badges.'}
                   </div>
                 )}
@@ -2784,7 +2767,7 @@ function GameAppInner() {
                 <div className="border-t border-[#242f3d] pt-3.5 space-y-2">
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-slate-300 font-bold flex items-center gap-1">
-                      <span>🔰</span> {t('referrals.level', { num: Math.floor((profile?.xp || 0) / 1000) + 1 })} {t('profile.title').split(' ')[0]}
+                      <span>🔰</span> {' '}{t('referrals.level', { num: Math.floor((profile?.xp || 0) / 1000) + 1 })}{' '} {t('profile.title').split(' ')[0]}
                     </span>
                     <span className="text-[#3390ec] font-mono font-bold">
                       {(profile?.xp || 0) % 1000} / 1000 XP
@@ -2815,13 +2798,13 @@ function GameAppInner() {
                   className="w-full h-12 bg-[#242f3d] hover:bg-[#2b3745] border border-[#2b3745] text-slate-200 font-semibold rounded-2xl transition flex items-center justify-center gap-2"
                 >
                   <Users className="w-4 h-4 text-[#3390ec]" />
-                  <span>{t('referrals.title')}</span>
+                  <span>{' '}{t('referrals.title')}{' '}</span>
                 </button>
               </div>
 
               {/* Rules Summary card */}
               <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-4 space-y-3">
-                <span className="text-xs font-bold text-white block border-b border-[#242f3d] pb-1.5">{t('home.rules')}</span>
+                <span className="text-xs font-bold text-white block border-b border-[#242f3d] pb-1.5">{' '}{t('home.rules')}{' '}</span>
                 <div className="grid grid-cols-2 gap-2 text-[11px] text-[#708499] font-medium">
                   <div className="bg-[#242f3d] p-2 rounded-xl">
                     {getBeatsText('👊 ' + t('play.rock'), '✂️ ' + t('play.scissors'), currentLanguage)}
@@ -2833,7 +2816,7 @@ function GameAppInner() {
                     {getBeatsText('📄 ' + t('play.paper'), '👊 ' + t('play.rock'), currentLanguage)}
                   </div>
                   <div className="bg-[#242f3d] p-2 rounded-xl">
-                    {getBeatsText('🕳️ ' + (currentLanguage === 'zh-CN' ? '井' : currentLanguage === 'es' ? 'Pozo' : currentLanguage === 'ru' ? 'Колодец' : currentLanguage === 'de' ? 'Brunnen' : currentLanguage === 'fr' ? 'Puits' : currentLanguage === 'pt' ? 'Poço' : currentLanguage === 'ja' ? '井' : currentLanguage === 'hi' ? 'कुआँ' : currentLanguage === 'tr' ? 'Kuyu' : currentLanguage === 'id' ? 'Sumur' : currentLanguage === 'ar' ? 'البئر' : 'Well'), '👊 ' + t('play.rock'), currentLanguage)}
+                    {getBeatsText('🕳️ ' + (currentLanguage === 'zh-CN' ? '井' : currentLanguage === 'es' ? 'Pozo' : currentLanguage === 'ru' ? tx("Колодец") : currentLanguage === 'de' ? 'Brunnen' : currentLanguage === 'fr' ? 'Puits' : currentLanguage === 'pt' ? 'Poço' : currentLanguage === 'ja' ? '井' : currentLanguage === 'hi' ? 'कुआँ' : currentLanguage === 'tr' ? 'Kuyu' : currentLanguage === 'id' ? 'Sumur' : currentLanguage === 'ar' ? 'البئر' : tx("Well")), '👊 ' + t('play.rock'), currentLanguage)}
                   </div>
                 </div>
               </div>
@@ -2854,7 +2837,7 @@ function GameAppInner() {
               <div className="flex justify-between items-center bg-[#17212b] border border-[#242f3d] px-4 py-3 rounded-2xl shadow-md">
                 <div className="flex items-center gap-2">
                   <Gamepad2 className="w-5 h-5 text-[#3390ec]" />
-                  <span className="text-xs font-bold text-white uppercase tracking-wider">Battle Arena</span>
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">{' '}{tx("Battle Arena")}{' '}</span>
                 </div>
                 <button
                   id="btn_interaction_chart_info"
@@ -2862,7 +2845,7 @@ function GameAppInner() {
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#242f3d] hover:bg-[#2b3745] text-[#3390ec] hover:text-white transition duration-150 text-xs font-semibold cursor-pointer"
                 >
                   <Info className="w-4 h-4 animate-pulse" />
-                  <span>Interaction Chart</span>
+                  <span>{' '}{tx("Interaction Chart")}{' '}</span>
                 </button>
               </div>
 
@@ -2870,16 +2853,15 @@ function GameAppInner() {
                 // LOBBY ENTRY SCREEN
                 <div className="space-y-5 animate-fade-in">
                   <div className="text-center py-3">
-                    <h3 className="text-lg font-extrabold text-white uppercase tracking-tight">Battle Arena Matchmaking</h3>
-                    <p className="text-[#708499] text-xs mt-0.5">Choose your duel mode and stake</p>
+                    <h3 className="text-lg font-extrabold text-white uppercase tracking-tight">{' '}{tx("Battle Arena Matchmaking")}{' '}</h3>
+                    <p className="text-[#708499] text-xs mt-0.5">{' '}{tx("Choose your duel mode and stake")}{' '}</p>
                   </div>
 
                   {/* Mode & Stake Selector Card */}
                   <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-5 space-y-4 shadow-lg">
                     <div className="flex justify-between items-center pb-2.5 border-b border-[#242f3d]">
-                      <span className="text-xs font-bold text-white uppercase tracking-wider">Duel Mode Selector</span>
-                      <span className="text-[10px] bg-amber-500/10 text-amber-500 border border-amber-500/25 px-2.5 py-0.5 rounded-full font-mono font-bold">
-                        Your Balance: {profile?.vViral !== undefined ? profile.vViral : 500} vVIRAL
+                      <span className="text-xs font-bold text-white uppercase tracking-wider">{' '}{tx("Duel Mode Selector")}{' '}</span>
+                      <span className="text-[11px] bg-amber-500/10 text-amber-500 border border-amber-500/25 px-2.5 py-0.5 rounded-full font-mono font-bold">{' '}{tx("Your Balance:")}{' '}{profile?.vViral !== undefined ? profile.vViral : 500} vVIRAL
                       </span>
                     </div>
 
@@ -2894,8 +2876,8 @@ function GameAppInner() {
                         }`}
                       >
                         <span className="text-base">🤝</span>
-                        <span className="text-[10px] font-bold mt-1 uppercase tracking-wider text-center">Friendly</span>
-                        <span className="text-[7.5px] opacity-75 mt-0.5 text-center leading-none">Free</span>
+                        <span className="text-[11px] font-bold mt-1 uppercase tracking-wider text-center">{' '}{tx("Friendly")}{' '}</span>
+                        <span className="text-[11px] opacity-75 mt-0.5 text-center leading-none">{' '}{tx("Free")}{' '}</span>
                       </button>
 
                       <button
@@ -2907,8 +2889,8 @@ function GameAppInner() {
                         }`}
                       >
                         <span className="text-base">🪙</span>
-                        <span className="text-[10px] font-bold mt-1 uppercase tracking-wider text-center">vVIRAL</span>
-                        <span className="text-[7.5px] opacity-75 mt-0.5 text-center leading-none">Stake</span>
+                        <span className="text-[11px] font-bold mt-1 uppercase tracking-wider text-center">vVIRAL</span>
+                        <span className="text-[11px] opacity-75 mt-0.5 text-center leading-none">{' '}{tx("Stake")}{' '}</span>
                       </button>
 
                       <button
@@ -2920,8 +2902,8 @@ function GameAppInner() {
                         }`}
                       >
                         <span className="text-base">💎</span>
-                        <span className="text-[10px] font-bold mt-1 uppercase tracking-wider text-center">1 TON Duel</span>
-                        <span className="text-[7.5px] opacity-75 mt-0.5 text-center leading-none">Real TON</span>
+                        <span className="text-[11px] font-bold mt-1 uppercase tracking-wider text-center">{' '}{tx("1 TON Duel")}{' '}</span>
+                        <span className="text-[11px] opacity-75 mt-0.5 text-center leading-none">{' '}{tx("Real TON")}{' '}</span>
                       </button>
                     </div>
 
@@ -2933,7 +2915,7 @@ function GameAppInner() {
                         className="space-y-3 pt-2.5 border-t border-[#242f3d] overflow-hidden"
                       >
                         <div className="flex justify-between items-center">
-                          <span className="text-[10px] font-bold text-[#708499] uppercase">Choose Stake Amount</span>
+                          <span className="text-[11px] font-bold text-[#708499] uppercase">{' '}{tx("Choose Stake Amount")}{' '}</span>
                           <span className="text-xs font-black text-amber-500 font-mono bg-amber-500/10 px-2 py-0.5 rounded">
                             {selectedLobbyStake} vVIRAL
                           </span>
@@ -2964,41 +2946,37 @@ function GameAppInner() {
                         className="space-y-3 pt-2.5 border-t border-[#242f3d] overflow-hidden"
                       >
                         <div className="bg-[#0e1621]/80 rounded-2xl p-4 border border-[#242f3d] space-y-2.5 text-center">
-                          <span className="text-xs font-bold text-white uppercase tracking-wider block">1 TON Duel Settings</span>
+                          <span className="text-xs font-bold text-white uppercase tracking-wider block">{' '}{tx("1 TON Duel Settings")}{' '}</span>
                           {tonConfig?.pauseGames ? (
-                            <div className="bg-red-500/15 border border-red-500/30 text-red-400 p-3 rounded-xl text-xs font-medium text-center">
-                              ⚠️ 1 TON Duel mode is temporarily paused for system maintenance.
-                            </div>
+                            <div className="bg-red-500/15 border border-red-500/30 text-red-400 p-3 rounded-xl text-xs font-medium text-center">{' '}{tx("⚠️ 1 TON Duel mode is temporarily paused for system maintenance.")}{' '}</div>
                           ) : (
                             <div className="space-y-3 text-left">
                               <div className="grid grid-cols-2 gap-2 text-[10.5px]">
                                 <div className="bg-[#17212b] p-2 rounded-xl border border-[#242f3d]">
-                                  <span className="text-[8px] text-[#708499] uppercase block leading-none">Stake</span>
+                                  <span className="text-[11px] text-[#708499] uppercase block leading-none">{' '}{tx("Stake")}{' '}</span>
                                   <span className="font-bold text-white block mt-0.5">1 TON</span>
                                 </div>
                                 <div className="bg-[#17212b] p-2 rounded-xl border border-[#242f3d]">
-                                  <span className="text-[8px] text-[#708499] uppercase block leading-none">Prize Pool</span>
+                                  <span className="text-[11px] text-[#708499] uppercase block leading-none">{' '}{tx("Prize Pool")}{' '}</span>
                                   <span className="font-bold text-emerald-400 block mt-0.5">2 TON</span>
                                 </div>
                                 <div className="bg-[#17212b] p-2 rounded-xl border border-[#242f3d]">
-                                  <span className="text-[8px] text-[#708499] uppercase block leading-none">Platform Fee</span>
+                                  <span className="text-[11px] text-[#708499] uppercase block leading-none">{' '}{tx("Platform Fee")}{' '}</span>
                                   <span className="font-bold text-[#708499] block mt-0.5">5% (0.10 TON)</span>
                                 </div>
                                 <div className="bg-[#17212b] p-2 rounded-xl border border-[#242f3d]">
-                                  <span className="text-[8px] text-amber-500 uppercase block leading-none">Winner Receives</span>
+                                  <span className="text-[11px] text-amber-500 uppercase block leading-none">{' '}{tx("Winner Receives")}{' '}</span>
                                   <span className="font-black text-amber-400 block mt-0.5">1.90 TON</span>
                                 </div>
                               </div>
 
                               {(!profile?.tonAccount || Number(profile.tonAccount.availableNano || 0) < 1000000000) && (
-                                <div className="bg-amber-500/10 border border-amber-500/25 p-3 rounded-xl text-[10px] text-amber-500 font-medium space-y-2">
-                                  <span>⚠️ Insufficient Game TON Balance. You need at least 1 TON in your Game Balance to join.</span>
+                                <div className="bg-amber-500/10 border border-amber-500/25 p-3 rounded-xl text-[11px] text-amber-500 font-medium space-y-2">
+                                  <span>{' '}{tx("⚠️ Insufficient Game TON Balance. You need at least 1 TON in your Game Balance to join.")}{' '}</span>
                                   <button
                                     onClick={() => { playClickSound(); setShowDepositModal(true); }}
-                                    className="w-full bg-amber-500 hover:bg-amber-600 text-[#0e1621] py-1.5 px-3 rounded-lg text-[9px] font-black tracking-wider uppercase transition cursor-pointer"
-                                  >
-                                    DEPOSIT TON
-                                  </button>
+                                    className="w-full bg-amber-500 hover:bg-amber-600 text-[#0e1621] py-1.5 px-3 rounded-lg text-[11px] font-black tracking-wider uppercase transition cursor-pointer"
+                                  >{' '}{tx("DEPOSIT TON")}{' '}</button>
                                 </div>
                               )}
                             </div>
@@ -3009,9 +2987,7 @@ function GameAppInner() {
 
                     {/* Insufficient balance warning */}
                     {selectedLobbyMode === 'stake' && (profile?.vViral !== undefined ? profile.vViral : 500) < selectedLobbyStake && (
-                      <div className="bg-amber-500/10 border border-amber-500/25 p-3 rounded-2xl text-[10.5px] text-amber-500 font-medium">
-                        ⚠️ Insufficient vVIRAL credits. Choose a lower stake amount, or claim daily login bonuses/missions to earn more.
-                      </div>
+                      <div className="bg-amber-500/10 border border-amber-500/25 p-3 rounded-2xl text-[10.5px] text-amber-500 font-medium">{' '}{tx("⚠️ Insufficient vVIRAL credits. Choose a lower stake amount, or claim daily login bonuses/missions to earn more.")}{' '}</div>
                     )}
                   </div>
 
@@ -3028,13 +3004,13 @@ function GameAppInner() {
                         className="group w-full py-4 bg-gradient-to-r from-[#3390ec] to-indigo-500 hover:from-[#2879c8] hover:to-indigo-600 disabled:from-[#1e2730] disabled:to-[#1e2730] disabled:opacity-40 disabled:cursor-not-allowed border border-[#2b3745] rounded-2xl text-center transition-all cursor-pointer font-black text-white text-sm uppercase tracking-wider shadow-md shadow-[#3390ec]/20"
                       >
                         {tonConfig?.pauseGames ? (
-                          "1 TON DUEL PAUSED"
+                          tx("1 TON DUEL PAUSED")
                         ) : !walletAddress ? (
-                          "CONNECT WALLET TO PLAY"
+                          tx("CONNECT WALLET TO PLAY")
                         ) : (profile?.tonAccount !== undefined && Number(profile.tonAccount.availableNano || 0) < 1000000000) ? (
-                          "INSUFFICIENT TON BALANCE"
+                          tx("INSUFFICIENT TON BALANCE")
                         ) : (
-                          "PLAY FOR 1 TON"
+                          tx("PLAY FOR 1 TON")
                         )}
                       </button>
                     </div>
@@ -3048,10 +3024,8 @@ function GameAppInner() {
                       >
                         <div className="space-y-1">
                           <span className="text-white group-hover:text-white font-bold text-sm flex items-center gap-1.5">
-                            <Cpu className="w-4.5 h-4.5 text-[#3390ec] group-hover:text-white" />
-                            Auto Bot Training Game
-                          </span>
-                          <p className="text-[#708499] group-hover:text-white/80 text-[11px]">Practice or play instantly against the AI Arena Bot.</p>
+                            <Cpu className="w-4.5 h-4.5 text-[#3390ec] group-hover:text-white" />{' '}{tx("Auto Bot Training Game")}{' '}</span>
+                          <p className="text-[#708499] group-hover:text-white/80 text-[11px]">{' '}{tx("Practice or play instantly against the AI Arena Bot.")}{' '}</p>
                         </div>
                         <ChevronRight className="w-4.5 h-4.5 text-[#708499] group-hover:text-white transition" />
                       </button>
@@ -3065,10 +3039,8 @@ function GameAppInner() {
                         <div className="absolute right-0 top-0 w-24 h-24 bg-[#3390ec]/10 rounded-full blur-xl pointer-events-none" />
                         <div className="space-y-1 relative z-10">
                           <span className="text-[#3390ec] group-hover:text-white font-bold text-sm flex items-center gap-1.5">
-                            <Gamepad2 className="w-4.5 h-4.5 text-[#3390ec] group-hover:text-white" />
-                            Online PvP Duel Queue
-                          </span>
-                          <p className="text-[#708499] group-hover:text-white/80 text-[11px]">Atomically queues you up with another live player.</p>
+                            <Gamepad2 className="w-4.5 h-4.5 text-[#3390ec] group-hover:text-white" />{' '}{tx("Online PvP Duel Queue")}{' '}</span>
+                          <p className="text-[#708499] group-hover:text-white/80 text-[11px]">{' '}{tx("Atomically queues you up with another live player.")}{' '}</p>
                         </div>
                         <ChevronRight className="w-4.5 h-4.5 text-[#3390ec] group-hover:text-white transition animate-pulse" />
                       </button>
@@ -3082,16 +3054,16 @@ function GameAppInner() {
                   {activeGame && getArenaState() !== 'searching' && getArenaState() !== 'cancelled' && (
                     <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-4 flex justify-between items-center text-xs">
                       <div className="text-left">
-                        <span className="text-[10px] text-[#708499] uppercase tracking-widest block font-bold">You</span>
+                        <span className="text-[11px] text-[#708499] uppercase tracking-widest block font-bold">{' '}{tx("You")}{' '}</span>
                         <span className="font-semibold text-[#3390ec] text-sm">@{activeGame.player1Id === currentTgId ? activeGame.player1Username : activeGame.player2Username}</span>
                       </div>
 
-                      <div className="px-3 py-1 rounded-full bg-[#242f3d] font-bold text-[10px] tracking-wider uppercase text-[#708499]">
+                      <div className="px-3 py-1 rounded-full bg-[#242f3d] font-bold text-[11px] tracking-wider uppercase text-[#708499]">
                         VS
                       </div>
 
                       <div className="text-right">
-                        <span className="text-[10px] text-[#708499] uppercase tracking-widest block font-bold">Opponent</span>
+                        <span className="text-[11px] text-[#708499] uppercase tracking-widest block font-bold">{' '}{tx("Opponent")}{' '}</span>
                         <span className="font-semibold text-indigo-400 text-sm">@{activeGame.player1Id === currentTgId ? activeGame.player2Username : activeGame.player1Username}</span>
                       </div>
                     </div>
@@ -3118,11 +3090,11 @@ function GameAppInner() {
                             </div>
                           </div>
                           <div className="space-y-1">
-                            <h4 className="text-lg font-bold text-white uppercase tracking-wider animate-pulse">Waiting for Opponent...</h4>
-                            <p className="text-[#708499] text-xs">Searching matchmaking queue. Real Multiplayer PvP matches require exactly two real Telegram players.</p>
+                            <h4 className="text-lg font-bold text-white uppercase tracking-wider animate-pulse">{' '}{tx("Waiting for Opponent...")}{' '}</h4>
+                            <p className="text-[#708499] text-xs">{' '}{tx("Searching matchmaking queue. Real Multiplayer PvP matches require exactly two real Telegram players.")}{' '}</p>
                             <div className="flex items-center justify-center gap-1.5 mt-2 bg-[#242f3d]/40 py-1.5 px-3 rounded-xl max-w-xs mx-auto text-[11px] text-[#3390ec] font-bold">
                               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                              <span>Queue Status: Active</span>
+                              <span>{' '}{tx("Queue Status: Active")}{' '}</span>
                             </div>
                           </div>
                           
@@ -3130,9 +3102,7 @@ function GameAppInner() {
                             <button
                               onClick={handleCancelMatchmaking}
                               className="w-full bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
-                            >
-                              Cancel Matchmaking
-                            </button>
+                            >{' '}{tx("Cancel Matchmaking")}{' '}</button>
                             <button
                               onClick={() => {
                                 handleCancelMatchmaking();
@@ -3140,9 +3110,7 @@ function GameAppInner() {
                               }}
                               className="w-full bg-[#3390ec]/20 hover:bg-[#3390ec] text-[#3390ec] hover:text-white border border-[#3390ec]/30 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-1.5"
                             >
-                              <Cpu className="w-4 h-4" />
-                              Play with Bot instead 🤖
-                            </button>
+                              <Cpu className="w-4 h-4" />{' '}{tx("Play with Bot instead 🤖")}{' '}</button>
                           </div>
                         </motion.div>
                       )}
@@ -3150,7 +3118,7 @@ function GameAppInner() {
                       {getArenaState() === 'countdown' && (() => {
                         const isP1 = activeGame?.player1Id === currentTgId;
                         const myUsername = isP1 ? (activeGame?.player1Username || currentUsername) : (activeGame?.player2Username || currentUsername);
-                        const oppUsername = isP1 ? (activeGame?.player2Username || "Opponent") : (activeGame?.player1Username || "Opponent");
+                        const oppUsername = isP1 ? (activeGame?.player2Username || tx("Opponent")) : (activeGame?.player1Username || tx("Opponent"));
 
                         const myWins = isP1 ? (activeGame?.player1Profile?.wins ?? profile?.wins ?? 0) : (activeGame?.player2Profile?.wins ?? profile?.wins ?? 0);
                         const oppWins = isP1 ? (activeGame?.player2Profile?.wins ?? 12) : (activeGame?.player1Profile?.wins ?? 12);
@@ -3171,9 +3139,7 @@ function GameAppInner() {
                           >
                             {/* Title Banner */}
                             <div className="relative">
-                              <span className="bg-[#242f3d]/80 text-[#3390ec] text-[10px] uppercase font-black tracking-widest border border-[#3390ec]/30 px-4 py-1.5 rounded-full animate-pulse">
-                                ⚔️ Battle Initiated ⚔️
-                              </span>
+                              <span className="bg-[#242f3d]/80 text-[#3390ec] text-[11px] uppercase font-black tracking-widest border border-[#3390ec]/30 px-4 py-1.5 rounded-full animate-pulse">{' '}{tx("⚔️ Battle Initiated ⚔️")}{' '}</span>
                             </div>
 
                             {/* Opponent Reveal Grid */}
@@ -3189,9 +3155,9 @@ function GameAppInner() {
                                   </div>
                                 </div>
                                 <div className="space-y-0.5">
-                                  <span className="text-[10px] font-black text-[#708499] uppercase tracking-wider block">You</span>
+                                  <span className="text-[11px] font-black text-[#708499] uppercase tracking-wider block">{' '}{tx("You")}{' '}</span>
                                   <span className="text-xs font-bold text-white block truncate max-w-[90px]">@{myUsername}</span>
-                                  <span className={`text-[9px] font-bold ${myRank.color} block`}>{getLocalizedRankName(myRank.name, currentLanguage)}</span>
+                                  <span className={`text-[11px] font-bold ${myRank.color} block`}>{getLocalizedRankName(myRank.name, currentLanguage)}</span>
                                 </div>
                               </div>
 
@@ -3211,9 +3177,9 @@ function GameAppInner() {
                                   </div>
                                 </div>
                                 <div className="space-y-0.5">
-                                  <span className="text-[10px] font-black text-[#708499] uppercase tracking-wider block">Opponent</span>
+                                  <span className="text-[11px] font-black text-[#708499] uppercase tracking-wider block">{' '}{tx("Opponent")}{' '}</span>
                                   <span className="text-xs font-bold text-indigo-300 block truncate max-w-[90px]">@{oppUsername}</span>
-                                  <span className={`text-[9px] font-bold ${oppRank.color} block`}>{getLocalizedRankName(oppRank.name, currentLanguage)}</span>
+                                  <span className={`text-[11px] font-bold ${oppRank.color} block`}>{getLocalizedRankName(oppRank.name, currentLanguage)}</span>
                                 </div>
                               </div>
                             </div>
@@ -3222,7 +3188,7 @@ function GameAppInner() {
                             <div className="bg-[#17212b]/60 border border-[#242f3d]/60 rounded-2xl p-5 space-y-3 relative overflow-hidden">
                               <div className="flex items-center justify-center gap-1.5">
                                 <span className="w-1.5 h-1.5 rounded-full bg-[#3390ec] animate-ping" />
-                                <span className="text-[10px] text-[#708499] font-black uppercase tracking-widest">Pre-Round Countdown</span>
+                                <span className="text-[11px] text-[#708499] font-black uppercase tracking-widest">{' '}{tx("Pre-Round Countdown")}{' '}</span>
                               </div>
 
                               <div className="relative h-24 flex items-center justify-center">
@@ -3240,17 +3206,13 @@ function GameAppInner() {
                                         {secondsLeft}
                                       </span>
                                     ) : (
-                                      <span className="text-5xl text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-orange-500 to-red-500 drop-shadow-[0_0_30px_rgba(245,158,11,0.5)] tracking-widest uppercase">
-                                        FIGHT! ⚔️
-                                      </span>
+                                      <span className="text-5xl text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-orange-500 to-red-500 drop-shadow-[0_0_30px_rgba(245,158,11,0.5)] tracking-widest uppercase">{' '}{tx("FIGHT! ⚔️")}{' '}</span>
                                     )}
                                   </motion.div>
                                 </AnimatePresence>
                               </div>
 
-                              <p className="text-[#708499] text-[10px] leading-relaxed max-w-[280px] mx-auto">
-                                Hold steady! Select your strategic move as soon as the battle begins.
-                              </p>
+                              <p className="text-[#708499] text-[11px] leading-relaxed max-w-[280px] mx-auto">{' '}{tx("Hold steady! Select your strategic move as soon as the battle begins.")}{' '}</p>
                             </div>
                           </motion.div>
                         );
@@ -3266,11 +3228,9 @@ function GameAppInner() {
                           className="space-y-6"
                         >
                           <div>
-                            <span className="bg-[#3390ec]/10 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/20 px-2.5 py-1 rounded-full">
-                              Action Phase
-                            </span>
-                            <h4 className="text-xl font-bold text-white mt-3">Choose Your Weapon</h4>
-                            <p className="text-[#708499] text-xs mt-0.5">Your move is processed and verified by the server</p>
+                            <span className="bg-[#3390ec]/10 text-[#3390ec] text-[11px] uppercase font-bold tracking-widest border border-[#3390ec]/20 px-2.5 py-1 rounded-full">{' '}{tx("Action Phase")}{' '}</span>
+                            <h4 className="text-xl font-bold text-white mt-3">{' '}{tx("Choose Your Weapon")}{' '}</h4>
+                            <p className="text-[#708499] text-xs mt-0.5">{' '}{tx("Your move is processed and verified by the server")}{' '}</p>
                           </div>
 
                           <div className="grid grid-cols-2 gap-4">
@@ -3278,29 +3238,29 @@ function GameAppInner() {
                               onClick={() => handleMakeMove('rock')}
                               className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
                             >
-                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">👊</span>
-                              <span className="font-bold text-sm text-white">ROCK</span>
+                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform"><WeaponIcon kind="rock" className="w-16 h-16" /></span>
+                              <span className="font-bold text-sm text-white">{' '}{tx("ROCK")}{' '}</span>
                             </button>
                             <button
                               onClick={() => handleMakeMove('scissors')}
                               className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
                             >
-                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">✂️</span>
-                              <span className="font-bold text-sm text-white">SCISSORS</span>
+                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform"><WeaponIcon kind="scissors" className="w-16 h-16" /></span>
+                              <span className="font-bold text-sm text-white">{' '}{tx("SCISSORS")}{' '}</span>
                             </button>
                             <button
                               onClick={() => handleMakeMove('paper')}
                               className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
                             >
-                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">📄</span>
-                              <span className="font-bold text-sm text-white">PAPER</span>
+                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform"><WeaponIcon kind="paper" className="w-16 h-16" /></span>
+                              <span className="font-bold text-sm text-white">{' '}{tx("PAPER")}{' '}</span>
                             </button>
                             <button
                               onClick={() => handleMakeMove('well')}
                               className="group bg-[#242f3d] hover:bg-[#3390ec] border border-[#2b3745] p-6 rounded-2xl flex flex-col items-center transition-all cursor-pointer"
                             >
-                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform">🕳️</span>
-                              <span className="font-bold text-sm text-white">WELL</span>
+                              <span className="text-4xl mb-2 group-hover:scale-110 transition-transform"><WeaponIcon kind="well" className="w-16 h-16" /></span>
+                              <span className="font-bold text-sm text-white">{' '}{tx("WELL")}{' '}</span>
                             </button>
                           </div>
                           
@@ -3310,7 +3270,7 @@ function GameAppInner() {
                                 onClick={handleLeaveMatch}
                                 className="text-xs text-[#708499] hover:text-red-400 font-bold transition flex items-center justify-center gap-1 mx-auto cursor-pointer"
                               >
-                                <span>Forfeit & Leave Match</span>
+                                <span>{' '}{tx("Forfeit & Leave Match")}{' '}</span>
                               </button>
                             </div>
                           )}
@@ -3328,24 +3288,22 @@ function GameAppInner() {
                         >
                           <div className="inline-block relative">
                             <span className="text-6xl animate-bounce block">
-                              {selectedMove === 'rock' && '👊'}
-                              {selectedMove === 'scissors' && '✂️'}
-                              {selectedMove === 'paper' && '📄'}
-                              {selectedMove === 'well' && '🕳️'}
+                              {selectedMove === 'rock' && <WeaponIcon kind="rock" className="w-24 h-24" />}
+                              {selectedMove === 'scissors' && <WeaponIcon kind="scissors" className="w-24 h-24" />}
+                              {selectedMove === 'paper' && <WeaponIcon kind="paper" className="w-24 h-24" />}
+                              {selectedMove === 'well' && <WeaponIcon kind="well" className="w-24 h-24" />}
                             </span>
                           </div>
                           <div className="space-y-1">
-                            <p className="text-white text-base font-bold">Successfully Submitted {selectedMove.toUpperCase()}!</p>
-                            <p className="text-[#708499] text-xs">Waiting for opponent to lock their weapon...</p>
+                            <p className="text-white text-base font-bold">{' '}{tx("Successfully Submitted")}{' '}{' '}{t(selectedMove==='well'?'ui.well':'play.'+selectedMove)}{' '}!</p>
+                            <p className="text-[#708499] text-xs">{' '}{tx("Waiting for opponent to lock their weapon...")}{' '}</p>
                           </div>
 
                           {activeGame && activeGame.player2Id === 'bot' && (
                             <button
                               onClick={() => handleMakeMove(selectedMove)}
                               className="mt-3 text-xs bg-[#3390ec] hover:bg-[#2b7ad0] text-white px-5 py-2.5 rounded-full font-bold uppercase transition cursor-pointer"
-                            >
-                              Resolve Bot Fight
-                            </button>
+                            >{' '}{tx("Resolve Bot Fight")}{' '}</button>
                           )}
 
                           {activeGame && activeGame.player2Id !== 'bot' && (
@@ -3353,9 +3311,7 @@ function GameAppInner() {
                               <button
                                 onClick={handleLeaveMatch}
                                 className="w-full bg-red-500/10 hover:bg-red-500 text-red-400 hover:text-white border border-red-500/20 py-2.5 px-4 rounded-xl text-xs font-bold uppercase transition cursor-pointer"
-                              >
-                                Forfeit Match
-                              </button>
+                              >{' '}{tx("Forfeit Match")}{' '}</button>
                             </div>
                           )}
                         </motion.div>
@@ -3395,28 +3351,24 @@ function GameAppInner() {
                               animate: { opacity: 1, y: 0, transition: { duration: 0.3 } }
                             }}
                           >
-                            <span className="bg-[#3390ec]/15 text-[#3390ec] text-[10px] uppercase font-bold tracking-widest border border-[#3390ec]/25 px-2.5 py-1 rounded-full">
-                              Resolution Phase
-                            </span>
+                            <span className="bg-[#3390ec]/15 text-[#3390ec] text-[11px] uppercase font-bold tracking-widest border border-[#3390ec]/25 px-2.5 py-1 rounded-full">{' '}{tx("Resolution Phase")}{' '}</span>
                             
                             {activeGame.winnerId === 'draw' ? (
-                              <h3 className="text-2xl font-bold text-amber-400 mt-4">It's a DRAW! 🤝</h3>
+                              <h3 className="text-2xl font-bold text-amber-400 mt-4">{' '}{tx("It's a DRAW! 🤝")}{' '}</h3>
                             ) : activeGame.forfeitedBy ? (
                               activeGame.forfeitedBy === currentTgId ? (
-                                <h3 className="text-2xl font-bold text-red-500 mt-4">YOU FORFEIT 💀</h3>
+                                <h3 className="text-2xl font-bold text-red-500 mt-4">{' '}{t('ui.forfeited')}{' '}</h3>
                               ) : (
-                                <h3 className="text-2xl font-bold text-emerald-400 mt-4">W.O. VICTORY! 🎉</h3>
+                                <h3 className="text-2xl font-bold text-emerald-400 mt-4">{' '}{tx("W.O. VICTORY! 🎉")}{' '}</h3>
                               )
                             ) : activeGame.winnerId === currentTgId ? (
                               <motion.h3 
                                 className="text-2xl font-bold text-emerald-400 mt-4"
                                 animate={{ scale: [1, 1.08, 1], rotate: [0, 1, -1, 0] }}
                                 transition={{ duration: 0.5, delay: 0.2, repeat: Infinity, repeatType: "reverse", repeatDelay: 3 }}
-                              >
-                                VICTORY! 🎉
-                              </motion.h3>
+                              >{' '}{tx("VICTORY! 🎉")}{' '}</motion.h3>
                             ) : (
-                              <h3 className="text-2xl font-bold text-red-400 mt-4">DEFEAT! 💀</h3>
+                              <h3 className="text-2xl font-bold text-red-400 mt-4">{' '}{tx("DEFEAT! 💀")}{' '}</h3>
                             )}
                           </motion.div>
 
@@ -3434,38 +3386,38 @@ function GameAppInner() {
                             }`} />
 
                             <div className="text-center space-y-1 z-10">
-                              <span className="text-[10px] text-[#708499] block font-semibold">Your Move</span>
+                              <span className="text-[11px] text-[#708499] block font-semibold">{' '}{tx("Your Move")}{' '}</span>
                               <motion.span 
                                 className="text-5xl block py-2"
                                 initial={{ scale: 0.5 }}
                                 animate={{ scale: 1, transition: { type: "spring", stiffness: 200, damping: 12, delay: 0.25 } }}
                               >
                                 {activeGame.player1Id === currentTgId ? (
-                                  activeGame.player1Move === 'rock' ? '👊' : activeGame.player1Move === 'scissors' ? '✂️' : activeGame.player1Move === 'paper' ? '📄' : activeGame.player1Move === 'well' ? '🕳️' : '❓'
+                                  activeGame.player1Move ? <WeaponIcon kind={activeGame.player1Move} className="w-20 h-20" /> : '❓'
                                 ) : (
-                                  activeGame.player2Move === 'rock' ? '👊' : activeGame.player2Move === 'scissors' ? '✂️' : activeGame.player2Move === 'paper' ? '📄' : activeGame.player2Move === 'well' ? '🕳️' : '❓'
+                                  activeGame.player2Move ? <WeaponIcon kind={activeGame.player2Move} className="w-20 h-20" /> : '❓'
                                 )}
                               </motion.span>
                               <span className="capitalize text-sm font-bold text-white">
-                                {activeGame.player1Id === currentTgId ? (activeGame.player1Move || "No Move") : (activeGame.player2Move || "No Move")}
+                                {activeGame.player1Id === currentTgId ? (activeGame.player1Move ? t(activeGame.player1Move==='well'?'ui.well':'play.'+activeGame.player1Move) : t('ui.noMove')) : (activeGame.player2Move ? t(activeGame.player2Move==='well'?'ui.well':'play.'+activeGame.player2Move) : t('ui.noMove'))}
                               </span>
                             </div>
 
                             <div className="text-center space-y-1 border-l border-[#2b3745] z-10">
-                              <span className="text-[10px] text-[#708499] block font-semibold">Opponent Move</span>
+                              <span className="text-[11px] text-[#708499] block font-semibold">{' '}{tx("Opponent Move")}{' '}</span>
                               <motion.span 
                                 className="text-5xl block py-2"
                                 initial={{ scale: 0.5 }}
                                 animate={{ scale: 1, transition: { type: "spring", stiffness: 200, damping: 12, delay: 0.35 } }}
                               >
                                 {activeGame.player1Id === currentTgId ? (
-                                  activeGame.player2Move === 'rock' ? '👊' : activeGame.player2Move === 'scissors' ? '✂️' : activeGame.player2Move === 'paper' ? '📄' : activeGame.player2Move === 'well' ? '🕳️' : '❓'
+                                  activeGame.player2Move ? <WeaponIcon kind={activeGame.player2Move} className="w-20 h-20" /> : '❓'
                                 ) : (
-                                  activeGame.player1Move === 'rock' ? '👊' : activeGame.player1Move === 'scissors' ? '✂️' : activeGame.player1Move === 'paper' ? '📄' : activeGame.player1Move === 'well' ? '🕳️' : '❓'
+                                  activeGame.player1Move ? <WeaponIcon kind={activeGame.player1Move} className="w-20 h-20" /> : '❓'
                                 )}
                               </motion.span>
                               <span className="capitalize text-sm font-bold text-white">
-                                {activeGame.player1Id === currentTgId ? (activeGame.player2Move || "No Move") : (activeGame.player1Move || "No Move")}
+                                {activeGame.player1Id === currentTgId ? (activeGame.player2Move ? t(activeGame.player2Move==='well'?'ui.well':'play.'+activeGame.player2Move) : t('ui.noMove')) : (activeGame.player1Move ? t(activeGame.player1Move==='well'?'ui.well':'play.'+activeGame.player1Move) : t('ui.noMove'))}
                               </span>
                             </div>
                           </motion.div>
@@ -3480,9 +3432,7 @@ function GameAppInner() {
                             <button
                               onClick={resetGameLobby}
                               className="bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold w-full py-4 px-4 rounded-2xl transition shadow-lg shadow-[#3390ec]/20 cursor-pointer"
-                            >
-                              PLAY AGAIN
-                            </button>
+                            >{' '}{tx("PLAY AGAIN")}{' '}</button>
                           </motion.div>
                         </motion.div>
                       )}
@@ -3500,17 +3450,15 @@ function GameAppInner() {
                             <ShieldAlert className="w-16 h-16 mx-auto animate-bounce" />
                           </div>
                           <div className="space-y-2">
-                            <h4 className="text-lg font-bold text-white">Match Dissolved</h4>
-                            <p className="text-[#708499] text-xs max-w-sm mx-auto">This battle was cancelled or dissolved because a player left the arena queue or failed to select their weapon.</p>
+                            <h4 className="text-lg font-bold text-white">{' '}{tx("Match Dissolved")}{' '}</h4>
+                            <p className="text-[#708499] text-xs max-w-sm mx-auto">{' '}{tx("This battle was cancelled or dissolved because a player left the arena queue or failed to select their weapon.")}{' '}</p>
                           </div>
                           
                           <div className="pt-4 max-w-xs mx-auto space-y-3">
                             <button
                               onClick={resetGameLobby}
                               className="w-full bg-[#3390ec] hover:bg-[#2b7ad0] text-white py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer"
-                            >
-                              Return to Lobby
-                            </button>
+                            >{' '}{tx("Return to Lobby")}{' '}</button>
                             <button
                               onClick={() => {
                                 resetGameLobby();
@@ -3518,9 +3466,7 @@ function GameAppInner() {
                               }}
                               className="w-full bg-[#242f3d]/60 hover:bg-[#242f3d]/90 text-[#3390ec] border border-[#2b3745] hover:border-[#3390ec]/30 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-1.5"
                             >
-                              <Gamepad2 className="w-4 h-4" />
-                              Search Another PvP Match
-                            </button>
+                              <Gamepad2 className="w-4 h-4" />{' '}{tx("Search Another PvP Match")}{' '}</button>
                             <button
                               onClick={() => {
                                 resetGameLobby();
@@ -3528,9 +3474,7 @@ function GameAppInner() {
                               }}
                               className="w-full bg-[#242f3d]/60 hover:bg-[#242f3d]/90 text-amber-400 border border-[#2b3745] hover:border-amber-400/30 py-3.5 px-4 rounded-xl text-xs font-bold uppercase tracking-wider transition cursor-pointer flex items-center justify-center gap-1.5"
                             >
-                              <Cpu className="w-4 h-4" />
-                              Quick Play with Bot
-                            </button>
+                              <Cpu className="w-4 h-4" />{' '}{tx("Quick Play with Bot")}{' '}</button>
                           </div>
                         </motion.div>
                       )}
@@ -3555,17 +3499,15 @@ function GameAppInner() {
                 <div className="w-16 h-16 bg-gradient-to-tr from-amber-400 to-yellow-600 rounded-3xl flex items-center justify-center shadow-lg shadow-amber-500/15 mb-3.5 border border-amber-500/20 animate-pulse">
                   <Trophy className="w-8 h-8 text-black" />
                 </div>
-                <h3 className="text-xl font-black text-white uppercase tracking-tight">Global Leaderboard</h3>
-                <p className="text-xs text-[#708499] mt-1 max-w-[280px]">
-                  The legendary top 10 warriors in the Rock Paper Scissors Well Arena. Updated in real time!
-                </p>
+                <h3 className="text-xl font-black text-white uppercase tracking-tight">{' '}{tx("Global Leaderboard")}{' '}</h3>
+                <p className="text-xs text-[#708499] mt-1 max-w-[280px]">{' '}{tx("The legendary top 10 warriors in the Rock Paper Scissors Well Arena. Updated in real time!")}{' '}</p>
                 
                 <button
                   id="btn_refresh_leaderboard"
                   onClick={() => { playClickSound(); fetchLeaderboard(); }}
                   disabled={leaderboardLoading}
                   className="absolute right-2 top-4 p-2.5 rounded-2xl bg-[#17212b] border border-[#242f3d] text-[#3390ec] hover:text-white transition cursor-pointer disabled:opacity-50"
-                  title="Refresh Leaderboard"
+                  title={tx("Refresh Leaderboard")}
                 >
                   <RefreshCw className={`w-4 h-4 ${leaderboardLoading ? 'animate-spin' : ''}`} />
                 </button>
@@ -3574,12 +3516,12 @@ function GameAppInner() {
               {leaderboardLoading ? (
                 <div className="flex flex-col items-center justify-center py-16 space-y-3">
                   <div className="w-8 h-8 border-3 border-[#3390ec] border-t-transparent rounded-full animate-spin" />
-                  <p className="text-xs text-[#708499] font-mono">Fetching champions...</p>
+                  <p className="text-xs text-[#708499] font-mono">{' '}{tx("Fetching champions...")}{' '}</p>
                 </div>
               ) : leaderboard.length === 0 ? (
                 <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-8 text-center space-y-3">
-                  <p className="text-[#708499] text-xs">No entries found yet.</p>
-                  <p className="text-[10px] text-[#708499]/85">Be the first to secure a victory and claim the crown!</p>
+                  <p className="text-[#708499] text-xs">{' '}{tx("No entries found yet.")}{' '}</p>
+                  <p className="text-[11px] text-[#708499]/85">{' '}{tx("Be the first to secure a victory and claim the crown!")}{' '}</p>
                 </div>
               ) : (
                 <div className="space-y-2.5">
@@ -3638,14 +3580,12 @@ function GameAppInner() {
                                 {player.username}
                               </p>
                               {isCurrentUser && (
-                                <span className="bg-[#3390ec]/15 text-[#3390ec] text-[8px] font-black tracking-widest uppercase px-1.5 py-0.5 rounded-sm shrink-0">
-                                  You
-                                </span>
+                                <span className="bg-[#3390ec]/15 text-[#3390ec] text-[11px] font-black tracking-widest uppercase px-1.5 py-0.5 rounded-sm shrink-0">{' '}{tx("You")}{' '}</span>
                               )}
                             </div>
-                            <div className="flex items-center gap-1 text-[9.5px] text-[#708499] mt-0.5">
+                            <div className="flex items-center gap-1 text-[11px] text-[#708499] mt-0.5">
                               <span>{playerRank.badgeEmoji}</span>
-                              <span className="truncate max-w-[120px]">{playerRank.name}</span>
+                              <span className="truncate max-w-[120px]">{getLocalizedRankName(playerRank.name,currentLanguage)}</span>
                             </div>
                           </div>
                         </div>
@@ -3653,11 +3593,10 @@ function GameAppInner() {
                         {/* Wins Count Statistics */}
                         <div className="text-right shrink-0">
                           <p className="text-xs font-black text-white font-mono leading-none">
-                            {player.wins} <span className="text-[10px] font-bold text-[#708499] uppercase">W</span>
+                            {player.wins} <span className="text-[11px] font-bold text-[#708499] uppercase">{' '}{tx("W")}{' '}</span>
                           </p>
-                          <p className="text-[9px] text-[#708499] font-mono leading-none mt-1">
-                            {player.gamesPlayed} matches • {winrate}% WR
-                          </p>
+                          <p className="text-[11px] text-[#708499] font-mono leading-none mt-1">
+                            {player.gamesPlayed}{' '}{tx("matches •")}{' '}{winrate}{' '}{tx("% WR")}{' '}</p>
                         </div>
                       </div>
                     );
@@ -3669,22 +3608,19 @@ function GameAppInner() {
               {profile && !leaderboard.some(p => p.telegramId === currentTgId) && (
                 <div className="bg-[#17212b]/40 border border-[#242f3d]/60 rounded-3xl p-4.5 flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-[#1e2c3a]/80 flex items-center justify-center text-xs font-extrabold text-[#708499]">
-                      Unranked
-                    </div>
+                    <div className="w-8 h-8 rounded-full bg-[#1e2c3a]/80 flex items-center justify-center text-xs font-extrabold text-[#708499]">{' '}{tx("Unranked")}{' '}</div>
                     <div>
-                      <p className="text-xs font-bold text-white">Your Current Position</p>
-                      <p className="text-[9.5px] text-[#708499] mt-0.5">Keep winning battles to place in the Top 10!</p>
+                      <p className="text-xs font-bold text-white">{' '}{tx("Your Current Position")}{' '}</p>
+                      <p className="text-[11px] text-[#708499] mt-0.5">{' '}{tx("Keep winning battles to place in the Top 10!")}{' '}</p>
                     </div>
                   </div>
                   
                   <div className="text-right">
                     <p className="text-xs font-black text-[#3390ec] font-mono leading-none">
-                      {profile.wins || 0} <span className="text-[10px] font-bold text-[#708499] uppercase">W</span>
+                      {profile.wins || 0} <span className="text-[11px] font-bold text-[#708499] uppercase">{' '}{tx("W")}{' '}</span>
                     </p>
-                    <p className="text-[9px] text-[#708499] font-mono leading-none mt-1">
-                      {profile.gamesPlayed || 0} matches
-                    </p>
+                    <p className="text-[11px] text-[#708499] font-mono leading-none mt-1">
+                      {profile.gamesPlayed || 0}{' '}{tx("matches")}{' '}</p>
                   </div>
                 </div>
               )}
@@ -3705,10 +3641,8 @@ function GameAppInner() {
                 <div className="w-16 h-16 bg-gradient-to-tr from-indigo-500 to-purple-600 rounded-3xl flex items-center justify-center shadow-lg shadow-indigo-500/15 mb-3.5 border border-indigo-500/20">
                   <Award className="w-8 h-8 text-white" />
                 </div>
-                <h3 className="text-xl font-black text-white uppercase tracking-tight">Daily Missions</h3>
-                <p className="text-xs text-[#708499] mt-1 max-w-[280px]">
-                  Power up your VIRAL Arena standing! Earn extra vVIRAL credits by completing daily challenges.
-                </p>
+                <h3 className="text-xl font-black text-white uppercase tracking-tight">{' '}{tx("Daily Missions")}{' '}</h3>
+                <p className="text-xs text-[#708499] mt-1 max-w-[280px]">{' '}{tx("Power up your VIRAL Arena standing! Earn extra vVIRAL credits by completing daily challenges.")}{' '}</p>
               </div>
 
               {/* Mission Grid list */}
@@ -3716,8 +3650,8 @@ function GameAppInner() {
                 {[
                   {
                     id: 'first_blood',
-                    title: 'First Blood',
-                    description: 'Engage in at least 1 match (PvP or Bot) in the Arena.',
+                    title: tx("First Blood"),
+                    description: tx("Engage in at least 1 match (PvP or Bot) in the Arena."),
                     target: 1,
                     reward: 100,
                     icon: '⚔️',
@@ -3725,8 +3659,8 @@ function GameAppInner() {
                   },
                   {
                     id: 'win_3_games',
-                    title: 'Champion Duelist',
-                    description: 'Claim victory in 3 matches in the Arena.',
+                    title: tx("Champion Duelist"),
+                    description: tx("Claim victory in 3 matches in the Arena."),
                     target: 3,
                     reward: 300,
                     icon: '🏆',
@@ -3734,8 +3668,8 @@ function GameAppInner() {
                   },
                   {
                     id: 'invite_friend',
-                    title: 'Ecosystem Recruiter',
-                    description: 'Invite 1 new combatant using your referral link.',
+                    title: tx("Ecosystem Recruiter"),
+                    description: tx("Invite 1 new combatant using your referral link."),
                     target: 1,
                     reward: 200,
                     icon: '👥',
@@ -3743,8 +3677,8 @@ function GameAppInner() {
                   },
                   {
                     id: 'join_chat',
-                    title: 'Arena Cadet',
-                    description: 'Join the official VIRAL community channel.',
+                    title: tx("Arena Cadet"),
+                    description: tx("Join the official VIRAL community channel."),
                     target: 1,
                     reward: 150,
                     icon: '📢',
@@ -3791,21 +3725,21 @@ function GameAppInner() {
                             {m.icon}
                           </div>
                           <div className="min-w-0">
-                            <h4 className="text-sm font-bold text-white leading-tight truncate">{m.title}</h4>
-                            <p className="text-[11px] text-[#708499] leading-snug mt-1">{m.description}</p>
+                            <h4 className="text-sm font-bold text-white leading-tight truncate">{' '}{tx(m.title)}{' '}</h4>
+                            <p className="text-[11px] text-[#708499] leading-snug mt-1">{' '}{tx(m.description)}{' '}</p>
                           </div>
                         </div>
                         <div className="text-right shrink-0">
                           <span className="text-xs font-black text-amber-500 block leading-none">+{m.reward}</span>
-                          <span className="text-[8px] text-[#708499] uppercase tracking-wider font-bold block mt-1">vVIRAL</span>
+                          <span className="text-[11px] text-[#708499] uppercase tracking-wider font-bold block mt-1">vVIRAL</span>
                         </div>
                       </div>
 
                       {/* Progress bar and claiming action */}
                       <div className="flex items-center justify-between gap-4 pt-1">
                         <div className="flex-1 space-y-1">
-                          <div className="flex justify-between text-[10px] font-mono">
-                            <span className="text-[#708499]">Progress</span>
+                          <div className="flex justify-between text-[11px] font-mono">
+                            <span className="text-[#708499]">{' '}{tx("Progress")}{' '}</span>
                             <span className={isCompleted ? "text-emerald-400 font-bold" : "text-[#3390ec]"}>
                               {finalProg} / {m.target}
                             </span>
@@ -3820,16 +3754,14 @@ function GameAppInner() {
 
                         <div className="shrink-0 flex flex-col items-end gap-1">
                           {isClaimed ? (
-                            <span className="px-3 py-1.5 rounded-xl text-[10px] font-black text-slate-500 bg-[#242f3d] border border-transparent block uppercase tracking-wider">
-                              Claimed
-                            </span>
+                            <span className="px-3 py-1.5 rounded-xl text-[11px] font-black text-slate-500 bg-[#242f3d] border border-transparent block uppercase tracking-wider">{' '}{tx("Claimed")}{' '}</span>
                           ) : isCompleted ? (
                             <button
                               onClick={() => { playClickSound(); handleClaimMission(m.id); }}
                               disabled={claimingMission[m.id]}
-                              className="px-4 py-1.5 rounded-xl text-[10px] font-black text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 transition transform active:scale-95 shadow-md shadow-emerald-500/10 cursor-pointer block uppercase tracking-wider animate-pulse"
+                              className="px-4 py-1.5 rounded-xl text-[11px] font-black text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 transition transform active:scale-95 shadow-md shadow-emerald-500/10 cursor-pointer block uppercase tracking-wider animate-pulse"
                             >
-                              {claimingMission[m.id] ? <RefreshCw className="w-3.5 h-3.5 animate-spin mx-auto" /> : "Claim"}
+                              {claimingMission[m.id] ? <RefreshCw className="w-3.5 h-3.5 animate-spin mx-auto" /> : t('missions.claim')}
                             </button>
                           ) : m.id === 'join_chat' ? (
                             <div className="flex flex-col items-center gap-1.5">
@@ -3838,9 +3770,9 @@ function GameAppInner() {
                                   <button
                                     onClick={() => { playClickSound(); m.action(); }}
                                     disabled={verifyingMembership}
-                                    className="px-3 py-1.5 rounded-xl text-[10px] font-black text-white bg-[#3390ec] hover:bg-[#2883e0] transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
+                                    className="px-3 py-1.5 rounded-xl text-[11px] font-black text-white bg-[#3390ec] hover:bg-[#2883e0] transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
                                   >
-                                    {verifyingMembership ? <RefreshCw className="w-3.5 h-3.5 animate-spin mx-auto" /> : "Verify Membership"}
+                                    {verifyingMembership ? <RefreshCw className="w-3.5 h-3.5 animate-spin mx-auto" /> : tx("Verify Membership")}
                                   </button>
                                   <button
                                     onClick={() => {
@@ -3851,27 +3783,21 @@ function GameAppInner() {
                                         window.open('https://t.me/VIRAL_App_Community', '_blank');
                                       }
                                     }}
-                                    className="text-[9px] text-[#3390ec] underline font-bold"
-                                  >
-                                    Re-join group
-                                  </button>
+                                    className="text-[11px] text-[#3390ec] underline font-bold"
+                                  >{' '}{tx("Re-join group")}{' '}</button>
                                 </>
                               ) : (
                                 <button
                                   onClick={() => { playClickSound(); m.action(); }}
-                                  className="px-4 py-1.5 rounded-xl text-[10px] font-black text-[#3390ec] bg-[#3390ec]/10 border border-[#3390ec]/25 hover:bg-[#3390ec]/20 transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
-                                >
-                                  Join Chat
-                                </button>
+                                  className="px-4 py-1.5 rounded-xl text-[11px] font-black text-[#3390ec] bg-[#3390ec]/10 border border-[#3390ec]/25 hover:bg-[#3390ec]/20 transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
+                                >{' '}{tx("Join Chat")}{' '}</button>
                               )}
                             </div>
                           ) : (
                             <button
-                              onClick={() => { playClickSound(); setActiveTab('play'); }}
-                              className="px-4 py-1.5 rounded-xl text-[10px] font-bold text-slate-400 bg-[#242f3d] border border-[#2b3745] hover:border-slate-500 transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
-                            >
-                              Go Play
-                            </button>
+                              aria-current={activeTab === 'play' ? 'page' : undefined} onClick={() => { playClickSound(); setActiveTab('play'); }}
+                              className="px-4 py-1.5 rounded-xl text-[11px] font-bold text-slate-400 bg-[#242f3d] border border-[#2b3745] hover:border-slate-500 transition transform active:scale-95 cursor-pointer block uppercase tracking-wider"
+                            >{' '}{tx("Go Play")}{' '}</button>
                           )}
                         </div>
                       </div>
@@ -3893,16 +3819,16 @@ function GameAppInner() {
               className="space-y-6"
             >
               <div className="text-center py-4">
-                <h3 className="text-xl font-bold text-white">Referral Program</h3>
-                <p className="text-[#708499] text-xs mt-1">Invite friends and stack credits through two levels of reach!</p>
+                <h3 className="text-xl font-bold text-white">{' '}{tx("Referral Program")}{' '}</h3>
+                <p className="text-[#708499] text-xs mt-1">{' '}{tx("Invite friends and stack credits through two levels of reach!")}{' '}</p>
               </div>
 
               {/* Commission details */}
               <div className="space-y-4">
                 <div className="bg-[#242f3d] p-4 rounded-xl flex justify-between items-center border border-[#2b3745]">
                   <div>
-                    <p className="text-[#708499] text-xs">Level 1 (Direct)</p>
-                    <p className="font-bold text-xl text-white">10% Commission</p>
+                    <p className="text-[#708499] text-xs">{' '}{tx("Level 1 (Direct)")}{' '}</p>
+                    <p className="font-bold text-xl text-white">{' '}{tx("10% Commission")}{' '}</p>
                   </div>
                   <div className="w-10 h-10 bg-[#3390ec]/10 rounded-full flex items-center justify-center border border-[#3390ec]/25">
                     <span className="text-[#3390ec] text-xs font-bold">L1</span>
@@ -3911,8 +3837,8 @@ function GameAppInner() {
 
                 <div className="bg-[#242f3d] p-4 rounded-xl flex justify-between items-center border border-[#2b3745]">
                   <div>
-                    <p className="text-[#708499] text-xs">Level 2 (Indirect)</p>
-                    <p className="font-bold text-xl text-white">5% Commission</p>
+                    <p className="text-[#708499] text-xs">{' '}{tx("Level 2 (Indirect)")}{' '}</p>
+                    <p className="font-bold text-xl text-white">{' '}{tx("5% Commission")}{' '}</p>
                   </div>
                   <div className="w-10 h-10 bg-[#3390ec]/10 rounded-full flex items-center justify-center border border-[#3390ec]/25">
                     <span className="text-indigo-400 text-xs font-bold">L2</span>
@@ -3922,7 +3848,7 @@ function GameAppInner() {
 
               {/* Dynamic generated invite code box */}
               <div className="p-4 bg-[#17212b] rounded-xl border border-dashed border-[#242f3d] mb-4">
-                <p className="text-[#708499] text-[10px] uppercase mb-1 font-bold">Your Custom Referral Link</p>
+                <p className="text-[#708499] text-[11px] uppercase mb-1 font-bold">{' '}{tx("Your Custom Referral Link")}{' '}</p>
                 <div className="flex gap-2 items-center">
                   <div className="flex-1 text-sm text-[#3390ec] truncate font-mono">
                     {getReferralUrl()}
@@ -3931,7 +3857,7 @@ function GameAppInner() {
                     id="btn_view_referral_qr"
                     onClick={() => { playClickSound(); setShowReferralQrModal(true); }}
                     className="bg-[#242f3d] border border-[#2b3745] hover:bg-[#2c394a] text-[#3390ec] p-2.5 rounded-xl transition transform active:scale-95 flex items-center justify-center cursor-pointer"
-                    title="View QR Code"
+                    title={tx("View QR Code")}
                   >
                     <QrCode className="w-4 h-4" />
                   </button>
@@ -3939,7 +3865,7 @@ function GameAppInner() {
                     id="btn_copy_referral_link"
                     onClick={handleCopyReferral}
                     className="bg-white text-black p-2.5 rounded-xl hover:bg-slate-200 transition transform active:scale-95 flex items-center justify-center cursor-pointer"
-                    title="Copy Link"
+                    title={tx("Copy Link")}
                   >
                     {copiedLink ? <Check className="w-4 h-4 text-emerald-600 font-bold" /> : <Copy className="w-4 h-4" />}
                   </button>
@@ -3949,21 +3875,21 @@ function GameAppInner() {
               {/* Stats dashboard */}
               <div className="bg-[#17212b] rounded-3xl p-6 border border-[#242f3d] flex-grow">
                 <div className="flex items-center justify-between border-b border-[#242f3d] pb-3 mb-4">
-                  <span className="text-sm font-bold text-white uppercase tracking-wider">Referral Metrics</span>
+                  <span className="text-sm font-bold text-white uppercase tracking-wider">{' '}{tx("Referral Metrics")}{' '}</span>
                   <Users className="w-4 h-4 text-[#3390ec]" />
                 </div>
 
                 <div className="grid grid-cols-3 gap-3">
                   <div className="bg-[#242f3d] p-3 rounded-xl text-center border border-[#2b3745]">
-                    <span className="text-[10px] text-[#708499] block font-semibold">Level 1</span>
+                    <span className="text-[11px] text-[#708499] block font-semibold">{' '}{tx("Level 1")}{' '}</span>
                     <span className="text-xl font-mono font-bold text-white block mt-0.5">{profile?.referralsCountL1 || 0}</span>
                   </div>
                   <div className="bg-[#242f3d] p-3 rounded-xl text-center border border-[#2b3745]">
-                    <span className="text-[10px] text-[#708499] block font-semibold">Level 2</span>
+                    <span className="text-[11px] text-[#708499] block font-semibold">{' '}{tx("Level 2")}{' '}</span>
                     <span className="text-xl font-mono font-bold text-white block mt-0.5">{profile?.referralsCountL2 || 0}</span>
                   </div>
                   <div className="bg-[#242f3d] p-3 rounded-xl text-center border border-[#2b3745]">
-                    <span className="text-[10px] text-[#708499] block font-semibold">Total</span>
+                    <span className="text-[11px] text-[#708499] block font-semibold">{' '}{tx("Total")}{' '}</span>
                     <span className="text-xl font-mono font-bold text-[#3390ec] block mt-0.5">
                       {(profile?.referralsCountL1 || 0) + (profile?.referralsCountL2 || 0)}
                     </span>
@@ -3991,7 +3917,7 @@ function GameAppInner() {
                       <span>{telegramName}</span>
                       {(profile?.streak ?? 0) > 0 && (
                         <span 
-                          className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#3390ec]/15 text-[#3390ec] border border-[#3390ec]/20 inline-flex items-center gap-1 animate-pulse"
+                          className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#3390ec]/15 text-[#3390ec] border border-[#3390ec]/20 inline-flex items-center gap-1 animate-pulse"
                           title={`Consecutive Streak: ${profile.streak} Days`}
                         >
                           🔥 {profile.streak}
@@ -3999,25 +3925,24 @@ function GameAppInner() {
                       )}
                     </p>
                     <p className={`text-xs font-bold leading-tight mt-1 flex items-center gap-1 ${currentRank.color}`}>
-                      <span>{currentRank.badgeEmoji}</span> {currentRank.name}
+                      <span>{currentRank.badgeEmoji}</span> {getLocalizedRankName(currentRank.name,currentLanguage)}
                     </p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="text-green-500 font-bold text-sm">W: {profile?.wins || 0}</p>
-                  <p className="text-red-400 font-bold text-xs">L: {profile?.losses || 0}</p>
+                  <p className="text-green-500 font-bold text-sm">{' '}{tx("W:")}{' '}{profile?.wins || 0}</p>
+                  <p className="text-red-400 font-bold text-xs">{' '}{tx("L:")}{' '}{profile?.losses || 0}</p>
                 </div>
               </div>
 
               <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-4 space-y-2 text-xs">
-                <p className="text-slate-300">Telegram: <span className="font-semibold text-white">{telegramHandle ? '@' + telegramHandle : 'username не установлен'}</span></p>
+                <p className="text-slate-300">Telegram: <span className="font-semibold text-white">{telegramHandle ? '@' + telegramHandle : tx("username не установлен")}</span></p>
                 <p className="text-slate-400">Telegram ID: <span className="font-mono text-white select-all">{currentTgId}</span></p>
-                <p className="text-slate-400">Роль: <span className={isUserAnAdmin ? 'text-amber-300' : 'text-slate-300'}>{syncing ? 'проверяется…' : isUserAnAdmin ? 'администратор' : 'игрок'}</span></p>
+                <p className="text-slate-400">{' '}{tx("Роль:")}{' '}<span className={isUserAnAdmin ? 'text-amber-300' : 'text-slate-300'}>{syncing ? tx("проверяется…") : isUserAnAdmin ? tx("администратор") : tx("игрок")}</span></p>
                 {isUserAnAdmin ? (
                   <button type="button" onClick={() => setActiveTab('admin')} className="w-full bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/20 py-3 px-4 rounded-xl text-amber-300 font-bold flex items-center justify-center gap-2">
-                    <ShieldAlert className="w-4 h-4" />Открыть управление игрой
-                  </button>
-                ) : <p className="text-[#708499]">Админка доступна аккаунту, назначенному владельцем по Telegram ID. Имя и nickname не дают права администратора.</p>}
+                    <ShieldAlert className="w-4 h-4" />{' '}{tx("Открыть управление игрой")}{' '}</button>
+                ) : <p className="text-[#708499]">{' '}{tx("Админка доступна аккаунту, назначенному владельцем по Telegram ID. Имя и nickname не дают права администратора.")}{' '}</p>}
               </div>
 
               {/* Dynamic Rank Badge & Progression Panel */}
@@ -4025,10 +3950,9 @@ function GameAppInner() {
                 <div className="flex items-center justify-between pb-4 border-b border-white/5">
                   <div className="flex items-center space-x-2">
                     <span className="text-xl">{currentRank.badgeEmoji}</span>
-                    <span className="text-xs font-black tracking-wider text-white uppercase">Arena Battle License</span>
+                    <span className="text-xs font-black tracking-wider text-white uppercase">{' '}{tx("Arena Battle License")}{' '}</span>
                   </div>
-                  <span className="text-[10px] bg-white/10 text-white font-mono px-2 py-0.5 rounded-full font-bold">
-                    Tier {RANKS.findIndex(r => r.name === currentRank.name) + 1} / {RANKS.length}
+                  <span className="text-[11px] bg-white/10 text-white font-mono px-2 py-0.5 rounded-full font-bold">{' '}{tx("Tier")}{' '}{RANKS.findIndex(r => r.name === currentRank.name) + 1} / {RANKS.length}
                   </span>
                 </div>
 
@@ -4044,13 +3968,12 @@ function GameAppInner() {
                   {/* Rank Title & Description */}
                   <div className="space-y-1 min-w-0">
                     <h4 className={`text-lg font-black tracking-tight leading-tight uppercase ${currentRank.color}`}>
-                      {currentRank.name}
+                      {getLocalizedRankName(currentRank.name,currentLanguage)}
                     </h4>
                     <p className="text-white/70 text-xs leading-snug">
-                      {currentRank.description}
+                      {getLocalizedRankDesc(currentRank.description,currentLanguage)}
                     </p>
-                    <p className="text-[#708499] text-[10px]">
-                      Current Wins: <span className="font-bold font-mono text-white">{userWins}</span>
+                    <p className="text-[#708499] text-[11px]">{' '}{tx("Current Wins:")}{' '}<span className="font-bold font-mono text-white">{userWins}</span>
                     </p>
                   </div>
                 </div>
@@ -4060,8 +3983,8 @@ function GameAppInner() {
                   {nextRankInfo.rank ? (
                     <>
                       <div className="flex justify-between text-[11px]">
-                        <span className="text-[#708499]">Next Tier: <b className="text-white/90">{nextRankInfo.rank.name}</b></span>
-                        <span className="font-bold font-mono text-white/90">{nextRankInfo.winsNeeded} wins left</span>
+                        <span className="text-[#708499]">{' '}{tx("Next Tier:")}{' '}<b className="text-white/90">{getLocalizedRankName(nextRankInfo.rank.name,currentLanguage)}</b></span>
+                        <span className="font-bold font-mono text-white/90">{nextRankInfo.winsNeeded}{' '}{tx("wins left")}{' '}</span>
                       </div>
                       <div className="w-full bg-white/5 rounded-full h-2.5 overflow-hidden p-[1px] border border-white/10">
                         <motion.div
@@ -4071,18 +3994,16 @@ function GameAppInner() {
                           transition={{ duration: 0.8, ease: "easeOut" }}
                         />
                       </div>
-                      <div className="flex justify-between text-[9px] text-[#708499] font-mono leading-none">
-                        <span>{currentRank.minWins} Wins</span>
-                        <span>{nextRankInfo.percent}% Progress</span>
-                        <span>{nextRankInfo.rank.minWins} Wins</span>
+                      <div className="flex justify-between text-[11px] text-[#708499] font-mono leading-none">
+                        <span>{currentRank.minWins}{' '}{tx("Wins")}{' '}</span>
+                        <span>{nextRankInfo.percent}{' '}{tx("% Progress")}{' '}</span>
+                        <span>{nextRankInfo.rank.minWins}{' '}{tx("Wins")}{' '}</span>
                       </div>
                     </>
                   ) : (
                     <div className="text-center py-2 bg-white/5 rounded-2xl border border-white/10">
-                      <p className="text-yellow-400 font-extrabold text-xs flex justify-center items-center gap-1.5 animate-bounce">
-                        🎉 SUPREME STAGE COMPLETED 🎉
-                      </p>
-                      <p className="text-[#708499] text-[10px] mt-0.5">You are an absolute legend of the RSPW Arena!</p>
+                      <p className="text-yellow-400 font-extrabold text-xs flex justify-center items-center gap-1.5 animate-bounce">{' '}{tx("🎉 SUPREME STAGE COMPLETED 🎉")}{' '}</p>
+                      <p className="text-[#708499] text-[11px] mt-0.5">{' '}{tx("You are an absolute legend of the RSPW Arena!")}{' '}</p>
                     </div>
                   )}
                 </div>
@@ -4093,8 +4014,7 @@ function GameAppInner() {
                     id="btn_view_rank_tiers"
                     onClick={() => { playClickSound(); setShowRankTiersModal(true); }}
                     className="text-xs text-[#3390ec] hover:text-[#3390ec]/80 flex items-center gap-1 font-semibold transition cursor-pointer"
-                  >
-                    View All Arena Tiers <ChevronRight className="w-3.5 h-3.5" />
+                  >{' '}{tx("View All Arena Tiers")}{' '}<ChevronRight className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
@@ -4102,21 +4022,21 @@ function GameAppInner() {
               {/* Stats overview */}
               <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 space-y-4">
                 <div className="flex items-center justify-between border-b border-[#242f3d] pb-3">
-                  <span className="text-sm font-bold text-white uppercase tracking-wider">{t('profile.stats')}</span>
+                  <span className="text-sm font-bold text-white uppercase tracking-wider">{' '}{t('profile.stats')}{' '}</span>
                   <Trophy className="w-4 h-4 text-amber-500" />
                 </div>
 
                 <div className="grid grid-cols-3 gap-2 text-center">
                   <div className="bg-[#242f3d] p-2.5 rounded-xl border border-[#2b3745]">
-                    <span className="text-[10px] text-[#708499] block font-semibold">{t('profile.played')}</span>
+                    <span className="text-[11px] text-[#708499] block font-semibold">{' '}{t('profile.played')}{' '}</span>
                     <span className="text-sm font-bold block text-white mt-0.5">{profile?.gamesPlayed || 0}</span>
                   </div>
                   <div className="bg-[#242f3d] p-2.5 rounded-xl border border-[#2b3745] border-b-emerald-500/30">
-                    <span className="text-[10px] text-[#708499] block font-semibold">{t('profile.won')}</span>
+                    <span className="text-[11px] text-[#708499] block font-semibold">{' '}{t('profile.won')}{' '}</span>
                     <span className="text-sm font-bold block text-emerald-400 mt-0.5">{profile?.wins || 0}</span>
                   </div>
                   <div className="bg-[#242f3d] p-2.5 rounded-xl border border-[#2b3745] border-b-[#3390ec]/30">
-                    <span className="text-[10px] text-[#708499] block font-semibold">{t('profile.rate')}</span>
+                    <span className="text-[11px] text-[#708499] block font-semibold">{' '}{t('profile.rate')}{' '}</span>
                     <span className="text-sm font-bold block text-[#3390ec] mt-0.5">
                       {profile && profile.gamesPlayed > 0 
                         ? `${Math.round((profile.wins / profile.gamesPlayed) * 100)}%`
@@ -4130,7 +4050,7 @@ function GameAppInner() {
               {/* Game Preferences Card */}
               <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 space-y-4">
                 <div className="flex items-center justify-between border-b border-[#242f3d] pb-3">
-                  <span className="text-sm font-bold text-white uppercase tracking-wider">{t('profile.settings')}</span>
+                  <span className="text-sm font-bold text-white uppercase tracking-wider">{' '}{t('profile.settings')}{' '}</span>
                   <Volume2 className="w-4 h-4 text-[#3390ec]" />
                 </div>
                 <div className="flex items-center justify-between bg-[#242f3d] p-3.5 rounded-2xl border border-[#2b3745]">
@@ -4139,12 +4059,13 @@ function GameAppInner() {
                       {soundsMuted ? <VolumeX className="w-5 h-5 text-red-400" /> : <Volume2 className="w-5 h-5 text-green-400" />}
                     </div>
                     <div>
-                      <p className="font-bold text-xs text-white">{t('profile.sounds')}</p>
-                      <p className="text-[9.5px] text-[#708499] leading-tight mt-0.5">{t('profile.soundsDesc')}</p>
+                      <p className="font-bold text-xs text-white">{' '}{t('profile.sounds')}{' '}</p>
+                      <p className="text-[11px] text-[#708499] leading-tight mt-0.5">{' '}{t('profile.soundsDesc')}{' '}</p>
                     </div>
                   </div>
                   <button
                     id="btn_sound_settings_toggle"
+                    role="switch" aria-checked={!soundsMuted} aria-label={t("profile.sounds")}
                     onClick={() => toggleSoundMute()}
                     className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${soundsMuted ? 'bg-[#708499]/30' : 'bg-[#3390ec]'}`}
                   >
@@ -4154,14 +4075,19 @@ function GameAppInner() {
                   </button>
                 </div>
 
-                {/* Language Selector inside Settings (as required by prompt) */}
+                <div className="space-y-3 rounded-2xl bg-[#242f3d] p-4">
+                  <label htmlFor="sound-volume" className="flex justify-between text-sm text-slate-200"><span>{' '}{t('ui.volume')}{' '}</span><span>{Math.round(soundVolume*100)}%</span></label>
+                  <input id="sound-volume" type="range" min="0" max="1" step="0.05" value={soundVolume} onChange={event=>{const value=Number(event.target.value);updateSoundVolume(value);setSoundVolume(value);}} className="w-full accent-violet-400" />
+                  <button type="button" disabled={soundsMuted||soundVolume===0} onClick={playWinChime} className="arcade-secondary w-full">♫ {' '}{t('ui.soundPreview')}{' '}</button>
+                </div>
+                {/* Language Selector */}
                 <div className="bg-[#242f3d] p-3.5 rounded-2xl border border-[#2b3745] space-y-3">
                   <div className="flex items-center space-x-3">
                     <div className="w-9 h-9 rounded-xl bg-[#17212b] flex items-center justify-center shrink-0">
                       <span className="text-sm font-bold text-slate-300">A</span>
                     </div>
                     <div>
-                      <p className="font-bold text-xs text-white">{t('profile.language')}</p>
+                      <p className="font-bold text-xs text-white">{' '}{t('profile.language')}{' '}</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -4189,21 +4115,21 @@ function GameAppInner() {
               {/* Connection metadata info */}
               <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 text-xs space-y-3">
                 <div className="flex justify-between items-center">
-                  <span className="text-[#708499]">TON Wallet Address:</span>
+                  <span className="text-[#708499]">{' '}{t('profile.tonAddress')}{' '}</span>
                   <span className="font-mono text-[11px] text-[#3390ec] bg-[#242f3d] px-2.5 py-1 rounded-full border border-[#2b3745]">
-                    {walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)}` : 'Disconnected'}
+                    {walletAddress ? `${walletAddress.slice(0, 6)}...${walletAddress.slice(-6)}` : tx("Disconnected")}
                   </span>
                 </div>
                 <div className="flex justify-between border-t border-[#242f3d] pt-3">
-                  <span className="text-[#708499]">Referred By:</span>
+                  <span className="text-[#708499]">{' '}{tx("Referred By:")}{' '}</span>
                   <span className="font-mono text-white">
-                    {profile?.referredBy ? `@${profile.referredBy}` : 'Organic (None)'}
+                    {profile?.referredBy ? `@${profile.referredBy}` : tx("Organic (None)")}
                   </span>
                 </div>
                 <div className="flex justify-between border-t border-[#242f3d] pt-3">
-                  <span className="text-[#708499]">Profile Timestamp:</span>
-                  <span className="text-[#708499] text-[10px]">
-                    {profile?.createdAt ? new Date(profile.createdAt).toLocaleDateString() : 'Syncing...'}
+                  <span className="text-[#708499]">{' '}{tx("Profile Timestamp:")}{' '}</span>
+                  <span className="text-[#708499] text-[11px]">
+                    {profile?.createdAt ? new Date(profile.createdAt).toLocaleDateString(currentLanguage) : tx("Syncing...")}
                   </span>
                 </div>
               </div>
@@ -4211,47 +4137,45 @@ function GameAppInner() {
               {/* Profile Referral Program */}
               <div className="bg-[#17212b] border border-[#242f3d] rounded-3xl p-6 space-y-4">
                 <div className="flex items-center justify-between border-b border-[#242f3d] pb-3">
-                  <span className="text-sm font-bold text-white uppercase tracking-wider">Referral Program</span>
+                  <span className="text-sm font-bold text-white uppercase tracking-wider">{' '}{tx("Referral Program")}{' '}</span>
                   <Users className="w-4 h-4 text-[#3390ec]" />
                 </div>
-                <p className="text-xs text-[#708499] leading-relaxed">
-                  Invite other duelists and earn commission rewards on multiple levels of active gameplay stakes!
-                </p>
+                <p className="text-xs text-[#708499] leading-relaxed">{' '}{tx("Invite other duelists and earn commission rewards on multiple levels of active gameplay stakes!")}{' '}</p>
 
                 {/* Level metrics summary */}
                 <div className="grid grid-cols-2 gap-3 pt-1">
                   <div className="bg-[#242f3d]/60 border border-[#2b3745] p-3 rounded-2xl flex justify-between items-center">
                     <div>
-                      <p className="text-[#708499] text-[9px] font-bold uppercase">L1 Direct</p>
+                      <p className="text-[#708499] text-[11px] font-bold uppercase">{' '}{tx("L1 Direct")}{' '}</p>
                       <p className="font-mono text-lg font-black text-white mt-1">{profile?.referralsCountL1 || 0}</p>
                     </div>
-                    <span className="text-[10px] text-amber-500 bg-amber-500/10 border border-amber-500/20 font-bold px-2 py-0.5 rounded-full leading-none shrink-0">10%</span>
+                    <span className="text-[11px] text-amber-500 bg-amber-500/10 border border-amber-500/20 font-bold px-2 py-0.5 rounded-full leading-none shrink-0">10%</span>
                   </div>
                   <div className="bg-[#242f3d]/60 border border-[#2b3745] p-3 rounded-2xl flex justify-between items-center">
                     <div>
-                      <p className="text-[#708499] text-[9px] font-bold uppercase">L2 Indirect</p>
+                      <p className="text-[#708499] text-[11px] font-bold uppercase">{' '}{tx("L2 Indirect")}{' '}</p>
                       <p className="font-mono text-lg font-black text-white mt-1">{profile?.referralsCountL2 || 0}</p>
                     </div>
-                    <span className="text-[10px] text-indigo-400 bg-indigo-400/10 border border-indigo-400/20 font-bold px-2 py-0.5 rounded-full leading-none shrink-0">5%</span>
+                    <span className="text-[11px] text-indigo-400 bg-indigo-400/10 border border-indigo-400/20 font-bold px-2 py-0.5 rounded-full leading-none shrink-0">5%</span>
                   </div>
                 </div>
 
                 {/* Copier link block */}
                 <div className="p-3 bg-[#0e1621] rounded-2xl border border-[#242f3d] mt-2">
-                  <p className="text-[#708499] text-[9px] uppercase font-bold mb-1.5">Your Referral Link</p>
+                  <p className="text-[#708499] text-[11px] uppercase font-bold mb-1.5">{' '}{tx("Your Referral Link")}{' '}</p>
                   <div className="flex gap-2 items-center">
                     <div className="flex-1 text-xs text-[#3390ec] truncate font-mono">
                       {getReferralUrl()}
                     </div>
                     <button
-                      id="btn_profile_referral_qr"
+                      id="btn_profile_referral_qr" aria-label={t("ui.qr")}
                       onClick={() => { playClickSound(); setShowReferralQrModal(true); }}
                       className="bg-[#242f3d] border border-[#2b3745] hover:bg-[#2c394a] text-[#3390ec] p-2 rounded-xl transition transform active:scale-95 flex items-center justify-center cursor-pointer"
                     >
                       <QrCode className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      id="btn_profile_copy_referral"
+                      id="btn_profile_copy_referral" aria-label={t("ui.copy")}
                       onClick={handleCopyReferral}
                       className="bg-white text-black p-2 rounded-xl hover:bg-slate-200 transition transform active:scale-95 flex items-center justify-center cursor-pointer"
                     >
@@ -4266,22 +4190,22 @@ function GameAppInner() {
 
           {/* Administration is loaded only for the verified owner. */}
           {activeTab === 'admin' && isUserAnAdmin && (
-            <React.Suspense fallback={<p className="py-6 text-center text-slate-400">Загрузка админки…</p>}>
-              <AdminPanel onSettingsSaved={value => setGlobalSettings({botUsername:value.botUsername,appName:value.appName,webUrl:value.webUrl})}>
+            <React.Suspense fallback={<p className="py-6 text-center text-slate-400">{' '}{tx("Загрузка админки…")}{' '}</p>}>
+              <AdminPanel currentLanguage={currentLanguage} onSettingsSaved={value => setGlobalSettings({botUsername:value.botUsername,appName:value.appName,webUrl:value.webUrl})}>
               {/* Tournament Announcements & Pins (New Admin Features) */}
               <div className="bg-[#17212b] border border-[#242f3d] rounded-2xl p-5 space-y-4">
                 <div className="flex items-center gap-2 border-b border-[#242f3d]/60 pb-2.5">
                   <ShieldAlert className="w-4 h-4 text-amber-500" />
-                  <span className="text-xs font-bold text-white uppercase tracking-wider">Tournament Announcements & Pinning</span>
+                  <span className="text-xs font-bold text-white uppercase tracking-wider">{' '}{tx("Tournament Announcements & Pinning")}{' '}</span>
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[#708499] font-bold text-[10px] uppercase block">Broadcast Telegram Announcement</label>
+                  <label className="text-[#708499] font-bold text-[11px] uppercase block">{' '}{tx("Broadcast Telegram Announcement")}{' '}</label>
                   <textarea
                     rows={3}
                     value={announcementText}
                     onChange={(e) => setAnnouncementText(e.target.value)}
-                    placeholder="Type official community tournament announcement to broadcast..."
+                    placeholder={tx("Type official community tournament announcement to broadcast...")}
                     className="w-full bg-[#242f3d] border border-[#2b3745] hover:border-[#3390ec]/50 focus:border-[#3390ec] rounded-xl px-3 py-2 text-white text-xs focus:outline-none transition font-medium"
                   />
                   {announcementSuccess && (
@@ -4294,12 +4218,12 @@ function GameAppInner() {
                     disabled={announcementLoading || !announcementText.trim()}
                     className="w-full py-2 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:bg-amber-500/40 text-black text-xs font-bold transition cursor-pointer"
                   >
-                    {announcementLoading ? "Broadcasting..." : "Broadcast Announcement"}
+                    {announcementLoading ? tx("Broadcasting...") : tx("Broadcast Announcement")}
                   </button>
                 </div>
 
                 <div className="pt-2 border-t border-[#242f3d]/50 space-y-1.5">
-                  <label className="text-[#708499] font-bold text-[10px] uppercase block">Ecosystem Live Leaderboard Pinned Message</label>
+                  <label className="text-[#708499] font-bold text-[11px] uppercase block">{' '}{tx("Ecosystem Live Leaderboard Pinned Message")}{' '}</label>
                   {pinningSuccess && (
                     <div className="text-emerald-400 text-[11px] font-semibold bg-emerald-500/10 p-2 rounded-lg border border-emerald-500/20 text-center">
                       {pinningSuccess}
@@ -4310,7 +4234,7 @@ function GameAppInner() {
                     disabled={pinningLoading}
                     className="w-full py-2 rounded-xl bg-[#3390ec] hover:bg-[#2b7ad0] text-white text-xs font-bold transition cursor-pointer"
                   >
-                    {pinningLoading ? "Publishing..." : "Publish & Pin Leaderboard to Community Group"}
+                    {pinningLoading ? tx("Publishing...") : tx("Publish & Pin Leaderboard to Community Group")}
                   </button>
                 </div>
               </div>
@@ -4329,6 +4253,7 @@ function GameAppInner() {
               transition={{ duration: 0.15 }}
             >
               <WindowGame
+                currentLanguage={currentLanguage}
                 currentTgId={currentTgId}
                 currentUsername={currentUsername}
                 userWins={userWins}
@@ -4374,53 +4299,53 @@ function GameAppInner() {
       </main>
 
       {/* Navigation Dock (Mobile-First 5 Tabs) */}
-      <footer className="fixed bottom-0 left-0 right-0 h-20 bg-[#17212b] border-t border-[#242f3d] flex justify-around items-center px-1 max-w-md mx-auto w-full shadow-2xl z-40">
+      <footer className="fixed bottom-0 left-0 right-0 min-h-20 bg-[#17212b] border-t border-[#242f3d] flex justify-around items-center px-1 max-w-md mx-auto w-full shadow-2xl z-40">
         
         {/* NAV 1: HOME */}
         <button
-          onClick={() => { playClickSound(); setActiveTab('home'); }}
-          className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'home' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          aria-current={activeTab === 'home' ? 'page' : undefined} onClick={() => { playClickSound(); setActiveTab('home'); }}
+          className={`flex flex-col items-center justify-center min-w-0 flex-1 min-h-14 rounded-2xl transition-all ${activeTab === 'home' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Home className="w-5 h-5 mb-1" />
-          <span className="text-[11px] font-bold tracking-wider">{t('nav.home')}</span>
+          <span className="text-[11px] font-semibold leading-tight text-center">{' '}{t('nav.home')}{' '}</span>
         </button>
 
         {/* NAV 2: PLAY */}
         <button
-          onClick={() => { playClickSound(); setActiveTab('play'); }}
-          className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'play' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          aria-current={activeTab === 'play' ? 'page' : undefined} onClick={() => { playClickSound(); setActiveTab('play'); }}
+          className={`flex flex-col items-center justify-center min-w-0 flex-1 min-h-14 rounded-2xl transition-all ${activeTab === 'play' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Gamepad2 className="w-5 h-5 mb-1" />
-          <span className="text-[11px] font-bold tracking-wider">{t('nav.play')}</span>
+          <span className="text-[11px] font-semibold leading-tight text-center">{' '}{t('nav.play')}{' '}</span>
         </button>
 
         {/* NAV 3: LEADERBOARD */}
         <button
-          id="btn_nav_leaderboard"
+          id="btn_nav_leaderboard" aria-current={activeTab==='leaderboard'?'page':undefined}
           onClick={() => { playClickSound(); setActiveTab('leaderboard'); }}
-          className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'leaderboard' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          className={`flex flex-col items-center justify-center min-w-0 flex-1 min-h-14 rounded-2xl transition-all ${activeTab === 'leaderboard' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Trophy className="w-5 h-5 mb-1" />
-          <span className="text-[11px] font-bold tracking-wider">{t('nav.board')}</span>
+          <span className="text-[11px] font-semibold leading-tight text-center">{' '}{t('nav.board')}{' '}</span>
         </button>
 
 
         {/* NAV 4: MISSIONS */}
         <button
-          onClick={() => { playClickSound(); setActiveTab('missions'); }}
-          className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'missions' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          aria-current={activeTab === 'missions' ? 'page' : undefined} onClick={() => { playClickSound(); setActiveTab('missions'); }}
+          className={`flex flex-col items-center justify-center min-w-0 flex-1 min-h-14 rounded-2xl transition-all ${activeTab === 'missions' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <Award className="w-5 h-5 mb-1" />
-          <span className="text-[11px] font-bold tracking-wider">{t('nav.missions')}</span>
+          <span className="text-[11px] font-semibold leading-tight text-center">{' '}{t('nav.missions')}{' '}</span>
         </button>
 
         {/* NAV 5: PROFILE */}
         <button
-          onClick={() => { playClickSound(); setActiveTab('profile'); }}
-          className={`flex flex-col items-center justify-center w-14 h-14 rounded-2xl transition-all ${activeTab === 'profile' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
+          aria-current={activeTab === 'profile' ? 'page' : undefined} onClick={() => { playClickSound(); setActiveTab('profile'); }}
+          className={`flex flex-col items-center justify-center min-w-0 flex-1 min-h-14 rounded-2xl transition-all ${activeTab === 'profile' ? 'text-[#3390ec]' : 'text-[#708499] hover:text-white'}`}
         >
           <User className="w-5 h-5 mb-1" />
-          <span className="text-[11px] font-bold tracking-wider">{t('nav.profile')}</span>
+          <span className="text-[11px] font-semibold leading-tight text-center">{' '}{t('nav.profile')}{' '}</span>
         </button>
 
       </footer>
@@ -4450,7 +4375,7 @@ function GameAppInner() {
               <div className="flex justify-between items-center pb-2 border-b border-[#242f3d]">
                 <div className="flex items-center gap-2">
                   <Info className="w-5 h-5 text-[#3390ec]" />
-                  <h3 className="text-base font-bold text-white">Interactive Rules</h3>
+                  <h3 className="text-base font-bold text-white">{' '}{tx("Interactive Rules")}{' '}</h3>
                 </div>
                 <button
                   id="btn_close_info_modal_icon"
@@ -4464,50 +4389,48 @@ function GameAppInner() {
               {/* Rules Content */}
               <div className="text-xs text-slate-300 space-y-3 leading-relaxed">
                 <p>
-                  <strong>Rock-Scissors-Paper-Well</strong> is an expanded edition of the standard game, incorporating the deep, strategic <strong>Well (🕳️)</strong> weapon.
+                  {' '}{t('ui.ruleInfo')}{' '}
                 </p>
                 
                 <div className="space-y-2 pt-2 border-t border-[#242f3d]/60">
-                  <span className="text-[10px] uppercase font-semibold text-[#708499] block tracking-wider">WEAPON OUTCOMES CHART:</span>
+                  <span className="text-[11px] uppercase font-semibold text-[#708499] block tracking-wider">{' '}{tx("WEAPON OUTCOMES CHART:")}{' '}</span>
                   
                   <div className="grid grid-cols-1 gap-2 font-medium">
                     <div className="flex items-center bg-[#242f3d] p-2.5 rounded-xl gap-3">
-                      <span className="text-2xl select-none">👊</span>
+                      <span className="text-2xl select-none"><WeaponIcon kind="rock" className="w-16 h-16" /></span>
                       <div className="space-y-0.5">
-                        <span className="text-white font-bold text-xs block">ROCK</span>
-                        <span className="text-[10px] text-[#708499] block">Beats ✂️ Scissors. Loses to 📄 Paper & 🕳️ Well.</span>
+                        <span className="text-white font-bold text-xs block">{' '}{tx("ROCK")}{' '}</span>
+                        <span className="text-[11px] text-[#708499] block">{' '}{tx("Beats ✂️ Scissors. Loses to 📄 Paper & 🕳️ Well.")}{' '}</span>
                       </div>
                     </div>
 
                     <div className="flex items-center bg-[#242f3d] p-2.5 rounded-xl gap-3">
-                      <span className="text-2xl select-none">✂️</span>
+                      <span className="text-2xl select-none"><WeaponIcon kind="scissors" className="w-16 h-16" /></span>
                       <div className="space-y-0.5">
-                        <span className="text-white font-bold text-xs block">SCISSORS</span>
-                        <span className="text-[10px] text-[#708499] block">Beats 📄 Paper. Loses to 👊 Rock & 🕳️ Well.</span>
+                        <span className="text-white font-bold text-xs block">{' '}{tx("SCISSORS")}{' '}</span>
+                        <span className="text-[11px] text-[#708499] block">{' '}{tx("Beats 📄 Paper. Loses to 👊 Rock & 🕳️ Well.")}{' '}</span>
                       </div>
                     </div>
 
                     <div className="flex items-center bg-[#242f3d] p-2.5 rounded-xl gap-3">
-                      <span className="text-2xl select-none">📄</span>
+                      <span className="text-2xl select-none"><WeaponIcon kind="paper" className="w-16 h-16" /></span>
                       <div className="space-y-0.5">
-                        <span className="text-white font-bold text-xs block">PAPER</span>
-                        <span className="text-[10px] text-[#708499] block">Beats 👊 Rock & 🕳️ Well. Loses to ✂️ Scissors.</span>
+                        <span className="text-white font-bold text-xs block">{' '}{tx("PAPER")}{' '}</span>
+                        <span className="text-[11px] text-[#708499] block">{' '}{tx("Beats 👊 Rock & 🕳️ Well. Loses to ✂️ Scissors.")}{' '}</span>
                       </div>
                     </div>
 
                     <div className="flex items-center bg-[#242f3d] p-2.5 rounded-xl gap-3">
-                      <span className="text-2xl select-none">🕳️</span>
+                      <span className="text-2xl select-none"><WeaponIcon kind="well" className="w-16 h-16" /></span>
                       <div className="space-y-0.5">
-                        <span className="text-white font-bold text-xs block">WELL</span>
-                        <span className="text-[10px] text-[#708499] block">Beats 👊 Rock & ✂️ Scissors. Loses to 📄 Paper.</span>
+                        <span className="text-white font-bold text-xs block">{' '}{tx("WELL")}{' '}</span>
+                        <span className="text-[11px] text-[#708499] block">{' '}{tx("Beats 👊 Rock & ✂️ Scissors. Loses to 📄 Paper.")}{' '}</span>
                       </div>
                     </div>
                   </div>
                 </div>
 
-                <p className="text-[9.5px] text-[#708499] text-center italic pt-1">
-                  On-chain fair results verified. Pick carefully and outsmart your opponent!
-                </p>
+                <p className="text-[11px] text-[#708499] text-center italic pt-1">{' '}{tx("On-chain fair results verified. Pick carefully and outsmart your opponent!")}{' '}</p>
               </div>
 
               {/* Acknowledge Button */}
@@ -4515,9 +4438,7 @@ function GameAppInner() {
                 id="btn_close_info_modal_got_it"
                 onClick={() => { playClickSound(); setShowInfoModal(false); }}
                 className="w-full py-2.5 bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold rounded-xl transition text-xs shadow-md shadow-[#3390ec]/15 cursor-pointer"
-              >
-                GOT IT
-              </button>
+              >{' '}{tx("GOT IT")}{' '}</button>
             </motion.div>
           </div>
         )}
@@ -4545,7 +4466,7 @@ function GameAppInner() {
               <div className="flex justify-between items-center pb-2 border-b border-[#242f3d]">
                 <div className="flex items-center gap-2">
                   <Trophy className="w-5 h-5 text-yellow-400" />
-                  <h3 className="text-base font-bold text-white">Arena Rank Tiers</h3>
+                  <h3 className="text-base font-bold text-white">{' '}{tx("Arena Rank Tiers")}{' '}</h3>
                 </div>
                 <button
                   id="btn_close_rank_tiers_modal"
@@ -4579,21 +4500,19 @@ function GameAppInner() {
                         </div>
                         <div className="min-w-0">
                           <p className={`text-xs font-bold truncate ${rk.color} flex items-center gap-1`}>
-                            {rk.name}
+                            {getLocalizedRankName(rk.name,currentLanguage)}
                             {isCurrent && (
-                              <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-1 py-[0.5px] rounded-sm font-semibold uppercase truncate shrink-0">
-                                Active
-                              </span>
+                              <span className="text-[11px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 px-1 py-[0.5px] rounded-sm font-semibold uppercase truncate shrink-0">{' '}{tx("Active")}{' '}</span>
                             )}
                           </p>
-                          <p className="text-[10px] text-white/50 truncate mt-0.5 leading-none">
-                            {rk.description}
+                          <p className="text-[11px] text-white/50 truncate mt-0.5 leading-none">
+                            {getLocalizedRankDesc(rk.description,currentLanguage)}
                           </p>
                         </div>
                       </div>
                       <div className="text-right">
-                        <span className="text-[10px] font-mono block text-white/40">Requires</span>
-                        <span className="text-xs font-bold font-mono text-emerald-400">{rk.minWins} W</span>
+                        <span className="text-[11px] font-mono block text-white/40">{' '}{tx("Requires")}{' '}</span>
+                        <span className="text-xs font-bold font-mono text-emerald-400">{rk.minWins}{' '}{tx("W")}{' '}</span>
                       </div>
                     </div>
                   );
@@ -4601,18 +4520,14 @@ function GameAppInner() {
               </div>
 
               {/* Tips */}
-              <p className="text-[10px] text-[#708499] text-center leading-normal">
-                Winning games increases your status. Defeats do not decrease tier progress—it is permanently saved!
-              </p>
+              <p className="text-[11px] text-[#708499] text-center leading-normal">{' '}{tx("Winning games increases your status. Defeats do not decrease tier progress—it is permanently saved!")}{' '}</p>
 
               {/* Close Button */}
               <button
                 id="btn_close_rank_tiers_modal_footer"
                 onClick={() => { playClickSound(); setShowRankTiersModal(false); }}
                 className="w-full py-2.5 bg-[#242f3d] hover:bg-[#2c394a] text-white font-bold rounded-xl transition text-xs border border-[#2b3745] cursor-pointer"
-              >
-                CLOSE VIEW
-              </button>
+              >{' '}{tx("CLOSE VIEW")}{' '}</button>
             </motion.div>
           </div>
         )}
@@ -4641,19 +4556,19 @@ function GameAppInner() {
               </div>
 
               <div className="pt-8 space-y-2">
-                <span className="text-[10px] text-amber-500 font-cyber font-black tracking-widest uppercase block">TIER PROMOTION</span>
+                <span className="text-[11px] text-amber-500 font-cyber font-black tracking-widest uppercase block">{' '}{tx("TIER PROMOTION")}{' '}</span>
                 <h3 className={`text-2xl font-black tracking-tight leading-tight uppercase ${promotedRank.color.replace('animate-pulse', '')}`}>
-                  {promotedRank.name}
+                  {getLocalizedRankName(promotedRank.name,currentLanguage)}
                 </h3>
                 <p className="text-white/80 text-xs px-2">
-                  {promotedRank.description}
+                  {getLocalizedRankDesc(promotedRank.description,currentLanguage)}
                 </p>
               </div>
 
               <div className="bg-black/35 rounded-2xl p-4 border border-white/5 space-y-1">
-                <p className="text-[10px] text-[#708499]">PERMANENT REWARD UNLOCKED</p>
+                <p className="text-[11px] text-[#708499]">{' '}{tx("PERMANENT REWARD UNLOCKED")}{' '}</p>
                 <div className="flex items-center justify-center gap-2 text-xs font-bold text-emerald-400">
-                  <span>✨ Multiplier active in Matchmaking</span>
+                  <span>{' '}{t('ui.cosmetic')}{' '}</span>
                 </div>
               </div>
 
@@ -4661,9 +4576,7 @@ function GameAppInner() {
                 id="btn_claim_promotion_celebration"
                 onClick={() => { playClickSound(); setPromotedRank(null); }}
                 className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-white font-extrabold rounded-xl transition text-xs tracking-wider uppercase cursor-pointer shadow-lg shadow-amber-500/10 active:scale-[0.98]"
-              >
-                CLAIM NEW TITLE
-              </button>
+              >{' '}{tx("CLAIM NEW TITLE")}{' '}</button>
             </motion.div>
           </div>
         )}
@@ -4691,7 +4604,7 @@ function GameAppInner() {
               <div className="flex justify-between items-center pb-2 border-b border-[#242f3d]">
                 <div className="flex items-center gap-2">
                   <QrCode className="w-5 h-5 text-[#3390ec]" />
-                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">Referral QR Code</h3>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-wider">{' '}{tx("Referral QR Code")}{' '}</h3>
                 </div>
                 <button
                   id="btn_close_referral_qr_modal_x"
@@ -4706,7 +4619,7 @@ function GameAppInner() {
               <div className="bg-white p-4 rounded-2xl flex items-center justify-center shadow-inner mx-auto w-[200px] h-[200px]">
                 <img
                   src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(getReferralUrl())}`}
-                  alt="Referral QR Code"
+                  alt={tx("Referral QR Code")}
                   className="w-full h-full object-contain select-none shadow-sm rounded-lg"
                   referrerPolicy="no-referrer"
                 />
@@ -4714,10 +4627,8 @@ function GameAppInner() {
 
               {/* Instructions */}
               <div className="space-y-1">
-                <p className="text-xs font-bold text-white">Share App with Friends</p>
-                <p className="text-[10px] text-[#708499] leading-relaxed">
-                  Your friend can scan this using Telegram, their phone camera, or another QR scanner to start playing under your network!
-                </p>
+                <p className="text-xs font-bold text-white">{' '}{tx("Share App with Friends")}{' '}</p>
+                <p className="text-[11px] text-[#708499] leading-relaxed">{' '}{tx("Your friend can scan this using Telegram, their phone camera, or another QR scanner to start playing under your network!")}{' '}</p>
               </div>
 
               {/* Referral Link Quick Copy Box */}
@@ -4727,8 +4638,8 @@ function GameAppInner() {
                 className="w-full py-2 px-3 bg-[#242f3d] hover:bg-[#2c394a] rounded-xl flex items-center justify-between text-[11px] text-[#3390ec] font-mono border border-[#2b3745]/35 transition active:scale-[0.98] cursor-pointer"
               >
                 <span className="truncate max-w-[150px]">{getReferralUrl()}</span>
-                <span className="font-sans font-bold text-[9px] uppercase text-white tracking-wider flex items-center gap-1 shrink-0 bg-[#3390ec] px-1.5 py-0.5 rounded-sm">
-                  {copiedLink ? "COPIED" : "COPY"}
+                <span className="font-sans font-bold text-[11px] uppercase text-white tracking-wider flex items-center gap-1 shrink-0 bg-[#3390ec] px-1.5 py-0.5 rounded-sm">
+                  {copiedLink ? t('referrals.copied') : tx("COPY")}
                 </span>
               </button>
 
@@ -4737,9 +4648,7 @@ function GameAppInner() {
                 id="btn_close_referral_qr_modal"
                 onClick={() => { playClickSound(); setShowReferralQrModal(false); }}
                 className="w-full py-2.5 bg-[#242f3d]/60 hover:bg-[#242f3d] text-white font-bold rounded-xl transition text-xs border border-[#2b3745] cursor-pointer"
-              >
-                CLOSE WINDOW
-              </button>
+              >{' '}{tx("CLOSE WINDOW")}{' '}</button>
             </motion.div>
           </div>
         )}
@@ -4763,9 +4672,7 @@ function GameAppInner() {
             >
               <div className="flex justify-between items-center pb-2.5 border-b border-[#242f3d]">
                 <span className="text-[12px] font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                  <ArrowDownLeft className="w-4 h-4 text-[#3390ec]" />
-                  Deposit TON
-                </span>
+                  <ArrowDownLeft className="w-4 h-4 text-[#3390ec]" />{' '}{tx("Deposit TON")}{' '}</span>
                 <button
                   id="btn_close_deposit_modal"
                   onClick={() => { playClickSound(); setShowDepositModal(false); }}
@@ -4777,8 +4684,8 @@ function GameAppInner() {
 
               {tonConfig?.pauseDeposits ? (
                 <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl text-xs font-medium text-center space-y-1.5">
-                  <p className="font-bold uppercase tracking-wider text-[11px]">Deposits Suspended</p>
-                  <p className="text-[10px] opacity-80 leading-relaxed">TON deposits are temporarily paused for system upgrading. Please try again later.</p>
+                  <p className="font-bold uppercase tracking-wider text-[11px]">{' '}{tx("Deposits Suspended")}{' '}</p>
+                  <p className="text-[11px] opacity-80 leading-relaxed">{' '}{tx("TON deposits are temporarily paused for system upgrading. Please try again later.")}{' '}</p>
                 </div>
               ) : depositPendingStatus === 'completed' ? (
                 <div className="text-center py-5 space-y-4">
@@ -4786,22 +4693,18 @@ function GameAppInner() {
                     ✓
                   </div>
                   <div className="space-y-1">
-                    <h4 className="text-sm font-bold text-white uppercase tracking-wide">Deposit Successful!</h4>
-                    <p className="text-[11px] text-[#708499] leading-relaxed">
-                      We have successfully credited <span className="text-emerald-400 font-bold font-mono">{depositAmount} TON</span> to your internal Game TON Balance! Enjoy the Arena!
-                    </p>
+                    <h4 className="text-sm font-bold text-white uppercase tracking-wide">{' '}{tx("Deposit Successful!")}{' '}</h4>
+                    <p className="text-[11px] text-[#708499] leading-relaxed">{' '}{tx("We have successfully credited")}{' '}<span className="text-emerald-400 font-bold font-mono">{depositAmount} TON</span>{' '}{tx("to your internal Game TON Balance! Enjoy the Arena!")}{' '}</p>
                   </div>
                   <button
                     onClick={() => { playClickSound(); setShowDepositModal(false); }}
                     className="w-full py-2.5 bg-[#3390ec] hover:bg-[#2081e2] text-[#0e1621] font-bold rounded-xl text-xs uppercase tracking-wider transition active:scale-98 cursor-pointer"
-                  >
-                    BACK TO ARENA
-                  </button>
+                  >{' '}{tx("BACK TO ARENA")}{' '}</button>
                 </div>
               ) : !depositPendingId ? (
                 <div className="space-y-4">
                   <div className="space-y-1.5">
-                    <label className="text-[9.5px] text-[#708499] font-bold uppercase tracking-wider block">Select Preset Amount</label>
+                    <label className="text-[11px] text-[#708499] font-bold uppercase tracking-wider block">{' '}{tx("Select Preset Amount")}{' '}</label>
                     <div className="grid grid-cols-4 gap-2">
                       {['1', '2', '5', '10'].map((preset) => (
                         <button
@@ -4820,7 +4723,7 @@ function GameAppInner() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[9.5px] text-[#708499] font-bold uppercase tracking-wider block">Or Custom Amount</label>
+                    <label className="text-[11px] text-[#708499] font-bold uppercase tracking-wider block">{' '}{tx("Or Custom Amount")}{' '}</label>
                     <div className="relative flex items-center">
                       <input
                         type="number"
@@ -4831,12 +4734,12 @@ function GameAppInner() {
                         className="w-full bg-[#0e1621] border border-[#242f3d] rounded-xl py-2.5 pl-3.5 pr-12 text-xs font-bold font-mono text-white focus:outline-none focus:border-[#3390ec] focus:ring-1 focus:ring-[#3390ec]/30 transition"
                         placeholder="0.00"
                       />
-                      <span className="absolute right-4 text-[10px] font-bold text-[#708499] font-mono pointer-events-none">TON</span>
+                      <span className="absolute right-4 text-[11px] font-bold text-[#708499] font-mono pointer-events-none">TON</span>
                     </div>
                   </div>
 
                   {depositVerifyError && (
-                    <div className="bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl text-[10px] text-red-400 leading-normal">
+                    <div className="bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl text-[11px] text-red-400 leading-normal">
                       ⚠️ {depositVerifyError}
                     </div>
                   )}
@@ -4848,51 +4751,47 @@ function GameAppInner() {
                   >
                     {depositLoading ? (
                       <>
-                        <RefreshCw className="animate-spin w-3.5 h-3.5" />
-                        CREATING INTENT...
-                      </>
+                        <RefreshCw className="animate-spin w-3.5 h-3.5" />{' '}{tx("CREATING INTENT...")}{' '}</>
                     ) : (
-                      "INITIALIZE DEPOSIT"
+                      tx("INITIALIZE DEPOSIT")
                     )}
                   </button>
                 </div>
               ) : (
                 <div className="space-y-4 text-xs">
                   <div className="bg-[#0e1621] p-3.5 rounded-xl border border-[#242f3d] space-y-3 font-mono">
-                    <div className="flex justify-between items-center text-[9.5px] border-b border-[#242f3d]/60 pb-2">
-                      <span className="text-[#708499] uppercase font-bold">Deposit Intent ID</span>
+                    <div className="flex justify-between items-center text-[11px] border-b border-[#242f3d]/60 pb-2">
+                      <span className="text-[#708499] uppercase font-bold">{' '}{tx("Deposit Intent ID")}{' '}</span>
                       <span className="text-white font-bold">{depositPendingId.slice(0, 8)}...</span>
                     </div>
 
                     <div className="flex justify-between items-baseline py-0.5">
-                      <span className="text-[9.5px] text-[#708499] uppercase font-bold">Amount to Pay:</span>
+                      <span className="text-[11px] text-[#708499] uppercase font-bold">{' '}{tx("Amount to Pay:")}{' '}</span>
                       <span className="text-base font-black text-emerald-400">{depositAmount} TON</span>
                     </div>
 
                     <div className="space-y-1 pt-1 border-t border-[#242f3d]/30">
                       <div className="flex justify-between items-center">
-                        <span className="text-[9.5px] text-[#708499] uppercase font-bold">Treasury Wallet:</span>
+                        <span className="text-[11px] text-[#708499] uppercase font-bold">{' '}{tx("Treasury Wallet:")}{' '}</span>
                         <button
                           onClick={() => { playClickSound(); navigator.clipboard.writeText(depositTreasuryAddress); }}
-                          className="text-[9px] text-[#3390ec] hover:underline cursor-pointer flex items-center gap-0.5 font-bold"
+                          className="text-[11px] text-[#3390ec] hover:underline cursor-pointer flex items-center gap-0.5 font-bold"
                         >
-                          <Copy className="w-2.5 h-2.5" /> COPY
-                        </button>
+                          <Copy className="w-2.5 h-2.5" />{' '}{tx("COPY")}{' '}</button>
                       </div>
-                      <p className="text-[9px] text-white break-all leading-normal bg-[#17212b] p-2 rounded border border-[#242f3d]/60 select-all">
+                      <p className="text-[11px] text-white break-all leading-normal bg-[#17212b] p-2 rounded border border-[#242f3d]/60 select-all">
                         {depositTreasuryAddress}
                       </p>
                     </div>
 
                     <div className="space-y-1 pt-1">
                       <div className="flex justify-between items-center">
-                        <span className="text-[9.5px] text-amber-500 uppercase font-bold">Required Comment:</span>
+                        <span className="text-[11px] text-amber-500 uppercase font-bold">{' '}{tx("Required Comment:")}{' '}</span>
                         <button
                           onClick={() => { playClickSound(); navigator.clipboard.writeText(depositMessage); }}
-                          className="text-[9px] text-[#3390ec] hover:underline cursor-pointer flex items-center gap-0.5 font-bold"
+                          className="text-[11px] text-[#3390ec] hover:underline cursor-pointer flex items-center gap-0.5 font-bold"
                         >
-                          <Copy className="w-2.5 h-2.5" /> COPY
-                        </button>
+                          <Copy className="w-2.5 h-2.5" />{' '}{tx("COPY")}{' '}</button>
                       </div>
                       <p className="text-[11px] font-black text-amber-400 bg-amber-500/10 p-2 rounded border border-amber-500/20 text-center select-all tracking-wider">
                         {depositMessage}
@@ -4900,20 +4799,20 @@ function GameAppInner() {
                     </div>
                   </div>
 
-                  <div className="bg-amber-500/5 border border-amber-500/15 p-3 rounded-xl text-[9.5px] text-amber-500/90 leading-relaxed space-y-0.5">
-                    <p className="font-bold uppercase tracking-wider text-[9px] text-amber-500">⚠️ CRITICAL DIRECTIVE:</p>
-                    <p>You MUST include the exact unique comment above in your transaction, or your deposit will not be credited.</p>
+                  <div className="bg-amber-500/5 border border-amber-500/15 p-3 rounded-xl text-[11px] text-amber-500/90 leading-relaxed space-y-0.5">
+                    <p className="font-bold uppercase tracking-wider text-[11px] text-amber-500">{' '}{tx("⚠️ CRITICAL DIRECTIVE:")}{' '}</p>
+                    <p>{' '}{tx("You MUST include the exact unique comment above in your transaction, or your deposit will not be credited.")}{' '}</p>
                   </div>
 
                   {depositPolling && (
                     <div className="bg-[#3390ec]/10 border border-[#3390ec]/20 p-2.5 rounded-xl flex items-center justify-center gap-2 text-[10.5px] text-[#3390ec] font-bold">
                       <RefreshCw className="animate-spin w-3.5 h-3.5 text-[#3390ec]" />
-                      <span>Detecting on-chain transaction...</span>
+                      <span>{' '}{tx("Detecting on-chain transaction...")}{' '}</span>
                     </div>
                   )}
 
                   {depositVerifyError && (
-                    <div className="bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl text-[10px] text-red-400 leading-normal whitespace-pre-line">
+                    <div className="bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl text-[11px] text-red-400 leading-normal whitespace-pre-line">
                       ⚠️ {depositVerifyError}
                     </div>
                   )}
@@ -4961,13 +4860,13 @@ function GameAppInner() {
                       }}
                       className="w-full py-3 bg-[#3390ec] hover:bg-[#2081e2] disabled:opacity-40 disabled:cursor-not-allowed text-[#0e1621] font-bold rounded-xl text-xs tracking-wider uppercase transition active:scale-98 cursor-pointer flex items-center justify-center gap-1.5"
                     >
-                      {depositPolling ? "POLLING TRANSACTION..." : "PAY VIA TON CONNECT"}
+                      {depositPolling ? tx("POLLING TRANSACTION...") : tx("PAY VIA TON CONNECT")}
                     </button>
 
                     {isDevelopEnvironment && (
                       <button
                         onClick={() => handleVerifyDeposit(true)}
-                        className="w-full py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg text-[9px] tracking-widest uppercase transition cursor-pointer"
+                        className="w-full py-1.5 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg text-[11px] tracking-widest uppercase transition cursor-pointer"
                       >
                         ⚡ SIMULATE SUCCESS (DEV SANDBOX)
                       </button>
@@ -4983,10 +4882,8 @@ function GameAppInner() {
                         setDepositPolling(false);
                         setDepositPendingId(null); 
                       }}
-                      className="w-full py-1.5 text-[#708499] hover:text-white transition text-[9px] uppercase font-bold text-center cursor-pointer tracking-wider"
-                    >
-                      START OVER / CHOOSE DIFFERENT AMOUNT
-                    </button>
+                      className="w-full py-1.5 text-[#708499] hover:text-white transition text-[11px] uppercase font-bold text-center cursor-pointer tracking-wider"
+                    >{' '}{tx("START OVER / CHOOSE DIFFERENT AMOUNT")}{' '}</button>
                   </div>
                 </div>
               )}
@@ -5015,9 +4912,7 @@ function GameAppInner() {
             >
               <div className="flex justify-between items-center pb-2.5 border-b border-[#242f3d]">
                 <span className="text-[12px] font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                  <ArrowUpRight className="w-4 h-4 text-purple-400" />
-                  Withdraw TON
-                </span>
+                  <ArrowUpRight className="w-4 h-4 text-purple-400" />{' '}{tx("Withdraw TON")}{' '}</span>
                 {!isWithdrawalSuccess && (
                   <button
                     id="btn_close_withdraw_modal"
@@ -5038,48 +4933,42 @@ function GameAppInner() {
 
                   {/* Messages */}
                   <div className="space-y-1">
-                    <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-wide">
-                      Request Submitted!
-                    </h3>
-                    <p className="text-[11px] text-[#b2c1d4] px-1 leading-relaxed">
-                      Your withdrawal request has been successfully created and is now processing.
-                    </p>
+                    <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-wide">{' '}{tx("Request Submitted!")}{' '}</h3>
+                    <p className="text-[11px] text-[#b2c1d4] px-1 leading-relaxed">{' '}{tx("Your withdrawal request has been successfully created and is now processing.")}{' '}</p>
                   </div>
 
                   {/* Plain, clean card showing requested details */}
                   <div className="w-full bg-[#0e1621] border border-[#242f3d] rounded-xl p-3.5 flex flex-col items-center justify-center space-y-0.5">
-                    <span className="text-[9px] text-[#708499] uppercase tracking-wider font-bold">Outbound Amount</span>
+                    <span className="text-[11px] text-[#708499] uppercase tracking-wider font-bold">{' '}{tx("Outbound Amount")}{' '}</span>
                     <span className="text-lg font-black text-emerald-400 font-mono">
                       -{submittedWithdrawalAmount} TON
                     </span>
                   </div>
 
                   {/* Auto-close status message */}
-                  <span className="text-[9px] text-[#708499] uppercase tracking-wider font-semibold">
-                    Returning to Wallet in 2.5s...
-                  </span>
+                  <span className="text-[11px] text-[#708499] uppercase tracking-wider font-semibold">{' '}{tx("Returning to Wallet in 2.5s...")}{' '}</span>
                 </div>
               ) : tonConfig?.withdrawalsDisabledByConfigError ? (
                 <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl text-xs font-medium text-center space-y-1.5">
-                  <p className="font-bold uppercase tracking-wider text-[11px]">⚠️ Withdrawal Config Error</p>
-                  <p className="text-[10px] opacity-85 leading-relaxed font-mono break-all">{tonConfig?.configErrorMessage || "Derived hot wallet address does not match TON_HOT_WALLET_ADDRESS"}</p>
+                  <p className="font-bold uppercase tracking-wider text-[11px]">{' '}{t('common.error')}{' '}</p>
+                  <p className="text-[11px] opacity-85 leading-relaxed font-mono break-all">{' '}{t('ui.paused')}{' '}</p>
                 </div>
               ) : tonConfig?.pauseWithdrawals ? (
                 <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl text-xs font-medium text-center space-y-1.5">
-                  <p className="font-bold uppercase tracking-wider text-[11px]">Withdrawals Suspended</p>
-                  <p className="text-[10px] opacity-80 leading-relaxed">Outbound TON withdrawals are temporarily paused for backend ledger balancing. Please try again later.</p>
+                  <p className="font-bold uppercase tracking-wider text-[11px]">{' '}{tx("Withdrawals Suspended")}{' '}</p>
+                  <p className="text-[11px] opacity-80 leading-relaxed">{' '}{tx("Outbound TON withdrawals are temporarily paused for backend ledger balancing. Please try again later.")}{' '}</p>
                 </div>
               ) : (
                 <div className="space-y-4">
                   <div className="bg-[#0e1621] p-3 rounded-xl border border-[#242f3d] flex justify-between items-center text-xs">
-                    <span className="text-[#708499] uppercase font-bold text-[9.5px]">Available Game Balance:</span>
+                    <span className="text-[#708499] uppercase font-bold text-[11px]">{' '}{tx("Available Game Balance:")}{' '}</span>
                     <span className="font-bold text-white text-xs font-mono">
                       {getTonValue(profile?.tonAccount?.availableNano)} TON
                     </span>
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[9.5px] text-[#708499] font-bold uppercase tracking-wider block">Withdrawal Amount</label>
+                    <label className="text-[11px] text-[#708499] font-bold uppercase tracking-wider block">{' '}{tx("Withdrawal Amount")}{' '}</label>
                     <div className="relative flex items-center">
                       <input
                         type="number"
@@ -5088,28 +4977,26 @@ function GameAppInner() {
                         value={withdrawAmount}
                         onChange={(e) => setWithdrawAmount(e.target.value)}
                         className="w-full bg-[#0e1621] border border-[#242f3d] rounded-xl py-2.5 pl-3.5 pr-12 text-xs font-bold font-mono text-white focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/30 transition"
-                        placeholder="Min 1.0 TON"
+                        placeholder={tx("Min 1.0 TON")}
                       />
-                      <span className="absolute right-4 text-[10px] font-bold text-[#708499] font-mono pointer-events-none">TON</span>
+                      <span className="absolute right-4 text-[11px] font-bold text-[#708499] font-mono pointer-events-none">TON</span>
                     </div>
-                    <span className="text-[8.5px] text-[#708499] block mt-1 leading-normal">
-                      Min limit: <span className="text-white font-semibold font-mono">1 TON</span>. Max limit: <span className="text-white font-semibold font-mono">100 TON</span> per transaction.
-                    </span>
+                    <span className="text-[11px] text-[#708499] block mt-1 leading-normal">{' '}{tx("Min limit:")}{' '}<span className="text-white font-semibold font-mono">1 TON</span>{' '}{tx(". Max limit:")}{' '}<span className="text-white font-semibold font-mono">100 TON</span>{' '}{tx("per transaction.")}{' '}</span>
                   </div>
 
-                  <div className="space-y-1.5 font-mono text-[9.5px] text-[#708499] bg-[#0e1621] p-3 rounded-xl border border-[#242f3d] leading-normal">
-                    <span className="text-[8.5px] text-[#708499] uppercase font-bold block mb-1">Destination Address:</span>
-                    <span className="text-white break-all text-[9px] select-all leading-relaxed">{walletAddress}</span>
+                  <div className="space-y-1.5 font-mono text-[11px] text-[#708499] bg-[#0e1621] p-3 rounded-xl border border-[#242f3d] leading-normal">
+                    <span className="text-[11px] text-[#708499] uppercase font-bold block mb-1">{' '}{tx("Destination Address:")}{' '}</span>
+                    <span className="text-white break-all text-[11px] select-all leading-relaxed">{walletAddress}</span>
                   </div>
 
                   {withdrawError && (
-                    <div className="bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl text-[10px] text-red-400 leading-normal">
+                    <div className="bg-red-500/10 border border-red-500/20 p-2.5 rounded-xl text-[11px] text-red-400 leading-normal">
                       ⚠️ {withdrawError}
                     </div>
                   )}
 
                   {withdrawSuccess && (
-                    <div className="bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-xl text-[10px] text-emerald-400 leading-normal">
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-xl text-[11px] text-emerald-400 leading-normal">
                       ✓ {withdrawSuccess}
                     </div>
                   )}
@@ -5121,11 +5008,9 @@ function GameAppInner() {
                   >
                     {withdrawLoading ? (
                       <>
-                        <RefreshCw className="animate-spin w-3.5 h-3.5" />
-                        SUBMITTING REQUEST...
-                      </>
+                        <RefreshCw className="animate-spin w-3.5 h-3.5" />{' '}{tx("SUBMITTING REQUEST...")}{' '}</>
                     ) : (
-                      "REQUEST OUTBOUND WITHDRAWAL"
+                      tx("REQUEST OUTBOUND WITHDRAWAL")
                     )}
                   </button>
                 </div>
@@ -5151,9 +5036,7 @@ function GameAppInner() {
             >
               <div className="flex justify-between items-center pb-2.5 border-b border-[#242f3d] shrink-0">
                 <span className="text-[12px] font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                  <History className="w-4 h-4 text-amber-500" />
-                  TON Game Ledger
-                </span>
+                  <History className="w-4 h-4 text-amber-500" />{' '}{tx("TON Game Ledger")}{' '}</span>
                 <button
                   id="btn_close_history_modal"
                   onClick={() => { playClickSound(); setShowTonHistoryModal(false); }}
@@ -5167,14 +5050,12 @@ function GameAppInner() {
                 {tonHistoryLoading ? (
                   <div className="text-center py-12 space-y-3 shrink-0">
                     <RefreshCw className="animate-spin w-6 h-6 text-[#3390ec] mx-auto" />
-                    <p className="text-[11px] text-[#708499]">Retrieving unified transaction logs...</p>
+                    <p className="text-[11px] text-[#708499]">{' '}{t('common.loading')}{' '}</p>
                   </div>
                 ) : tonHistory.length === 0 ? (
                   <div className="text-center py-12 space-y-1.5 shrink-0">
-                    <p className="text-[11px] font-bold text-white uppercase tracking-wider">No Transactions Yet</p>
-                    <p className="text-[10px] text-[#708499] max-w-xs mx-auto leading-relaxed">
-                      All your on-chain deposits, outbound withdrawals, stakes, wins, losses, draws, and refunds will appear here.
-                    </p>
+                    <p className="text-[11px] font-bold text-white uppercase tracking-wider">{' '}{tx("No Transactions Yet")}{' '}</p>
+                    <p className="text-[11px] text-[#708499] max-w-xs mx-auto leading-relaxed">{' '}{tx("All your on-chain deposits, outbound withdrawals, stakes, wins, losses, draws, and refunds will appear here.")}{' '}</p>
                   </div>
                 ) : (
                   tonHistory.map((item: any, idx: number) => {
@@ -5204,25 +5085,25 @@ function GameAppInner() {
 
                           <div className="space-y-0.5 min-w-0">
                             <span className="font-bold text-white text-[11px] block truncate leading-tight">
-                              {item.type === 'deposit' ? 'Deposit TON' :
-                               item.type === 'withdrawal' ? 'Withdrawal' :
-                               item.type === 'withdrawal_requested' ? 'Withdrawal Requested' :
-                               item.type === 'game_win' ? 'Arena Match Win' :
-                               item.type === 'game_loss' ? 'Arena Match Loss' :
-                               item.type === 'stake_reservation' ? 'Staking Lock' :
-                               item.type === 'refund' ? 'Staking Refund' :
-                               item.type === 'draw' || item.type === 'game_draw' ? 'Match Draw' : item.type}
+                              {item.type === 'deposit' ? tx("Deposit TON") :
+                               item.type === 'withdrawal' ? tx("Withdrawal") :
+                               item.type === 'withdrawal_requested' ? tx("Withdrawal Requested") :
+                               item.type === 'game_win' ? t('ui.winReward') :
+                               item.type === 'game_loss' ? t('ui.loss') :
+                               item.type === 'stake_reservation' ? t('ui.reserved') :
+                               item.type === 'refund' ? t('ui.balance') :
+                               item.type === 'draw' || item.type === 'game_draw' ? t('ui.draw') : enumLabel(currentLanguage,item.type)}
                             </span>
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="text-[8.5px] text-[#708499] block font-mono">
-                                {item.createdAt ? new Date(item.createdAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : 'Recent'}
+                              <span className="text-[11px] text-[#708499] block font-mono">
+                                {item.createdAt ? new Date(item.createdAt).toLocaleString(currentLanguage, { dateStyle: 'short', timeStyle: 'short' }) : t('common.loading')}
                               </span>
-                              <span className={`text-[7.5px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded ${
+                              <span className={`text-[11px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded ${
                                 item.status === 'completed' || item.status === 'Credited' || item.status === 'credited' || item.status === 'confirmed' ? 'bg-emerald-500/10 text-emerald-400' :
                                 item.status === 'pending' || item.status === 'posted' ? 'bg-amber-500/10 text-amber-400 animate-pulse' :
                                 'bg-red-500/10 text-red-400'
                               }`}>
-                                {item.status}
+                                {' '}{enumLabel(currentLanguage,item.status)}{' '}
                               </span>
                             </div>
                             {(item.explorerLink || item.txHash) && (
@@ -5233,11 +5114,9 @@ function GameAppInner() {
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 onClick={(e) => e.stopPropagation()}
-                                className="text-[9px] text-[#3390ec] hover:underline font-mono flex items-center gap-0.5 mt-1"
+                                className="text-[11px] text-[#3390ec] hover:underline font-mono flex items-center gap-0.5 mt-1"
                               >
-                                <ExternalLink className="w-2.5 h-2.5" />
-                                View Transaction
-                              </a>
+                                <ExternalLink className="w-2.5 h-2.5" />{' '}{tx("View Transaction")}{' '}</a>
                             )}
                           </div>
                         </div>
@@ -5249,7 +5128,7 @@ function GameAppInner() {
                             {isCredit ? '+' : isDebit ? '-' : ''}
                             {getTonValue(item.amountNano)}
                           </span>
-                          <span className="text-[8px] text-[#708499] uppercase font-bold font-mono block leading-none">TON</span>
+                          <span className="text-[11px] text-[#708499] uppercase font-bold font-mono block leading-none">TON</span>
                         </div>
                       </div>
                     );
@@ -5261,9 +5140,7 @@ function GameAppInner() {
                 id="btn_close_history"
                 onClick={() => { playClickSound(); setShowTonHistoryModal(false); }}
                 className="w-full py-2.5 bg-[#242f3d] hover:bg-[#2c394a] text-white font-bold rounded-xl text-xs uppercase tracking-wider transition cursor-pointer shrink-0 border border-[#2b3745]/60 active:scale-98"
-              >
-                CLOSE LEDGER
-              </button>
+              >{' '}{tx("CLOSE LEDGER")}{' '}</button>
             </motion.div>
           </div>
         )}
@@ -5279,22 +5156,16 @@ function GameAppInner() {
               </div>
 
               <div className="space-y-1">
-                <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-wide">
-                  Deposit Successful!
-                </h3>
-                <p className="text-[11px] text-[#b2c1d4] px-2 leading-relaxed">
-                  The deposit has completed. <span className="text-emerald-400 font-bold font-mono">+{parseFloat(successDepositAmount).toFixed(2)} TON</span> has been added to your Game Balance.
-                </p>
+                <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-wide">{' '}{tx("Deposit Successful!")}{' '}</h3>
+                <p className="text-[11px] text-[#b2c1d4] px-2 leading-relaxed">{' '}{tx("The deposit has completed.")}{' '}<span className="text-emerald-400 font-bold font-mono">+{parseFloat(successDepositAmount).toFixed(2)} TON</span>{' '}{tx("has been added to your Game Balance.")}{' '}</p>
               </div>
 
               <div className="w-full bg-[#0e1621] border border-[#242f3d] rounded-xl p-3.5 flex flex-col items-center justify-center space-y-0.5">
-                <span className="text-[9px] text-[#708499] uppercase tracking-wider font-bold">Credited TON</span>
+                <span className="text-[11px] text-[#708499] uppercase tracking-wider font-bold">{' '}{tx("Credited TON")}{' '}</span>
                 <span className="text-lg font-black text-emerald-400 tracking-tight font-mono">+{parseFloat(successDepositAmount).toFixed(2)} TON</span>
               </div>
 
-              <span className="text-[9px] text-[#708499] uppercase tracking-wider font-semibold">
-                Returning to Wallet in 2.8s...
-              </span>
+              <span className="text-[11px] text-[#708499] uppercase tracking-wider font-semibold">{' '}{tx("Returning to Wallet in 2.8s...")}{' '}</span>
             </div>
           </div>
         )}

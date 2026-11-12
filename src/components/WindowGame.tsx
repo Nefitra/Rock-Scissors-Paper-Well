@@ -1,3 +1,4 @@
+import { translateCopy } from './../lib/copy';
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
@@ -40,6 +41,7 @@ interface SharedBall {
 }
 
 interface WindowGameProps {
+  currentLanguage:string;
   currentTgId: string;
   currentUsername: string;
   userWins: number;
@@ -68,8 +70,9 @@ export default function WindowGame({
   userWins,
   onRewardWins,
   playClickSound,
-  soundsMuted
+  soundsMuted, currentLanguage
 }: WindowGameProps) {
+  const tx=(text:string)=>translateCopy(currentLanguage,text);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -116,24 +119,11 @@ export default function WindowGame({
   }, [activeWindows]);
 
   // Play micro collision sounds locally (only if not muted)
+  const lastCollisionSound = useRef(0);
   const playCollisionSound = () => {
-    if (soundsMuted) return;
-    try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(320, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(150, ctx.currentTime + 0.15);
-      gain.gain.setValueAtTime(0.12, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.15);
-    } catch (e) {
-      // Audio context block browser permission fallback
-    }
+    if (performance.now()-lastCollisionSound.current<110) return;
+    lastCollisionSound.current=performance.now();
+    playClickSound();
   };
 
   // 1. WINDOW TO WINDOW REGISTRATION
@@ -789,12 +779,10 @@ export default function WindowGame({
         <div>
           <div className="flex items-center space-x-2 text-[#3390ec] font-bold text-sm">
             <Layers className="w-4 h-4 animate-bounce" />
-            <span className="uppercase tracking-widest text-[11px]">Dynamic Multi-Window</span>
+            <span className="uppercase tracking-widest text-[11px]">{' '}{tx("Dynamic Multi-Window")}{' '}</span>
           </div>
-          <h2 className="text-xl font-black text-white mt-1 leading-tight">Cross-Window Arena</h2>
-          <p className="text-[#708499] text-xs mt-1 max-w-sm">
-            Open multiple browser tabs or popup windows, arrange them side by side, and watch weapons bounce and traverse between screens in real-time!
-          </p>
+          <h2 className="text-xl font-black text-white mt-1 leading-tight">{' '}{tx("Cross-Window Arena")}{' '}</h2>
+          <p className="text-[#708499] text-xs mt-1 max-w-sm">{' '}{tx("Open multiple browser tabs or popup windows, arrange them side by side, and watch weapons bounce and traverse between screens in real-time!")}{' '}</p>
         </div>
 
         <button
@@ -802,8 +790,7 @@ export default function WindowGame({
           onClick={spawnConnectedWindow}
           className="bg-[#3390ec] hover:bg-[#2b7ad0] text-white font-bold text-xs px-4 py-2.5 rounded-xl transition flex items-center justify-center gap-1.5 shrink-0 self-stretch sm:self-auto cursor-pointer"
         >
-          <ExternalLink className="w-4 h-4" /> Floating Window
-        </button>
+          <ExternalLink className="w-4 h-4" />{' '}{tx("Floating Window")}{' '}</button>
       </div>
 
       {/* Physics Canvas Stage */}
@@ -816,22 +803,21 @@ export default function WindowGame({
         {/* Canvas HUD overlays */}
         <div className="absolute top-3 left-3 flex items-center space-x-1 bg-black/60 backdrop-blur-md border border-white/5 py-1 px-2.5 rounded-full z-10 select-none">
           <Laptop className="w-3.5 h-3.5 text-[#3390ec]" />
-          <span className="text-[10px] uppercase font-mono tracking-wider text-white">This Tab:</span>
+          <span className="text-[10px] uppercase font-mono tracking-wider text-white">{' '}{tx("This Tab:")}{' '}</span>
           <span className="text-[10px] font-bold font-mono text-[#3390ec] uppercase">{windowId.toUpperCase()}</span>
         </div>
 
         <div className="absolute top-3 right-3 flex items-center space-x-2 bg-black/60 backdrop-blur-md border border-white/5 py-1 px-2.5 rounded-full z-10">
           <Activity className="w-3 h-3 text-emerald-400 animate-pulse" />
-          <span className="text-[10px] text-white/90">
-            Tabs Active: <b className="text-[#3390ec]">{activeWindows.length}</b>
+          <span className="text-[10px] text-white/90">{' '}{tx("Tabs Active:")}{' '}<b className="text-[#3390ec]">{activeWindows.length}</b>
           </span>
         </div>
 
         {balls.length === 0 && (
           <div className="absolute text-center p-6 bg-[#17212b]/95 border border-[#2b3745] rounded-2xl max-w-xs z-10 pointer-events-none">
             <Dribbble className="w-8 h-8 text-[#708499] mx-auto mb-2 animate-spin" />
-            <p className="text-white text-xs font-bold">No active weapons on screen</p>
-            <p className="text-[#708499] text-[10px] mt-1">Tap below to spawn and seed rock, paper, scissors, or wells into the arena.</p>
+            <p className="text-white text-xs font-bold">{' '}{tx("No active weapons on screen")}{' '}</p>
+            <p className="text-[#708499] text-[10px] mt-1">{' '}{tx("Tap below to spawn and seed rock, paper, scissors, or wells into the arena.")}{' '}</p>
           </div>
         )}
       </div>
@@ -844,9 +830,7 @@ export default function WindowGame({
         >
           <div className="w-7 h-7 rounded-lg bg-[#3390ec]/10 flex items-center justify-center">
             <Plus className="w-4 h-4 text-[#3390ec]" />
-          </div>
-          Spawn Weapon
-        </button>
+          </div>{' '}{tx("Spawn Weapon")}{' '}</button>
 
         <button
           onClick={() => { playClickSound(); setGravityEnabled(!gravityEnabled); }}
@@ -859,7 +843,7 @@ export default function WindowGame({
           <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${gravityEnabled ? 'bg-[#3390ec]/20' : 'bg-[#708499]/10'}`}>
             <Sparkles className={`w-4 h-4 ${gravityEnabled ? 'text-[#3390ec]' : 'text-[#708499]'}`} />
           </div>
-          {gravityEnabled ? 'Gravity ON' : 'Gravity OFF'}
+          {gravityEnabled ? tx("Gravity ON") : tx("Gravity OFF")}
         </button>
 
         <button
@@ -873,7 +857,7 @@ export default function WindowGame({
           <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${portalOpen ? 'bg-[#ec4899]/20' : 'bg-[#708499]/10'}`}>
             <ExternalLink className={`w-4 h-4 ${portalOpen ? 'text-[#ec4899]' : 'text-[#708499]'}`} />
           </div>
-          {portalOpen ? 'Portals ON' : 'Portals OFF'}
+          {portalOpen ? tx("Portals ON") : tx("Portals OFF")}
         </button>
 
         <button
@@ -882,29 +866,25 @@ export default function WindowGame({
         >
           <div className="w-7 h-7 rounded-lg bg-red-500/20 flex items-center justify-center">
             <Trash2 className="w-4 h-4 text-red-400" />
-          </div>
-          Clear Arena
-        </button>
+          </div>{' '}{tx("Clear Arena")}{' '}</button>
       </div>
 
       {/* Real-time Interaction Scoreboard & Dynamic Win rewards */}
       <div className="bg-[#17212b] border border-[#242f3d] p-5 rounded-3xl space-y-4">
         <h3 className="text-sm font-bold text-white flex items-center gap-2">
-          <Trophy className="w-4 h-4 text-yellow-400" />
-          Arena Fusion Achievements
-        </h3>
+          <Trophy className="w-4 h-4 text-yellow-400" />{' '}{tx("Arena Fusion Achievements")}{' '}</h3>
 
         <div className="grid grid-cols-3 gap-3 text-center">
           <div className="bg-white/5 border border-white/5 p-3 rounded-2xl">
-            <span className="text-[10px] text-[#708499] block font-mono">Conversions</span>
+            <span className="text-[10px] text-[#708499] block font-mono">{' '}{tx("Conversions")}{' '}</span>
             <span className="text-xl font-extrabold text-white font-mono">{collisionStats.conversions}</span>
           </div>
           <div className="bg-white/5 border border-white/5 p-3 rounded-2xl">
-            <span className="text-[10px] text-[#708499] block font-mono">Absorbed by Wells</span>
+            <span className="text-[10px] text-[#708499] block font-mono">{' '}{tx("Absorbed by Wells")}{' '}</span>
             <span className="text-xl font-extrabold text-[#3b82f6] font-mono">{collisionStats.wellAbsorbs}</span>
           </div>
           <div className="bg-white/5 border border-white/5 p-3 rounded-2xl">
-            <span className="text-[10px] text-[#708499] block font-mono">Total Bounces</span>
+            <span className="text-[10px] text-[#708499] block font-mono">{' '}{tx("Total Bounces")}{' '}</span>
             <span className="text-xl font-extrabold text-emerald-400 font-mono">{collisionStats.totalBounces}</span>
           </div>
         </div>
@@ -913,17 +893,16 @@ export default function WindowGame({
         <div className="p-4 bg-[#242f3d]/50 border border-[#2b3745] rounded-2xl flex items-center justify-between">
           <div className="min-w-0 pr-3">
             <p className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-              <span>🎯</span> Multi-Window Constructor
-            </p>
+              <span>🎯</span>{' '}{tx("Multi-Window Constructor")}{' '}</p>
             <p className="text-[#708499] text-[10px] mt-0.5 leading-snug">
-              Achieve <b>20 conversions</b> of bouncing weapons in the physics stage to earn +5 Wins instantly!
+              {' '}{tx('ui.claim5')}{' '}
             </p>
           </div>
 
           <div>
             {statsRewarded ? (
               <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 py-2 px-3.5 rounded-xl text-xs font-bold block whitespace-nowrap">
-                ✓ Claimed +5 Wins
+                ✓ {' '}{tx('Claimed')}{' '}
               </span>
             ) : (
               <button
@@ -936,7 +915,7 @@ export default function WindowGame({
                     : 'bg-white/5 text-[#708499] cursor-not-allowed border border-white/5'
                 }`}
               >
-                Claim reward ({Math.min(20, collisionStats.conversions)}/20)
+                {' '}{tx('missions.claim')}{' '} ({Math.min(20, collisionStats.conversions)}/20)
               </button>
             )}
           </div>
@@ -947,13 +926,8 @@ export default function WindowGame({
       <div className="bg-[#242f3d]/20 border border-[#2b3745]/40 rounded-2xl p-4 flex items-start space-x-3 text-[11px] text-[#708499] leading-relaxed">
         <Info className="w-5 h-5 text-[#3390ec] shrink-0 mt-0.5" />
         <div className="space-y-1">
-          <p className="text-white font-bold">How does the screen integration work?</p>
-          <p>
-            When multiple windows of this application are open, they announce their local monitor space bounds via <code className="text-xs font-bold text-slate-300">BroadcastChannel</code> and <code className="text-xs font-bold text-slate-300">localStorage</code>.
-          </p>
-          <p>
-            When a bouncing weapon crosses your window boundary, it detects the adjacent window, updates the global coordinate, and seamlessly passes ownership of the weapon's physics calculation to that window context. Enjoy drag-and-drop multitasking gaming!
-          </p>
+          <p className="text-white font-bold">{' '}{tx('How to play')}{' '}</p>
+          <p>{' '}{tx('ui.windowInfo')}{' '}</p>
         </div>
       </div>
 

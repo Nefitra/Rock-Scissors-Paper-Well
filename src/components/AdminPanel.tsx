@@ -1,3 +1,4 @@
+import { enumLabel, localizedError, translateCopy } from './../lib/copy';
 import React, {useEffect,useState} from 'react';
 
 type Row=Record<string,any>;
@@ -8,7 +9,7 @@ const input='w-full rounded-xl border border-[#344253] bg-[#101923] px-3 py-2.5 
 const button='rounded-xl border border-[#344253] bg-[#233143] px-3 py-2 text-sm text-white hover:bg-[#2c4159] disabled:opacity-40 disabled:cursor-not-allowed';
 const card='rounded-2xl border border-[#2b3948] bg-[#17232f] p-4';
 const emptyPage:Page={items:[],total:0,page:1,limit:25};
-function date(value:any){if(!value)return '—';const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString('ru-RU');}
+function formatDate(value:any,lang:string){if(!value)return '—';const d=new Date(value);return Number.isNaN(d.getTime())?'—':d.toLocaleString(lang);}
 function amount(row:Row) {
   if(row.currency!=='TON')return `${row.amount} vVIRAL`;
   try {const n=BigInt(row.amount),absolute=n<0n?-n:n;return `${n<0n?'-':''}${absolute/1000000000n}.${String(absolute%1000000000n).padStart(9,'0').replace(/0+$/,'')||'0'} TON`;}catch{return 'Некорректная сумма';}
@@ -20,14 +21,17 @@ async function api(path:string,body?:unknown,signal?:AbortSignal) {
   if(!response.ok)throw new Error(data.error||`Ошибка запроса (${response.status})`);
   return data;
 }
-function Pager({data,page,setPage,loading}:{data:Page;page:number;setPage:(n:number)=>void;loading:boolean}) {
+function Pager({data,page,setPage,loading,currentLanguage}:{data:Page;page:number;setPage:(n:number)=>void;loading:boolean;currentLanguage:string}) {
+  const tx=(text:string)=>translateCopy(currentLanguage,text);
   return <nav aria-label="Страницы результатов" className="flex items-center justify-between gap-2 pt-2 text-xs text-slate-400">
-    <button className={button} disabled={loading||page===1} onClick={()=>setPage(page-1)}>Назад</button>
-    <span>Стр. {page} из {Math.max(1,Math.ceil(data.total/data.limit))} · {data.total} записей</span>
-    <button className={button} disabled={loading||page*data.limit>=data.total} onClick={()=>setPage(page+1)}>Далее</button>
+    <button className={button} disabled={loading||page===1} onClick={()=>setPage(page-1)}>{' '}{tx("Назад")}{' '}</button>
+    <span>{' '}{tx("Стр.")}{' '}{page}{' '}{tx("из")}{' '}{Math.max(1,Math.ceil(data.total/data.limit))} · {data.total}{' '}{tx("записей")}{' '}</span>
+    <button className={button} disabled={loading||page*data.limit>=data.total} onClick={()=>setPage(page+1)}>{' '}{tx("Далее")}{' '}</button>
   </nav>;
 }
-export default function AdminPanel({children,onSettingsSaved}:{children?:React.ReactNode;onSettingsSaved?:(s:Row)=>void}) {
+export default function AdminPanel({children,onSettingsSaved,currentLanguage}:{currentLanguage:string;children?:React.ReactNode;onSettingsSaved?:(s:Row)=>void}) {
+  const tx=(text:string)=>translateCopy(currentLanguage,text);
+  const date=(value:any)=>formatDate(value,currentLanguage);
   const [tab,setTab]=useState<Tab>('overview');
   const [metrics,setMetrics]=useState<Row|null>(null),[data,setData]=useState<Page>(emptyPage);
   const [page,setPage]=useState(1),[query,setQuery]=useState(''),[draftQuery,setDraftQuery]=useState('');
@@ -65,73 +69,73 @@ export default function AdminPanel({children,onSettingsSaved}:{children?:React.R
   };
   const saveNote=async()=>{
     if(!player)return;setSaving(true);setError('');setMessage('');
-    try{const result=await api('/api/admin/players/'+encodeURIComponent(player.telegramId)+'/note',{note,expectedVersion:noteVersion});setNoteVersion(result.note.version);setMessage('Заметка сохранена. Действие записано в журнал.');}
+    try{const result=await api('/api/admin/players/'+encodeURIComponent(player.telegramId)+'/note',{note,expectedVersion:noteVersion});setNoteVersion(result.note.version);setMessage('ui.noteSaved');}
     catch(e:any){setError(e.message);}finally{setSaving(false);}
   };
   const saveSettings=async(e:React.FormEvent)=>{
     e.preventDefault();if(!settings)return;setSaving(true);setError('');setMessage('');
-    try{const result=await api('/api/admin/settings',{appName:settings.appName,botUsername:settings.botUsername,webUrl:settings.webUrl,expectedVersion:settings.version});setSettings(result.settings);onSettingsSaved?.(result.settings);setMessage('Настройки сохранены. Предыдущие значения доступны в журнале.');}
+    try{const result=await api('/api/admin/settings',{appName:settings.appName,botUsername:settings.botUsername,webUrl:settings.webUrl,expectedVersion:settings.version});setSettings(result.settings);onSettingsSaved?.(result.settings);setMessage('ui.settingsSaved');}
     catch(e:any){setError(e.message);}finally{setSaving(false);}
   };
-  return <section className="space-y-4 pb-4" aria-label="Администрирование CyberDuel Lite">
+  return <section className="admin-panel space-y-4 pb-4" aria-label={tx("Администрирование CyberDuel Lite")}>
     <header className="flex items-start justify-between gap-3">
-      <div><h2 className="text-xl font-bold text-white">Управление игрой</h2><p className="mt-1 text-xs text-slate-400">CyberDuel Lite · доступ владельца</p></div>
-      <button className={button} disabled={loading||saving} onClick={()=>{if(player)void openPlayer(player.telegramId);setRefresh(n=>n+1);}} aria-label="Обновить данные">Обновить</button>
+      <div><h2 className="text-xl font-bold text-white">{' '}{tx("Управление игрой")}{' '}</h2><p className="mt-1 text-xs text-slate-400">{' '}{tx("CyberDuel Lite · доступ владельца")}{' '}</p></div>
+      <button className={button} disabled={loading||saving} onClick={()=>{if(player)void openPlayer(player.telegramId);setRefresh(n=>n+1);}} aria-label={tx("Обновить данные")}>{' '}{tx("Обновить")}{' '}</button>
     </header>
-    <div className="rounded-xl border border-amber-400/25 bg-amber-400/10 p-3 text-xs text-amber-200">Реальные TON-операции выключены. Балансы и расчёт матчей здесь доступны только для просмотра.</div>
-    <nav className="flex gap-1.5 overflow-x-auto pb-1" aria-label="Разделы админки">{tabs.map(([key,label])=><button key={key} type="button" aria-current={tab===key?'page':undefined} onClick={()=>selectTab(key)} disabled={saving} className={`shrink-0 rounded-xl px-3 py-2 text-xs font-semibold ${tab===key?'bg-sky-600 text-white':'bg-[#1c2b3a] text-slate-300 hover:bg-[#294157]'}`}>{label}</button>)}</nav>
-    {error?<div role="alert" className="rounded-xl border border-rose-400/30 bg-rose-400/10 p-3 text-sm text-rose-200">{error} <button className="ml-2 underline" onClick={()=>{if(player)void openPlayer(player.telegramId);setRefresh(n=>n+1);}}>Повторить / загрузить актуальные данные</button></div>:null}
-    {message?<p role="status" className="rounded-xl bg-emerald-400/10 p-3 text-sm text-emerald-200">{message}</p>:null}
-    {loading?<p role="status" className="py-5 text-center text-sm text-slate-400">Загрузка данных…</p>:null}
+    <div className="rounded-xl border border-amber-400/25 bg-amber-400/10 p-3 text-xs text-amber-200">{' '}{tx("Реальные TON-операции выключены. Балансы и расчёт матчей здесь доступны только для просмотра.")}{' '}</div>
+    <nav className="flex gap-1.5 overflow-x-auto pb-1" aria-label="Разделы админки">{tabs.map(([key,label])=><button key={key} type="button" aria-current={tab===key?'page':undefined} onClick={()=>selectTab(key)} disabled={saving} className={`shrink-0 rounded-xl px-3 py-2 text-xs font-semibold ${tab===key?'bg-sky-600 text-white':'bg-[#1c2b3a] text-slate-300 hover:bg-[#294157]'}`}>{' '}{tx(String(label))}{' '}</button>)}</nav>
+    {error?<div role="alert" className="rounded-xl border border-rose-400/30 bg-rose-400/10 p-3 text-sm text-rose-200">{localizedError(currentLanguage,error)} <button className="ml-2 underline" onClick={()=>{if(player)void openPlayer(player.telegramId);setRefresh(n=>n+1);}}>{' '}{tx("Повторить / загрузить актуальные данные")}{' '}</button></div>:null}
+    {message?<p role="status" className="rounded-xl bg-emerald-400/10 p-3 text-sm text-emerald-200">{' '}{tx(message)}{' '}</p>:null}
+    {loading?<p role="status" className="py-5 text-center text-sm text-slate-400">{' '}{tx("Загрузка данных…")}{' '}</p>:null}
     {!loading&&!error&&tab==='overview'&&metrics?<>
-      <p className="text-xs text-slate-400">Все записи PostgreSQL · обновлено {date(metrics.generatedAt)}</p>
+      <p className="text-xs text-slate-400">{' '}{tx("Все записи PostgreSQL · обновлено")}{' '}{date(metrics.generatedAt)}</p>
       <div className="grid grid-cols-2 gap-2">{[
-        ['Игроки',metrics.stats.totalUsers],['Новые за 24 ч',metrics.stats.newUsers24h],['Игроки с кошельком',metrics.stats.totalWallets],['Приглашённые игроки',metrics.stats.totalReferrals],['Матчи',metrics.stats.totalGames],['Завершённые',metrics.stats.completedGames],['Активные матчи',metrics.stats.activeGames],['Ожидают соперника',metrics.stats.usersWaiting],['Записи vVIRAL',metrics.stats.pointTransactions],['Всего vVIRAL',metrics.stats.totalPoints]
-      ].map(([label,value])=><div key={String(label)} className={card}><p className="text-xs text-slate-400">{label}</p><p className="mt-2 break-all text-xl font-semibold text-white">{String(value)}</p></div>)}</div>
-      <div className={card}><h3 className="font-semibold text-white">TON: просмотр учёта</h3><p className="mt-2 text-sm text-slate-300">Журнал: {metrics.stats.tonLedgerTransactions} · депозиты: {metrics.stats.tonDeposits} · выводы: {metrics.stats.tonWithdrawals}</p><p className="mt-2 text-xs text-slate-400">Депозиты и выводы показаны отдельно от проводок, без повторного суммирования.</p></div>
+        [tx("Игроки"),metrics.stats.totalUsers],[tx("Новые за 24 ч"),metrics.stats.newUsers24h],[tx("Игроки с кошельком"),metrics.stats.totalWallets],[tx("Приглашённые игроки"),metrics.stats.totalReferrals],[tx("Матчи"),metrics.stats.totalGames],[tx("Завершённые"),metrics.stats.completedGames],[tx("Активные матчи"),metrics.stats.activeGames],[tx("Ожидают соперника"),metrics.stats.usersWaiting],[tx("Записи vVIRAL"),metrics.stats.pointTransactions],[tx("Всего vVIRAL"),metrics.stats.totalPoints]
+      ].map(([label,value])=><div key={String(label)} className={card}><p className="text-xs text-slate-400">{' '}{tx(String(label))}{' '}</p><p className="mt-2 break-all text-xl font-semibold text-white">{String(value)}</p></div>)}</div>
+      <div className={card}><h3 className="font-semibold text-white">{' '}{tx("TON: просмотр учёта")}{' '}</h3><p className="mt-2 text-sm text-slate-300">{' '}{tx("Журнал:")}{' '}{metrics.stats.tonLedgerTransactions}{' '}{tx("· депозиты:")}{' '}{metrics.stats.tonDeposits}{' '}{tx("· выводы:")}{' '}{metrics.stats.tonWithdrawals}</p><p className="mt-2 text-xs text-slate-400">{' '}{tx("Депозиты и выводы показаны отдельно от проводок, без повторного суммирования.")}{' '}</p></div>
     </>:null}
     {['players','transactions','games','audit'].includes(tab)?<>
       <form className="flex gap-2" onSubmit={e=>{e.preventDefault();setQuery(draftQuery.trim());setPage(1);setPlayer(null);}}>
-        <label className="min-w-0 flex-1"><span className="mb-1 block text-xs text-slate-400">{tab==='players'?'Поиск по имени или Telegram ID':tab==='audit'?'Telegram ID администратора':'Telegram ID игрока'}</span><input className={input} value={draftQuery} onChange={e=>setDraftQuery(e.target.value)} maxLength={100} placeholder={tab==='players'?'Имя или ID':'Все игроки'} /></label>
-        <button className={button+' self-end'} disabled={loading||saving}>Найти</button>
+        <label className="min-w-0 flex-1"><span className="mb-1 block text-xs text-slate-400">{tab==='players'?tx("Поиск по имени или Telegram ID"):tab==='audit'?tx("Telegram ID администратора"):tx("Telegram ID игрока")}</span><input className={input} value={draftQuery} onChange={e=>setDraftQuery(e.target.value)} maxLength={100} placeholder={tab==='players'?tx("Имя или ID"):tx("Все игроки")} /></label>
+        <button className={button+' self-end'} disabled={loading||saving}>{' '}{tx("Найти")}{' '}</button>
       </form>
       {tab==='transactions'?<div className="grid grid-cols-2 gap-2">
-        <label className="text-xs text-slate-400">Валюта<select className={input+' mt-1'} value={currency} onChange={e=>{setCurrency(e.target.value);setPage(1);}}><option value="">Все</option><option value="vVIRAL">vVIRAL</option><option value="TON">TON</option></select></label>
-        <label className="text-xs text-slate-400">Раздел<select className={input+' mt-1'} value={kind} onChange={e=>{setKind(e.target.value);setPage(1);}}><option value="">Все</option><option value="transactions">Начисления vVIRAL</option><option value="ledgerTransactions">Проводки TON</option><option value="tonDeposits">Депозиты TON</option><option value="tonWithdrawals">Выводы TON</option></select></label>
-        <label className="text-xs text-slate-400">С даты (UTC)<input type="date" className={input+' mt-1'} value={from} onChange={e=>{setFrom(e.target.value);setPage(1);}} /></label>
-        <label className="text-xs text-slate-400">По дату (UTC)<input type="date" className={input+' mt-1'} value={to} onChange={e=>{setTo(e.target.value);setPage(1);}} /></label>
+        <label className="text-xs text-slate-400">{' '}{tx("Валюта")}{' '}<select className={input+' mt-1'} value={currency} onChange={e=>{setCurrency(e.target.value);setPage(1);}}><option value="">{' '}{tx("Все")}{' '}</option><option value="vVIRAL">vVIRAL</option><option value="TON">TON</option></select></label>
+        <label className="text-xs text-slate-400">{' '}{tx("Раздел")}{' '}<select className={input+' mt-1'} value={kind} onChange={e=>{setKind(e.target.value);setPage(1);}}><option value="">{' '}{tx("Все")}{' '}</option><option value="transactions">{' '}{tx("Начисления vVIRAL")}{' '}</option><option value="ledgerTransactions">{' '}{tx("Проводки TON")}{' '}</option><option value="tonDeposits">{' '}{tx("Депозиты TON")}{' '}</option><option value="tonWithdrawals">{' '}{tx("Выводы TON")}{' '}</option></select></label>
+        <label className="text-xs text-slate-400">{' '}{tx("С даты (UTC)")}{' '}<input type="date" className={input+' mt-1'} value={from} onChange={e=>{setFrom(e.target.value);setPage(1);}} /></label>
+        <label className="text-xs text-slate-400">{' '}{tx("По дату (UTC)")}{' '}<input type="date" className={input+' mt-1'} value={to} onChange={e=>{setTo(e.target.value);setPage(1);}} /></label>
       </div>:null}
-      {tab==='games'||tab==='transactions'?<label className="block text-xs text-slate-400">Статус<select className={input+' mt-1'} value={status} onChange={e=>{setStatus(e.target.value);setPage(1);}}><option value="">Все статусы</option>{(tab==='games'?['searching','waiting','matched','resolving','completed','expired','canceled']:['completed','posted','created','submitted','requested','credited','confirmed','sent','failed','rejected']).map(s=><option key={s}>{s}</option>)}</select></label>:null}
+      {tab==='games'||tab==='transactions'?<label className="block text-xs text-slate-400">{' '}{tx("Статус")}{' '}<select className={input+' mt-1'} value={status} onChange={e=>{setStatus(e.target.value);setPage(1);}}><option value="">{' '}{tx("Все статусы")}{' '}</option>{(tab==='games'?['searching','waiting','matched','resolving','completed','expired','canceled']:['completed','posted','created','submitted','requested','credited','confirmed','sent','failed','rejected']).map(s=><option key={s} value={s}>{' '}{enumLabel(currentLanguage,s)}{' '}</option>)}</select></label>:null}
       {player&&tab==='players'?<article className={card+' space-y-3'}>
-        <div className="flex justify-between gap-2"><h3 className="font-semibold text-white">{player.username||'Игрок'} · {player.telegramId}</h3><button className={button} onClick={()=>setPlayer(null)}>Закрыть</button></div>
-        <dl className="grid grid-cols-2 gap-2 text-sm text-slate-300"><div><dt className="text-xs text-slate-400">vVIRAL</dt><dd>{player.vViral}</dd></div><div><dt className="text-xs text-slate-400">Матчи / победы / поражения</dt><dd>{player.gamesPlayed} / {player.wins} / {player.losses}</dd></div></dl>
-        <p className="break-all text-xs text-slate-400">Кошелёк: {player.walletAddress||'не подключён'}</p>
-        <p className="text-xs text-slate-400">Регистрация: {date(player.createdAt)} · Пригласил: {player.referredBy||'—'}</p>
-        <div className="rounded-xl bg-[#101923] p-3 text-xs text-slate-300">TON учёт (nanoton): доступно {String(player.tonAccount?.availableNano??'0')}, зарезервировано {String(player.tonAccount?.reservedNano??'0')}, к выводу {String(player.tonAccount?.pendingWithdrawalNano??'0')}</div>
-        <label className="block text-xs text-slate-400">Внутренняя заметка администратора<textarea className={input+' mt-1'} rows={3} maxLength={2000} value={note} onChange={e=>setNote(e.target.value)} disabled={saving}/></label>
-        <button className={button} disabled={saving} onClick={saveNote}>{saving?'Сохранение…':'Сохранить заметку'}</button>
-        <div className="flex flex-wrap gap-2"><button className={button} onClick={()=>{selectTab('transactions');setQuery(player.telegramId);setDraftQuery(player.telegramId);}}>Транзакции игрока</button><button className={button} onClick={()=>{selectTab('games');setQuery(player.telegramId);setDraftQuery(player.telegramId);}}>Матчи игрока</button></div>
+        <div className="flex justify-between gap-2"><h3 className="font-semibold text-white">{player.username||tx("Игрок")} · {player.telegramId}</h3><button className={button} onClick={()=>setPlayer(null)}>{' '}{tx("Закрыть")}{' '}</button></div>
+        <dl className="grid grid-cols-2 gap-2 text-sm text-slate-300"><div><dt className="text-xs text-slate-400">vVIRAL</dt><dd>{player.vViral}</dd></div><div><dt className="text-xs text-slate-400">{' '}{tx("Матчи / победы / поражения")}{' '}</dt><dd>{player.gamesPlayed} / {player.wins} / {player.losses}</dd></div></dl>
+        <p className="break-all text-xs text-slate-400">{' '}{tx("Кошелёк:")}{' '}{player.walletAddress||tx('Disconnected')}</p>
+        <p className="text-xs text-slate-400">{' '}{tx("Регистрация:")}{' '}{date(player.createdAt)}{' '}{tx("· Пригласил:")}{' '}{player.referredBy||'—'}</p>
+        <div className="rounded-xl bg-[#101923] p-3 text-xs text-slate-300">{' '}{tx('ui.nano')}{' '} · {' '}{tx('ui.available')}{' '}  {String(player.tonAccount?.availableNano??'0')} · {' '}{tx('ui.reserved')}{' '}  {String(player.tonAccount?.reservedNano??'0')} · {' '}{tx('ui.pending')}{' '}  {String(player.tonAccount?.pendingWithdrawalNano??'0')}</div>
+        <label className="block text-xs text-slate-400">{' '}{tx("Внутренняя заметка администратора")}{' '}<textarea className={input+' mt-1'} rows={3} maxLength={2000} value={note} onChange={e=>setNote(e.target.value)} disabled={saving}/></label>
+        <button className={button} disabled={saving} onClick={saveNote}>{saving?tx("Сохранение…"):tx("Сохранить заметку")}</button>
+        <div className="flex flex-wrap gap-2"><button className={button} onClick={()=>{selectTab('transactions');setQuery(player.telegramId);setDraftQuery(player.telegramId);}}>{' '}{tx("Транзакции игрока")}{' '}</button><button className={button} onClick={()=>{selectTab('games');setQuery(player.telegramId);setDraftQuery(player.telegramId);}}>{' '}{tx("Матчи игрока")}{' '}</button></div>
       </article>:null}
-      {!loading&&!error?<div className="space-y-2">{data.items.length===0?<p className={card+' text-center text-sm text-slate-400'}>Записей по этим условиям нет.</p>:data.items.map(row=><article key={row.kind?row.kind+':'+row.id:row.id} className={card+' space-y-2 text-sm'}>
-        {tab==='players'?<><div className="flex justify-between gap-3"><div><p className="break-all font-semibold text-white">{row.username||'Без имени'}</p><p className="font-mono text-xs text-slate-400">{row.telegramId}</p></div><button className={button} disabled={saving} onClick={()=>openPlayer(row.telegramId)}>Карточка</button></div><p className="text-slate-300">{row.vViral} vVIRAL · {row.gamesPlayed} матчей · {row.wins} побед</p><p className="text-xs text-slate-400">{date(row.createdAt)}</p></>:null}
-        {tab==='transactions'?<><div className="flex justify-between gap-2"><strong className="break-all text-white">{amount(row)}</strong><span className="text-xs text-sky-300">{row.status}</span></div><p className="text-xs text-slate-300">{row.type} · {row.kind}</p><p className="font-mono text-xs text-slate-400">Игрок: {row.userId||'системная запись'}</p><p className="break-all font-mono text-xs text-slate-400">ID: {row.id}</p>{row.prevBalance!==null?<p className="text-xs text-slate-400">Баланс: {row.prevBalance} → {row.newBalance}</p>:null}<p className="break-all text-xs text-slate-400">Связь: {row.referenceId||'—'} · {date(row.createdAt)}</p>{row.transactionHash?<p className="break-all font-mono text-xs text-slate-400">Hash: {row.transactionHash}{row.transactionLt?' · LT: '+row.transactionLt:''}</p>:null}</>:null}
-        {tab==='games'?<><p className="font-semibold text-white">{row.player1Username||row.player1Id} vs {row.player2Username||row.player2Id}</p><p className="text-sky-300">{row.status} · {row.mode} · {row.stake} {row.mode==='ton'?'TON':'vVIRAL'}</p><p className="text-xs text-slate-300">Ходы: {row.player1Move||'—'} / {row.player2Move||'—'}</p><p className="break-all text-xs text-slate-400">Победитель: {row.winnerId||'—'} · {date(row.createdAt)}</p><p className="break-all font-mono text-xs text-slate-400">{row.id}</p></>:null}
-        {tab==='audit'?<><p className="font-semibold text-white">{row.action}</p><p className="text-xs text-slate-300">Администратор {row.actorId} · {row.status}</p><p className="break-all text-xs text-slate-400">Объект: {row.target||'—'} · {date(row.createdAt)}</p><details className="text-xs text-slate-400"><summary className="cursor-pointer">Изменения</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[#101923] p-2">{JSON.stringify({before:row.before,after:row.after,operationId:row.operationId,httpStatus:row.httpStatus},null,2)}</pre></details></>:null}
-      </article>)}<Pager data={data} page={page} setPage={setPage} loading={loading}/></div>:null}
+      {!loading&&!error?<div className="space-y-2">{data.items.length===0?<p className={card+' text-center text-sm text-slate-400'}>{' '}{tx("Записей по этим условиям нет.")}{' '}</p>:data.items.map(row=><article key={row.kind?row.kind+':'+row.id:row.id} className={card+' space-y-2 text-sm'}>
+        {tab==='players'?<><div className="flex justify-between gap-3"><div><p className="break-all font-semibold text-white">{row.username||tx("Без имени")}</p><p className="font-mono text-xs text-slate-400">{row.telegramId}</p></div><button className={button} disabled={saving} onClick={()=>openPlayer(row.telegramId)}>{' '}{tx("Карточка")}{' '}</button></div><p className="text-slate-300">{row.vViral} vVIRAL · {row.gamesPlayed}{' '}{tx("матчей ·")}{' '}{row.wins}{' '}{tx("побед")}{' '}</p><p className="text-xs text-slate-400">{date(row.createdAt)}</p></>:null}
+        {tab==='transactions'?<><div className="flex justify-between gap-2"><strong className="break-all text-white">{' '}{tx(amount(row))}{' '}</strong><span className="text-xs text-sky-300">{' '}{enumLabel(currentLanguage,row.status)}{' '}</span></div><p className="text-xs text-slate-300">{' '}{enumLabel(currentLanguage,row.type)}{' '} · {' '}{enumLabel(currentLanguage,row.kind)}{' '}</p><p className="font-mono text-xs text-slate-400">{' '}{tx("Игрок:")}{' '}{row.userId||tx("системная запись")}</p><p className="break-all font-mono text-xs text-slate-400">ID: {row.id}</p>{row.prevBalance!==null?<p className="text-xs text-slate-400">{' '}{tx("Баланс:")}{' '}{row.prevBalance} → {row.newBalance}</p>:null}<p className="break-all text-xs text-slate-400">{' '}{tx("Связь:")}{' '}{row.referenceId||'—'} · {date(row.createdAt)}</p>{row.transactionHash?<p className="break-all font-mono text-xs text-slate-400">Hash: {row.transactionHash}{row.transactionLt?' · LT: '+row.transactionLt:''}</p>:null}</>:null}
+        {tab==='games'?<><p className="font-semibold text-white">{row.player1Username||row.player1Id} vs {row.player2Username||row.player2Id}</p><p className="text-sky-300">{' '}{enumLabel(currentLanguage,row.status)}{' '} · {' '}{enumLabel(currentLanguage,row.mode)}{' '} · {row.stake} {row.mode==='ton'?'TON':'vVIRAL'}</p><p className="text-xs text-slate-300">{' '}{tx("Ходы:")}{' '}{row.player1Move?enumLabel(currentLanguage,row.player1Move):'—'} / {row.player2Move?enumLabel(currentLanguage,row.player2Move):'—'}</p><p className="break-all text-xs text-slate-400">{' '}{tx("Победитель:")}{' '}{row.winnerId||'—'} · {date(row.createdAt)}</p><p className="break-all font-mono text-xs text-slate-400">{row.id}</p></>:null}
+        {tab==='audit'?<><p className="font-semibold text-white">{' '}{enumLabel(currentLanguage,row.action)}{' '}</p><p className="text-xs text-slate-300">{' '}{tx("Администратор")}{' '}{row.actorId} · {' '}{enumLabel(currentLanguage,row.status)}{' '}</p><p className="break-all text-xs text-slate-400">{' '}{tx("Объект:")}{' '}{row.target||'—'} · {date(row.createdAt)}</p><details className="text-xs text-slate-400"><summary className="cursor-pointer">{' '}{tx("Изменения")}{' '}</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[#101923] p-2">{JSON.stringify({before:row.before,after:row.after,operationId:row.operationId,httpStatus:row.httpStatus},null,2)}</pre></details></>:null}
+      </article>)}<Pager data={data} page={page} setPage={setPage} loading={loading} currentLanguage={currentLanguage}/></div>:null}
     </>:null}
     {tab==='settings'&&!loading&&settings&&config?<>
       <form className={card+' space-y-3'} onSubmit={saveSettings}>
-        <h3 className="font-semibold text-white">Настройки приложения</h3>
+        <h3 className="font-semibold text-white">{' '}{tx("Настройки приложения")}{' '}</h3>
         <fieldset className="space-y-3" disabled={saving}>
-          <label className="block text-xs text-slate-400">Название приложения<input className={input+' mt-1'} required maxLength={60} value={settings.appName} onChange={e=>setSettings({...settings,appName:e.target.value})}/></label>
-          <label className="block text-xs text-slate-400">Подключённый бот<input className={input+' mt-1 opacity-70'} readOnly value={settings.botUsername}/></label>
-          <label className="block text-xs text-slate-400">HTTPS-адрес приложения<input className={input+' mt-1'} type="url" required value={settings.webUrl} onChange={e=>setSettings({...settings,webUrl:e.target.value})}/></label>
-          <p className="text-xs text-slate-400">Адрес сохраняется в пределах текущего домена. Одновременные изменения защищены версией настроек.</p>
-          <button className={button} type="submit">{saving?'Сохранение…':'Сохранить настройки'}</button>
+          <label className="block text-xs text-slate-400">{' '}{tx("Название приложения")}{' '}<input className={input+' mt-1'} required maxLength={60} value={settings.appName} onChange={e=>setSettings({...settings,appName:e.target.value})}/></label>
+          <label className="block text-xs text-slate-400">{' '}{tx("Подключённый бот")}{' '}<input className={input+' mt-1 opacity-70'} readOnly value={settings.botUsername}/></label>
+          <label className="block text-xs text-slate-400">{' '}{tx("HTTPS-адрес приложения")}{' '}<input className={input+' mt-1'} type="url" required value={settings.webUrl} onChange={e=>setSettings({...settings,webUrl:e.target.value})}/></label>
+          <p className="text-xs text-slate-400">{' '}{tx("Адрес сохраняется в пределах текущего домена. Одновременные изменения защищены версией настроек.")}{' '}</p>
+          <button className={button} type="submit">{saving?tx("Сохранение…"):tx("Сохранить настройки")}</button>
         </fieldset>
       </form>
-      <div className={card+' space-y-3'}><h3 className="font-semibold text-white">Текущая экономика и правила</h3><p className="text-xs text-slate-400">Просмотр работающих параметров. Изменение экономики и включение TON в этапе 1 недоступны.</p><dl className="grid grid-cols-2 gap-3 text-sm text-slate-300">{[['Приветственный бонус',config.economy.welcomeBonus],['Награда за победу',config.economy.freeMatchWinReward],['Ничья',config.economy.freeMatchDrawReward],['Участие',config.economy.freeMatchParticipationReward],['Комиссия, %',config.economy.platformFeePercent],['Ставки vVIRAL',config.economy.stakePresets.join(', ')]].map(([label,value])=><div key={label}><dt className="text-xs text-slate-400">{label}</dt><dd>{value}</dd></div>)}</dl><p className="text-xs text-slate-400">Бумага побеждает камень и колодец; колодец — камень и ножницы; камень — ножницы; ножницы — бумагу.</p><p className="text-xs text-amber-200">TON: {config.ton.network}. Депозиты, выводы и TON-матчи приостановлены.</p></div>
+      <div className={card+' space-y-3'}><h3 className="font-semibold text-white">{' '}{tx("Текущая экономика и правила")}{' '}</h3><p className="text-xs text-slate-400">{' '}{tx("Просмотр работающих параметров. Изменение экономики и включение TON в этапе 1 недоступны.")}{' '}</p><dl className="grid grid-cols-2 gap-3 text-sm text-slate-300">{[[tx("Приветственный бонус"),config.economy.welcomeBonus],[tx("Награда за победу"),config.economy.freeMatchWinReward],[tx("Ничья"),config.economy.freeMatchDrawReward],[tx("Участие"),config.economy.freeMatchParticipationReward],[tx("Комиссия, %"),config.economy.platformFeePercent],[tx("Ставки vVIRAL"),config.economy.stakePresets.join(', ')]].map(([label,value])=><div key={tx(String(label))}><dt className="text-xs text-slate-400">{' '}{tx(String(label))}{' '}</dt><dd>{value}</dd></div>)}</dl><p className="text-xs text-slate-400">{' '}{tx("Бумага побеждает камень и колодец; колодец — камень и ножницы; камень — ножницы; ножницы — бумагу.")}{' '}</p><p className="text-xs text-amber-200">TON: {config.ton.network}{' '}{tx(". Депозиты, выводы и TON-матчи приостановлены.")}{' '}</p></div>
     </>:null}
-    {children?<details className={card}><summary className="cursor-pointer text-sm text-slate-300">Инструменты сообщества</summary><div className="mt-4">{children}</div></details>:null}
+    {children?<details className={card}><summary className="cursor-pointer text-sm text-slate-300">{' '}{tx("Инструменты сообщества")}{' '}</summary><div className="mt-4">{children}</div></details>:null}
   </section>;
 }

@@ -25,3 +25,45 @@ canvas {
   background-color: transparent !important;
   background: transparent !important;
 }
+
+/* CyberDuel: a little pocket arcade, readable at Telegram's narrow viewport. */
+:root { color-scheme: dark; --arcade-ink:#f4f2ff; --arcade-muted:#b1bdd6; }
+html, body, #root { background:#101329 !important; }
+body { font-family: ui-rounded, 'Nunito', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+.cyber-app { background:radial-gradient(ellipse at 80% 0%,#34305d 0%,transparent 42%),radial-gradient(ellipse at 0% 45%,#172f43 0%,transparent 45%),#101329 !important; color:var(--arcade-ink); }
+.cyber-app main { padding-bottom:7.5rem; }
+.cyber-app [class*="bg-[#17212b]"], .cyber-app [class*="bg-[#17232f]"] { background-color:#1c2440; border-color:#36415e; box-shadow:0 8px 24px #090d201f; }
+.cyber-app [class*="bg-[#242f3d]"], .cyber-app [class*="bg-[#233143]"] { background-color:#293350; }
+.cyber-app [class*="bg-[#0e1621]"], .cyber-app [class*="bg-[#101923]"] { background-color:#141b32; }
+.cyber-app [class*="text-[#708499]"], .cyber-app .text-slate-400 { color:var(--arcade-muted); }
+.cyber-app [class*="border-[#242f3d]"], .cyber-app [class*="border-[#2b3745]"] { border-color:#35425f; }
+.cyber-app [class*="text-[#3390ec]"] { color:#b9abff; }
+.cyber-app [class*="bg-[#3390ec]"]:not([class*="bg-[#3390ec]/"]) { background-color:#7863e6; }
+.cyber-app .arcade-hero { background:radial-gradient(ellipse at top,#413768 0%,#242d4a 65%) !important; border-color:#7f6bba; box-shadow:0 12px 36px #070d2740,inset 0 1px 0 #ffffff15; }
+.cyber-app .arcade-hero h2 { font-size:clamp(1.1rem,5vw,1.4rem); letter-spacing:-.03em; line-height:1.35; }
+.cyber-app h2, .cyber-app h3 { text-wrap:balance; }
+.cyber-app p, .cyber-app label, .cyber-app button, .cyber-app span { overflow-wrap:anywhere; }
+.cyber-app .uppercase { text-transform:none; letter-spacing:.01em; }
+.cyber-app [class*="text-[11px]"] { font-size:.75rem; line-height:1.45; }
+.cyber-app button, .cyber-app a, .cyber-app input, .cyber-app select { touch-action:manipulation; }
+.cyber-app button { transition:transform .16s ease,background-color .16s ease,box-shadow .16s ease; }
+.cyber-app button:not(:disabled):active { transform:translateY(2px) scale(.98); }
+.cyber-app button:focus-visible, .cyber-app a:focus-visible, .cyber-app input:focus-visible, .cyber-app select:focus-visible, .cyber-app textarea:focus-visible { outline:3px solid #c5b8ff; outline-offset:3px; }
+.cyber-app button:disabled { cursor:not-allowed; }
+.cyber-app footer { padding-bottom:env(safe-area-inset-bottom,0px); background:#1b2342ed !important; backdrop-filter:blur(16px); border-radius:24px 24px 0 0; border:1px solid #4c527d; border-bottom:0; box-shadow:0 -6px 30px #080b222f; }
+.cyber-app footer button { padding:8px 2px; min-height:60px; }
+.cyber-app footer button[class*="text-[#3390ec]"] { background:#a991ff21; color:#d8ccff; box-shadow:inset 0 1px 0 #d8ccff22; }
+.cyber-app footer svg { width:23px;height:23px;stroke-width:2.2; }
+.cyber-app .weapon-mascot { display:inline-block; vertical-align:middle; filter:drop-shadow(0 5px 3px #0c102633); transition:transform .2s ease; flex-shrink:0; }
+.cyber-app button:hover .weapon-mascot { transform:translateY(-3px) rotate(-4deg); }
+.cyber-app .arcade-secondary { border:1px solid #756897; border-radius:14px; background:#514473; color:#fff; min-height:44px; padding:9px 14px; font-size:.85rem; font-weight:600; }
+.cyber-app [role="switch"] { min-width:44px; min-height:28px; }
+.cyber-app input[type="range"] { min-height:32px; }
+.cyber-app [role="alert"] { line-height:1.5; }
+[dir="rtl"] .cyber-app .space-x-3 > :not(:last-child), [dir="rtl"] .cyber-app .space-x-2 > :not(:last-child) { margin-inline-start:0; margin-inline-end:.5rem; }
+@media (max-width:360px) { .cyber-app main { padding-inline:12px; } .cyber-app footer span { font-size:10px !important; } .cyber-app .arcade-hero { padding:20px 14px; } }
+@media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; scroll-behavior:auto !important; transition-duration:.01ms !important; } }
+.cyber-app .admin-panel button { min-height:44px; }
+.cyber-app .admin-panel input, .cyber-app .admin-panel select, .cyber-app .admin-panel textarea { min-height:44px; }
+.cyber-app .admin-panel select { text-overflow:ellipsis; }
+[dir="rtl"] .cyber-app .font-mono { direction:ltr; unicode-bidi:isolate; }

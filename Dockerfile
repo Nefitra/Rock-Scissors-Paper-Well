@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
-RUN npm run lint && npm test && npm run build
+RUN npm run lint && npm test && npm run test:ui && npm run build
 
 FROM node:22-bookworm-slim
 ENV NODE_ENV=production PORT=3000

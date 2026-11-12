@@ -100,7 +100,7 @@ export function getTranslation(lang: string, key: string, params?: Record<string
   let text = current;
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
-      text = text.replace(new RegExp(`{${k}}`, 'g'), String(v));
+      text = text.split(`{${k}}`).join(String(v));
     });
   }
   return text;
